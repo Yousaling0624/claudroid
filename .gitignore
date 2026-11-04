@@ -1,0 +1,19 @@
+*.iml
+.gradle/
+.kotlin/
+build/
+local.properties
+.cache/
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.keystore
+dist/
+# Windows Explorer metadata copied along with the project
+*Zone.Identifier
+# Downloaded at build time by tools/fetch-proot.py (third-party GPL binaries).
+app/src/main/jniLibs/
+# CI-generated release notes
+release-notes.md

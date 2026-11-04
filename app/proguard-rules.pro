@@ -1,0 +1,3 @@
+-keep class app.claudroid.data.** { *; }
+-keepattributes *Annotation*, InnerClasses
+-dontwarn kotlinx.serialization.**

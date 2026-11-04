@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  # push main 的构建与发版由 release.yml 负责，这里只做 PR 检查
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'tools/**'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - '.github/scripts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+        shell: bash
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore proot runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/proot
+            app/src/main/jniLibs
+          key: proot-${{ runner.os }}-${{ hashFiles('tools/fetch-proot.py') }}
+
+      - name: Fetch proot runtime
+        run: python3 tools/fetch-proot.py --all
+
+      - name: Check release notes script
+        run: bash -n .github/scripts/release-notes.sh
+
+      - name: Unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Assemble debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudroid-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
