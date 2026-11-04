@@ -7,8 +7,12 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -54,13 +58,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -89,9 +86,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -112,6 +112,9 @@ import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.RotatingChevron
 import app.claudroid.ui.components.TypingDots
 import app.claudroid.ui.md.MarkdownText
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Spacing
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -191,13 +194,13 @@ fun ChatScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            AppIcons.Back,
                             "返回",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -210,7 +213,7 @@ fun ChatScreen(
                             title,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (running) {
@@ -227,7 +230,7 @@ fun ChatScreen(
                                 Text(
                                     line,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = MaterialTheme.appColors.faintText,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -238,7 +241,7 @@ fun ChatScreen(
                 actions = {
                     IconButton(onClick = { menuOpen = true }) {
                         Icon(
-                            Icons.Default.MoreVert,
+                            AppIcons.More,
                             "更多",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -247,7 +250,7 @@ fun ChatScreen(
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("工作区文件") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) },
+                            leadingIcon = { Icon(AppIcons.Workspace, null) },
                             onClick = {
                                 menuOpen = false
                                 onOpenWorkspace()
@@ -255,7 +258,7 @@ fun ChatScreen(
                         )
                         DropdownMenuItem(
                             text = { Text("清空对话上下文") },
-                            leadingIcon = { Icon(Icons.Default.Delete, null) },
+                            leadingIcon = { Icon(AppIcons.Trash, null) },
                             onClick = {
                                 menuOpen = false
                                 controller.clear()
@@ -270,7 +273,7 @@ fun ChatScreen(
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
     ) { padding ->
@@ -354,19 +357,19 @@ private fun BackToBottomButton(
             shadowElevation = 2.dp,
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
-                MaterialTheme.colorScheme.outlineVariant,
+                MaterialTheme.colorScheme.outline,
             ),
             modifier = Modifier
-                .size(36.dp)
+                .size(40.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onClick),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Default.KeyboardArrowDown,
+                    AppIcons.ChevronDown,
                     "回到底部",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.appColors.faintText,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
@@ -414,7 +417,7 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 34.dp, color = MaterialTheme.colorScheme.primary)
+        ClaudeMark(size = 34.dp, color = MaterialTheme.appColors.brand)
         Spacer(Modifier.height(20.dp))
         Text(
             "今天想做什么？",
@@ -433,8 +436,9 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
                     .clickable { onPick(hint) }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -442,13 +446,13 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
                 Text(
                     hint,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    "↗",
+                    "↵",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.appColors.faintText,
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -464,15 +468,15 @@ private fun MessageRow(message: ChatMessage) {
             horizontalArrangement = Arrangement.End,
         ) {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
-                modifier = Modifier.widthIn(max = 300.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
+                modifier = Modifier.widthIn(max = 320.dp),
             ) {
                 SelectionContainer {
                     Text(
                         text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n") { it.text },
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                     )
                 }
@@ -497,14 +501,19 @@ private fun MessageRow(message: ChatMessage) {
                         Text(
                             "正在回复",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.appColors.faintText,
                         )
                     }
                 }
-                message.blocks.forEach { block ->
+                val lastTextIndex = message.blocks.indexOfLast { it is Block.Text }
+                message.blocks.forEachIndexed { index, block ->
                     when (block) {
                         is Block.Text -> SelectionContainer {
-                            MarkdownText(block.text, Modifier.fillMaxWidth())
+                            MarkdownText(
+                                block.text,
+                                Modifier.fillMaxWidth(),
+                                streaming = message.streaming && index == lastTextIndex,
+                            )
                         }
                         is Block.Thinking -> ThinkingRow(block.text)
                         is Block.Tool -> ToolCard(block)
@@ -522,8 +531,10 @@ private fun MessageRow(message: ChatMessage) {
                     if (meta.isNotEmpty()) {
                         Text(
                             meta.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            style = MaterialTheme.typography.labelSmall.merge(
+                                TextStyle(fontFeatureSettings = "tnum")
+                            ),
+                            color = MaterialTheme.appColors.faintText,
                             modifier = Modifier.padding(top = 8.dp),
                         )
                     }
@@ -568,9 +579,10 @@ private fun ThinkingRow(text: String) {
     Column(Modifier.padding(top = 10.dp)) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(9.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
                 .clickable { expanded = !expanded }
-                .padding(vertical = 4.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -581,7 +593,7 @@ private fun ThinkingRow(text: String) {
             Spacer(Modifier.width(4.dp))
             RotatingChevron(
                 expanded = expanded,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = MaterialTheme.appColors.faintText,
                 size = 15.dp,
             )
         }
@@ -595,7 +607,7 @@ private fun ThinkingRow(text: String) {
                     Modifier
                         .width(2.dp)
                         .heightIn(min = 18.dp)
-                        .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(1.dp))
+                        .background(MaterialTheme.colorScheme.outline, RoundedCornerShape(1.dp))
                 )
                 Spacer(Modifier.width(10.dp))
                 SelectionContainer {
@@ -619,12 +631,32 @@ private fun ToolCard(block: Block.Tool) {
             block.output?.contains("Web search results", ignoreCase = true) == true
         if (isSearch) WebSources.parse(block.output.orEmpty()) else emptyList()
     }
+    // A quiet breathing border replaces a spinner floating in the header.
+    val pulseAlpha = if (block.running) {
+        val pulse = rememberInfiniteTransition(label = "tool-pulse")
+        pulse.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 0.9f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = Motion.EaseInOut),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "tool-border",
+        ).value
+    } else 0f
+    val borderColor by animateColorAsState(
+        targetValue = if (block.running) MaterialTheme.colorScheme.primary.copy(alpha = pulseAlpha)
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(Motion.FAST),
+        label = "tool-border-color",
+    )
     Column(
         Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
             .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
             .animateContentSize(),
     ) {
         Row(
@@ -658,7 +690,7 @@ private fun ToolCard(block: Block.Tool) {
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                         ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.appColors.faintText,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -668,7 +700,7 @@ private fun ToolCard(block: Block.Tool) {
                 block.running -> CircularProgressIndicator(
                     modifier = Modifier.size(13.dp),
                     strokeWidth = 1.6.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.appColors.accentInk,
                 )
                 block.isError -> Text(
                     "失败",
@@ -678,7 +710,7 @@ private fun ToolCard(block: Block.Tool) {
                 else -> Text(
                     "完成",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.appColors.faintText,
                 )
             }
             Spacer(Modifier.width(6.dp))
@@ -731,7 +763,7 @@ private fun SourcesSection(sources: List<WebSource>) {
         Text(
             "来源 · ${sources.size}",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.faintText,
             modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
         )
         visible.forEachIndexed { index, source ->
@@ -749,13 +781,13 @@ private fun SourcesSection(sources: List<WebSource>) {
                     Modifier
                         .size(20.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                        .background(MaterialTheme.appColors.accentInk.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         "${index + 1}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.appColors.accentInk,
                     )
                 }
                 Spacer(Modifier.width(9.dp))
@@ -771,7 +803,7 @@ private fun SourcesSection(sources: List<WebSource>) {
                         Text(
                             source.host,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            color = MaterialTheme.appColors.faintText,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -781,7 +813,7 @@ private fun SourcesSection(sources: List<WebSource>) {
                 Text(
                     "↗",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.appColors.faintText,
                 )
             }
         }
@@ -789,7 +821,7 @@ private fun SourcesSection(sources: List<WebSource>) {
             Text(
                 if (showAll) "收起" else "展开全部 ${sources.size} 个来源",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.appColors.accentInk,
                 modifier = Modifier
                     .padding(top = 6.dp)
                     .clip(RoundedCornerShape(6.dp))
@@ -805,7 +837,7 @@ private fun MonoLabel(label: String) {
     Text(
         label,
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = MaterialTheme.appColors.faintText,
         modifier = Modifier.padding(bottom = 4.dp),
     )
 }
@@ -840,15 +872,16 @@ private fun Composer(
     onAttach: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
     val borderColor by animateColorAsState(
-        targetValue = if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+        targetValue = if (focused) MaterialTheme.appColors.accentInk.copy(alpha = 0.6f)
         else MaterialTheme.colorScheme.outlineVariant,
         animationSpec = tween(Motion.FAST),
         label = "composer-border",
     )
     val sendEnabled = running || value.isNotBlank()
     val sendColor by animateColorAsState(
-        targetValue = if (sendEnabled) MaterialTheme.colorScheme.primary
+        targetValue = if (sendEnabled) MaterialTheme.appColors.accentInk
         else MaterialTheme.colorScheme.surfaceContainerHighest,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
         label = "send-color",
@@ -856,8 +889,8 @@ private fun Composer(
     val sendInteraction = remember { MutableInteractionSource() }
     val sendPressed by sendInteraction.collectIsPressedAsState()
     val sendScale by animateFloatAsState(
-        targetValue = if (sendPressed) 0.9f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        targetValue = if (sendPressed) 0.94f else 1f,
+        animationSpec = Motion.Press,
         label = "send-scale",
     )
 
@@ -871,7 +904,7 @@ private fun Composer(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, borderColor, RoundedCornerShape(22.dp))
                 .animateContentSize()
                 .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
@@ -879,16 +912,16 @@ private fun Composer(
         ) {
             Box(
                 Modifier
-                    .size(30.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onAttach),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Default.Add,
+                    AppIcons.Plus,
                     "添加附件",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
             Spacer(Modifier.width(2.dp))
@@ -897,14 +930,14 @@ private fun Composer(
                     Text(
                         "回复 Claudroid…",
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.appColors.faintText,
                     )
                 }
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    cursorBrush = SolidColor(MaterialTheme.appColors.accentInk),
                     maxLines = 6,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     modifier = Modifier
@@ -915,7 +948,7 @@ private fun Composer(
             Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
-                    .size(34.dp)
+                    .size(40.dp)
                     .graphicsLayer {
                         scaleX = sendScale
                         scaleY = sendScale
@@ -927,6 +960,7 @@ private fun Composer(
                         indication = null,
                         enabled = sendEnabled,
                     ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         if (running) onStop() else onSend()
                     },
                 contentAlignment = Alignment.Center,
@@ -951,7 +985,7 @@ private fun Composer(
         Text(
             "Agent 可能修改系统文件，请确认它执行的命令。",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            color = MaterialTheme.appColors.faintText,
             modifier = Modifier.fillMaxWidth(),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )

@@ -1,5 +1,10 @@
 package app.claudroid.ui.md
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +47,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -77,7 +83,12 @@ object Markdown {
     private val ruleLine = Regex("""^(?:-{3,}|\*{3,}|_{3,})$""")
     private val tableDivider = Regex("""^:?-{2,}:?$""")
 
-    fun parse(source: String, accent: Color, codeBackground: Color): List<MdBlock> {
+    fun parse(
+        source: String,
+        accent: Color,
+        codeBackground: Color,
+        codeColor: Color = accent,
+    ): List<MdBlock> {
         val blocks = mutableListOf<MdBlock>()
         val lines = source.replace("\r\n", "\n").split("\n")
         val paragraph = StringBuilder()
@@ -89,8 +100,8 @@ object Markdown {
                 val text = paragraph.toString().trim()
                 if (text.isNotEmpty()) {
                     blocks += MdBlock.Text(
-                        content = inline(text, accent, codeBackground),
-                        style = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
+                        content = inline(text, accent, codeBackground, codeColor),
+                        style = TextStyle(fontSize = 15.5f.sp, lineHeight = 24.sp),
                     )
                 }
                 paragraph.setLength(0)
@@ -128,8 +139,8 @@ object Markdown {
                     }
                     val widths = columnWidths(header, rows)
                     blocks += MdBlock.Table(
-                        headers = header.map { inline(it, accent, codeBackground) },
-                        rows = rows.map { row -> row.map { inline(it, accent, codeBackground) } },
+                        headers = header.map { inline(it, accent, codeBackground, codeColor) },
+                        rows = rows.map { row -> row.map { inline(it, accent, codeBackground, codeColor) } },
                         widths = widths,
                     )
                     i = j
@@ -158,17 +169,21 @@ object Markdown {
                         paragraph.appendLine(line)
                     } else {
                         val size = when (level) {
-                            1 -> 20.sp
-                            2 -> 18.sp
-                            3 -> 16.sp
+                            1 -> 21.sp
+                            2 -> 18.5.sp
+                            3 -> 15.5.sp
                             else -> 15.sp
                         }
+                        // Chat headings share the serif voice of the app's display type;
+                        // the rest of the transcript stays in the UI sans.
+                        val serif = level <= 2
                         blocks += MdBlock.Text(
-                            content = inline(content, accent, codeBackground),
+                            content = inline(content, accent, codeBackground, codeColor),
                             style = TextStyle(
+                                fontFamily = if (serif) FontFamily.Serif else null,
                                 fontSize = size,
-                                fontWeight = FontWeight.SemiBold,
-                                lineHeight = size * 1.35f,
+                                fontWeight = if (serif) FontWeight.Normal else FontWeight.SemiBold,
+                                lineHeight = size * 1.4f,
                             ),
                         )
                     }
@@ -186,7 +201,7 @@ object Markdown {
                     val text = quote.toString().trim()
                     if (text.isNotEmpty()) {
                         blocks += MdBlock.Text(
-                            content = inline(text, accent, codeBackground),
+                            content = inline(text, accent, codeBackground, codeColor),
                             style = TextStyle(fontSize = 14.sp, fontStyle = FontStyle.Italic, lineHeight = 21.sp),
                             quote = true,
                         )
@@ -218,9 +233,9 @@ object Markdown {
                                     )
                                 ) { append(prefix) }
                                 append("  ")
-                                append(inline(body, accent, codeBackground))
+                                append(inline(body, accent, codeBackground, codeColor))
                             },
-                            style = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
+                            style = TextStyle(fontSize = 15.5f.sp, lineHeight = 24.sp),
                             indent = depth.coerceIn(0, 4),
                         )
                         i++
@@ -242,7 +257,12 @@ object Markdown {
         return blocks
     }
 
-    fun inline(text: String, accent: Color, codeBackground: Color): AnnotatedString = buildAnnotatedString {
+    fun inline(
+        text: String,
+        accent: Color,
+        codeBackground: Color,
+        codeColor: Color = accent,
+    ): AnnotatedString = buildAnnotatedString {
         val linkStyles = TextLinkStyles(
             style = SpanStyle(color = accent, textDecoration = TextDecoration.Underline),
         )
@@ -256,7 +276,7 @@ object Markdown {
                             SpanStyle(
                                 fontFamily = FontFamily.Monospace,
                                 background = codeBackground,
-                                color = accent,
+                                color = codeColor,
                             )
                         ) { append(text.substring(i + 1, end)) }
                         i = end + 1
@@ -379,31 +399,60 @@ fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
     baseStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    streaming: Boolean = false,
 ) {
-    val accent = MaterialTheme.colorScheme.primary
-    val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
-    val blocks = remember(text, accent, codeBg) { Markdown.parse(text, accent, codeBg) }
+    val accent = MaterialTheme.appColors.accentInk
+    val codeBg = MaterialTheme.colorScheme.surfaceContainer
+    val codeColor = MaterialTheme.colorScheme.onSurface
+    val blocks = remember(text, accent, codeBg, codeColor) {
+        Markdown.parse(text, accent, codeBg, codeColor)
+    }
+    // A blinking terracotta caret at the true end of the stream: the message keeps
+    // feeling alive while the top-level dots already show the turn is running.
+    val caretAlpha = if (streaming) {
+        val transition = rememberInfiniteTransition(label = "caret")
+        transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.15f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(520),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "caret-alpha",
+        ).value
+    } else 0f
+    val lastTextIndex = remember(blocks) { blocks.indexOfLast { it is MdBlock.Text } }
 
     Column(modifier.fillMaxWidth()) {
         blocks.forEachIndexed { index, block ->
             when (block) {
-                is MdBlock.Text -> Text(
-                    text = block.content,
-                    style = baseStyle.merge(block.style),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = (block.indent * 16).dp)
-                        .then(
-                            if (block.quote) Modifier
-                                .background(
-                                    MaterialTheme.colorScheme.surfaceContainer,
-                                    RoundedCornerShape(8.dp),
-                                )
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                            else Modifier
-                        )
-                        .padding(top = if (index == 0) 0.dp else 8.dp),
-                )
+                is MdBlock.Text -> {
+                    val content = if (streaming && index == lastTextIndex) {
+                        buildAnnotatedString {
+                            append(block.content)
+                            withStyle(SpanStyle(color = accent.copy(alpha = caretAlpha))) {
+                                append(" ▍")
+                            }
+                        }
+                    } else block.content
+                    Text(
+                        text = content,
+                        style = baseStyle.merge(block.style),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = (block.indent * 16).dp)
+                            .then(
+                                if (block.quote) Modifier
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainer,
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                else Modifier
+                            )
+                            .padding(top = if (index == 0) 0.dp else 8.dp),
+                    )
+                }
 
                 is MdBlock.Code -> CodeBlock(block.code, block.lang)
 
@@ -476,7 +525,9 @@ fun CodeBlock(code: String, lang: String?) {
         Modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
             .padding(vertical = 8.dp)
     ) {
         Row(
@@ -488,13 +539,13 @@ fun CodeBlock(code: String, lang: String?) {
             Text(
                 text = lang?.lowercase()?.ifBlank { null } ?: "代码",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.appColors.faintText,
             )
             Spacer(Modifier.weight(1f))
             Text(
                 text = if (copied) "已复制" else "复制",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (copied) MaterialTheme.colorScheme.primary
+                color = if (copied) MaterialTheme.appColors.accentInk
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))

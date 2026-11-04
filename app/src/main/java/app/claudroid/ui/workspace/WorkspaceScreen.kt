@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -20,6 +21,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,12 +41,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -72,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -98,6 +96,9 @@ import app.claudroid.core.TextPreview
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.Motion
 import app.claudroid.ui.md.MarkdownText
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Spacing
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -199,13 +200,13 @@ private fun Browser(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = if (currentDir == root) onBack else onUp) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            AppIcons.Back,
                             "返回",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -239,20 +240,20 @@ private fun Browser(
                             Text(
                                 "根目录",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.appColors.accentInk,
                             )
                         }
                     }
                     IconButton(onClick = onRefresh) {
                         Icon(
-                            Icons.Default.Refresh,
+                            AppIcons.Refresh,
                             "刷新",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
     ) { padding ->
@@ -267,12 +268,17 @@ private fun Browser(
                         .align(Alignment.Center)
                         .size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.appColors.accentInk,
                 )
                 entries.isEmpty() -> EmptyWorkspace(Modifier.align(Alignment.Center))
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 30.dp),
+                    contentPadding = PaddingValues(
+                        start = Spacing.page - 6.dp,
+                        end = Spacing.page - 6.dp,
+                        top = 4.dp,
+                        bottom = 30.dp,
+                    ),
                 ) {
                     items(entries, key = { it.file.absolutePath }) { entry ->
                         EntryRow(entry = entry, onClick = {
@@ -293,11 +299,24 @@ private fun Browser(
 
 @Composable
 private fun EntryRow(entry: WorkspaceEntry, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val background by animateColorAsState(
+        targetValue = if (pressed) MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)
+        else Color.Transparent,
+        animationSpec = tween(Motion.FAST),
+        label = "entry-press",
+    )
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .clip(RoundedCornerShape(10.dp))
+            .background(background)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
             .padding(horizontal = 6.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -319,15 +338,15 @@ private fun EntryRow(entry: WorkspaceEntry, onClick: () -> Unit) {
             Text(
                 if (entry.isDirectory) "文件夹"
                 else "${WorkspaceFiles.humanSize(entry.size)} · ${fileTime(entry.modifiedAt)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                color = MaterialTheme.appColors.faintText,
             )
         }
         if (entry.isDirectory) {
             Text(
                 "›",
                 style = TextStyle(fontSize = 20.sp),
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.appColors.faintText,
                 modifier = Modifier.padding(start = 8.dp),
             )
         }
@@ -344,8 +363,9 @@ private fun KindBadge(entry: WorkspaceEntry) {
     Box(
         Modifier
             .size(40.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer),
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -356,7 +376,7 @@ private fun KindBadge(entry: WorkspaceEntry) {
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 0.3.sp,
             ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.faintText,
         )
     }
 }
@@ -366,15 +386,16 @@ private fun ImageThumbnail(entry: WorkspaceEntry) {
     Box(
         Modifier
             .size(40.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer),
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
         // Stays visible while Coil decodes, and remains as the fallback for a corrupt file.
         Text(
             "IMG",
             style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 9.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.faintText,
         )
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
@@ -395,7 +416,7 @@ private fun EmptyWorkspace(modifier: Modifier = Modifier) {
         modifier.padding(horizontal = 38.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 34.dp, color = MaterialTheme.colorScheme.outline)
+        ClaudeMark(size = 34.dp, color = MaterialTheme.appColors.brand.copy(alpha = 0.65f))
         Spacer(Modifier.height(16.dp))
         Text(
             "工作区还是空的",
@@ -443,13 +464,13 @@ private fun FilePreview(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            AppIcons.Back,
                             "返回",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -479,13 +500,13 @@ private fun FilePreview(
                             Text(
                                 if (sourceView) "预览" else "源码",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.appColors.accentInk,
                             )
                         }
                     }
                     IconButton(onClick = { reload += 1 }) {
                         Icon(
-                            Icons.Default.Refresh,
+                            AppIcons.Refresh,
                             "重新加载",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(19.dp),
@@ -493,7 +514,7 @@ private fun FilePreview(
                     }
                     IconButton(onClick = { menuOpen = true }) {
                         Icon(
-                            Icons.Default.MoreVert,
+                            AppIcons.More,
                             "更多",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -502,7 +523,7 @@ private fun FilePreview(
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("分享文件") },
-                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            leadingIcon = { Icon(AppIcons.Share, null) },
                             onClick = {
                                 menuOpen = false
                                 shareFile(context, entry)
@@ -521,7 +542,7 @@ private fun FilePreview(
                             },
                             leadingIcon = {
                                 Icon(
-                                    Icons.Default.Delete,
+                                    AppIcons.Trash,
                                     null,
                                     tint = MaterialTheme.colorScheme.error,
                                 )
@@ -533,7 +554,7 @@ private fun FilePreview(
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
     ) { padding ->
@@ -548,7 +569,7 @@ private fun FilePreview(
                         .align(Alignment.Center)
                         .size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.appColors.accentInk,
                 )
                 kind == FileKind.IMAGE -> ImagePreview(
                     file = file,
@@ -601,7 +622,7 @@ private fun TextContent(kind: FileKind, preview: TextPreview) {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 12.dp)
+            .padding(horizontal = Spacing.page, vertical = 12.dp)
     ) {
         AnimatedVisibility(
             visible = preview.truncated,
@@ -695,7 +716,7 @@ private fun HtmlPreview(html: String, reload: Int) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
                 strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.appColors.accentInk,
             )
         }
     }
@@ -742,12 +763,12 @@ private fun PreviewAction(text: String, primary: Boolean, onClick: () -> Unit) {
         Modifier
             .clip(RoundedCornerShape(22.dp))
             .background(
-                if (primary) MaterialTheme.colorScheme.primary
+                if (primary) MaterialTheme.appColors.accentInk
                 else MaterialTheme.colorScheme.surfaceContainer
             )
             .border(
                 1.dp,
-                if (primary) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                if (primary) MaterialTheme.appColors.accentInk else MaterialTheme.colorScheme.outlineVariant,
                 RoundedCornerShape(22.dp),
             )
             .clickable(onClick = onClick)
@@ -813,7 +834,7 @@ private fun ImagePreview(
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.appColors.accentInk,
                 )
             },
             error = { BinaryContent(entry, onOpen, onShare) },

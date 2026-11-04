@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.claudroid.ui.theme.appColors
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.PI
@@ -36,7 +37,7 @@ import kotlin.math.PI
 @Composable
 fun ClaudeMark(
     size: Dp = 22.dp,
-    color: Color = MaterialTheme.colorScheme.primary,
+    color: Color = MaterialTheme.appColors.brand,
     rays: Int = 8,
     modifier: Modifier = Modifier,
     pulse: Boolean = false,
@@ -88,7 +89,7 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.9.sp),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = MaterialTheme.appColors.faintText,
         modifier = modifier,
     )
 }

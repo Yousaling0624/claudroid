@@ -32,6 +32,8 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import app.claudroid.AppContainer
 import app.claudroid.ClaudroidApp
 import app.claudroid.data.AppSettings
@@ -42,6 +44,7 @@ import app.claudroid.ui.components.Motion
 import app.claudroid.ui.home.HomeScreen
 import app.claudroid.ui.settings.SettingsScreen
 import app.claudroid.ui.theme.ClaudroidTheme
+import app.claudroid.ui.theme.appColors
 import app.claudroid.ui.workspace.WorkspaceScreen
 import kotlinx.coroutines.launch
 
@@ -102,38 +105,43 @@ private fun AppRoot(container: AppContainer) {
 
     BackHandler(enabled = stack.size > 1) { pop() }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = route != "settings",
-        drawerContent = {
-            AppDrawer(
-                container = container,
-                currentSessionId = route.removePrefix("chat:").takeIf { route.startsWith("chat:") },
-                onOpenSession = { id -> openChat(id) },
-                onNewChat = {
-                    // Empty sessions are not persisted any more; the transcript is written
-                    // on the first message. Backing out of a new chat leaves no litter.
-                    val session = ChatSession()
-                    openChat(session.id)
-                },
-                onSettings = {
-                    if (route != "settings") stack = stack + "settings"
-                    scope.launch { drawerState.close() }
-                },
-                onWorkspace = {
-                    if (route != "workspace") stack = stack + "workspace"
-                    scope.launch { drawerState.close() }
-                },
-                onClose = { scope.launch { drawerState.close() } },
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(MaterialTheme.appColors.paperTop, MaterialTheme.colorScheme.background),
+                )
             )
-        },
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = route != "settings",
+            drawerContent = {
+                AppDrawer(
+                    container = container,
+                    currentSessionId = route.removePrefix("chat:").takeIf { route.startsWith("chat:") },
+                    onOpenSession = { id -> openChat(id) },
+                    onNewChat = {
+                        // Empty sessions are not persisted any more; the transcript is written
+                        // on the first message. Backing out of a new chat leaves no litter.
+                        val session = ChatSession()
+                        openChat(session.id)
+                    },
+                    onSettings = {
+                        if (route != "settings") stack = stack + "settings"
+                        scope.launch { drawerState.close() }
+                    },
+                    onWorkspace = {
+                        if (route != "workspace") stack = stack + "workspace"
+                        scope.launch { drawerState.close() }
+                    },
+                    onClose = { scope.launch { drawerState.close() } },
+                )
+            },
         ) {
-            AnimatedContent(
+            Box(Modifier.fillMaxSize()) {
+                AnimatedContent(
                 targetState = route,
                 transitionSpec = {
                     fun level(value: String) = if (value == "home") 0 else 1
@@ -180,4 +188,5 @@ private fun AppRoot(container: AppContainer) {
             }
         }
     }
+}
 }

@@ -2,18 +2,18 @@ package app.claudroid.ui.components
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.appColors
 
 /**
  * One place for the app's motion vocabulary. Claude's own UI moves in short,
@@ -38,6 +40,9 @@ object Motion {
 
     val EaseOut = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
     val EaseInOut = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
+
+    /** Settles quickly and without visible rebound; paper should not feel rubbery. */
+    val Press = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessHigh)
 }
 
 /**
@@ -80,7 +85,7 @@ fun TypingDots(
 fun RotatingChevron(
     expanded: Boolean,
     modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.outline,
+    tint: Color = MaterialTheme.appColors.faintText,
     size: Dp = 16.dp,
 ) {
     val rotation by animateFloatAsState(
@@ -89,7 +94,7 @@ fun RotatingChevron(
         label = "chevron",
     )
     Icon(
-        Icons.Default.KeyboardArrowDown,
+        AppIcons.ChevronDown,
         contentDescription = null,
         tint = tint,
         modifier = modifier

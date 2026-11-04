@@ -1,11 +1,15 @@
 package app.claudroid.ui.home
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -25,15 +29,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -58,8 +53,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.claudroid.AppContainer
@@ -67,14 +67,18 @@ import app.claudroid.data.Block
 import app.claudroid.data.ChatSession
 import app.claudroid.engine.EngineManager
 import app.claudroid.ui.components.ClaudeMark
+import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.SectionLabel
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Spacing
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     container: AppContainer,
@@ -101,22 +105,23 @@ fun HomeScreen(
             }
         }
     }
+    val haptic = LocalHapticFeedback.current
     val fabInteraction = remember { MutableInteractionSource() }
     val fabPressed by fabInteraction.collectIsPressedAsState()
     val fabScale by animateFloatAsState(
-        targetValue = if (fabPressed) 0.92f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        targetValue = if (fabPressed) 0.94f else 1f,
+        animationSpec = Motion.Press,
         label = "fab",
     )
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onOpenDrawer) {
                         Icon(
-                            Icons.Default.Menu,
+                            AppIcons.Menu,
                             "会话记录",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -133,7 +138,7 @@ fun HomeScreen(
                 actions = {
                     IconButton(onClick = onOpenWorkspace) {
                         Icon(
-                            Icons.AutoMirrored.Filled.List,
+                            AppIcons.Workspace,
                             "工作区文件",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
@@ -141,26 +146,27 @@ fun HomeScreen(
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(
-                            Icons.Default.Settings,
+                            AppIcons.Settings,
                             "设置",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
                         )
                     }
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     // Written on the first message, not here: an abandoned new chat
                     // should not leave an empty row in history.
                     onOpenSession(ChatSession().id)
                 },
-                containerColor = MaterialTheme.colorScheme.onBackground,
-                contentColor = MaterialTheme.colorScheme.background,
+                containerColor = MaterialTheme.appColors.accentInk,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = CircleShape,
                 interactionSource = fabInteraction,
                 modifier = Modifier
@@ -170,7 +176,7 @@ fun HomeScreen(
                         scaleY = fabScale
                     },
             ) {
-                Icon(Icons.Default.Add, "新对话", modifier = Modifier.size(22.dp))
+                Icon(AppIcons.Plus, "新对话", modifier = Modifier.size(22.dp))
             }
         },
     ) { padding ->
@@ -179,8 +185,8 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Column(Modifier.padding(horizontal = 22.dp)) {
-                Spacer(Modifier.height(4.dp))
+            Column(Modifier.padding(horizontal = Spacing.page)) {
+                Spacer(Modifier.height(2.dp))
                 Text(
                     greeting(),
                     style = MaterialTheme.typography.displaySmall,
@@ -206,7 +212,7 @@ fun HomeScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 22.dp, vertical = 4.dp),
+                    .padding(horizontal = Spacing.page, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 SectionLabel("最近对话")
@@ -215,7 +221,7 @@ fun HomeScreen(
                     Text(
                         "${sessions.size}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.appColors.faintText,
                     )
                 }
             }
@@ -225,7 +231,11 @@ fun HomeScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = 100.dp),
+                    contentPadding = PaddingValues(
+                        start = Spacing.page - 8.dp,
+                        end = Spacing.page - 8.dp,
+                        bottom = 100.dp,
+                    ),
                 ) {
                     items(filtered, key = { it.id }) { session ->
                         Column(
@@ -248,7 +258,10 @@ fun HomeScreen(
                                     }
                                 },
                             )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
                         }
                     }
                 }
@@ -259,16 +272,24 @@ fun HomeScreen(
 
 @Composable
 private fun SearchRow(value: String, onValueChange: (String) -> Unit, onClear: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val border by animateColorAsState(
+        targetValue = if (focused) MaterialTheme.appColors.accentInk.copy(alpha = 0.6f)
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(Motion.FAST),
+        label = "search-border",
+    )
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, border, RoundedCornerShape(14.dp))
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            Icons.Default.Search,
+            AppIcons.Search,
             null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(18.dp),
@@ -279,7 +300,7 @@ private fun SearchRow(value: String, onValueChange: (String) -> Unit, onClear: (
                 Text(
                     "搜索对话",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.appColors.faintText,
                 )
             }
             BasicTextField(
@@ -287,13 +308,15 @@ private fun SearchRow(value: String, onValueChange: (String) -> Unit, onClear: (
                 onValueChange = onValueChange,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth(),
+                cursorBrush = SolidColor(MaterialTheme.appColors.accentInk),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused },
             )
         }
         if (value.isNotEmpty()) {
             Icon(
-                Icons.Default.Close,
+                AppIcons.Close,
                 "清空搜索",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -316,9 +339,9 @@ private fun EngineNotice(state: EngineManager.State, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f))
+            .padding(horizontal = Spacing.page)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -327,7 +350,7 @@ private fun EngineNotice(state: EngineManager.State, onClick: () -> Unit) {
             Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
+                .background(MaterialTheme.appColors.brand)
         )
         Spacer(Modifier.width(10.dp))
         Text(
@@ -341,65 +364,93 @@ private fun EngineNotice(state: EngineManager.State, onClick: () -> Unit) {
         Text(
             "设置",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.appColors.accentInk,
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(session: ChatSession, onClick: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 15.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                session.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                session.preview,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                relativeTime(session.updatedAt),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box {
-                IconButton(onClick = { menu = true }, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        "更多",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("删除对话") },
-                        leadingIcon = { Icon(Icons.Default.Delete, null) },
-                        onClick = {
-                            menu = false
-                            onDelete()
-                        },
-                    )
-                }
+    val haptic = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val background by animateColorAsState(
+        targetValue = if (pressed) MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)
+        else Color.Transparent,
+        animationSpec = tween(Motion.FAST),
+        label = "row-press",
+    )
+    val failed = remember(session) {
+        session.messages.lastOrNull()?.blocks?.any {
+            it is Block.Error || (it is Block.Tool && it.isError)
+        } == true
+    }
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(background)
+                .combinedClickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menu = true
+                    },
+                )
+                .padding(horizontal = 8.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    session.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    session.preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
+            Spacer(Modifier.width(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (failed) {
+                    Box(
+                        Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error)
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(
+                    relativeTime(session.updatedAt),
+                    style = MaterialTheme.typography.labelSmall.merge(
+                        TextStyle(fontFeatureSettings = "tnum")
+                    ),
+                    color = MaterialTheme.appColors.faintText,
+                )
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(
+                text = { Text("删除对话") },
+                leadingIcon = { Icon(AppIcons.Trash, null) },
+                onClick = {
+                    menu = false
+                    onDelete()
+                },
+            )
         }
     }
 }
@@ -413,7 +464,7 @@ private fun EmptyState(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 40.dp, color = MaterialTheme.colorScheme.outline)
+        ClaudeMark(size = 40.dp, color = MaterialTheme.appColors.brand.copy(alpha = 0.65f))
         Spacer(Modifier.height(18.dp))
         Text(
             "还没有对话",

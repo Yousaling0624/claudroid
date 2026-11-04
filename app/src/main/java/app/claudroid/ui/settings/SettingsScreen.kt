@@ -29,8 +29,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,9 +59,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -89,6 +90,9 @@ import app.claudroid.engine.EngineManager
 import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.SectionLabel
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Spacing
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,6 +105,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current.applicationContext
     val focusManager = LocalFocusManager.current
+    val haptic = LocalHapticFeedback.current
     val settings by container.settings.flow.collectAsState(initial = AppSettings())
     val engineState by container.engine.state.collectAsState()
     val logs by Logx.lines.collectAsState()
@@ -135,21 +140,21 @@ fun SettingsScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text("设置", style = MaterialTheme.typography.headlineSmall) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            AppIcons.Back,
                             "返回",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
             )
         },
     ) { padding ->
@@ -158,7 +163,7 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp),
+                .padding(horizontal = Spacing.page),
         ) {
             Spacer(Modifier.height(6.dp))
 
@@ -304,7 +309,7 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .height(3.dp)
                             .clip(RoundedCornerShape(2.dp)),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.appColors.accentInk,
                         trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -354,7 +359,7 @@ fun SettingsScreen(
                     Text(
                         if (showLogs) "收起引擎日志" else "查看引擎日志（${logs.size}）",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.appColors.accentInk,
                     )
                 }
                 if (showLogs) {
@@ -411,11 +416,12 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.autoUpdate,
                         onCheckedChange = { on ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             scope.launch { container.settings.edit { it.copy(autoUpdate = on) } }
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedTrackColor = MaterialTheme.appColors.accentInk,
                         ),
                     )
                 }
@@ -450,11 +456,12 @@ fun SettingsScreen(
                     subtitle = listOf("跟随系统", "浅色", "深色").getOrElse(settings.themeMode) { "跟随系统" },
                 ) {
                     TextButton(onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         scope.launch {
                             container.settings.edit { it.copy(themeMode = (it.themeMode + 1) % 3) }
                         }
                     }) {
-                        Text("切换", color = MaterialTheme.colorScheme.primary)
+                        Text("切换", color = MaterialTheme.appColors.accentInk)
                     }
                 }
             }
@@ -489,7 +496,7 @@ fun SettingsScreen(
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = if (status == ReleaseStatus.UPDATE_AVAILABLE) {
-                                MaterialTheme.colorScheme.primary
+                                MaterialTheme.appColors.accentInk
                             } else {
                                 MaterialTheme.colorScheme.onSurface
                             },
@@ -500,19 +507,19 @@ fun SettingsScreen(
                             Text(
                                 if (status == ReleaseStatus.UPDATE_AVAILABLE) "去下载" else "打开发布页",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.appColors.accentInk,
                             )
                         }
                         checkingRelease -> CircularProgressIndicator(
                             modifier = Modifier.size(15.dp),
                             strokeWidth = 1.6.dp,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MaterialTheme.appColors.accentInk,
                         )
                         else -> TextButton(onClick = { scope.launch { checkRelease() } }) {
                             Text(
                                 "重试",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.appColors.accentInk,
                             )
                         }
                     }
@@ -560,12 +567,12 @@ fun SettingsScreen(
                                 Text(
                                     model,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (model == settings.model) MaterialTheme.colorScheme.primary
+                                    color = if (model == settings.model) MaterialTheme.appColors.accentInk
                                     else MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.weight(1f),
                                 )
                                 if (model == settings.model) {
-                                    Text("✓", color = MaterialTheme.colorScheme.primary)
+                                    Text("✓", color = MaterialTheme.appColors.accentInk)
                                 }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -621,20 +628,27 @@ fun SettingsScreen(
 
 @Composable
 private fun Section(title: String, subtitle: String?, content: @Composable ColumnScope.() -> Unit) {
-    Spacer(Modifier.height(20.dp))
-    SectionLabel(title)
-    if (subtitle != null) {
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+    Spacer(Modifier.height(16.dp))
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.appColors.card)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        SectionLabel(title)
+        if (subtitle != null) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        content()
     }
-    Spacer(Modifier.height(10.dp))
-    Column(content = content)
-    Spacer(Modifier.height(10.dp))
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
@@ -650,7 +664,7 @@ private fun SettingRow(title: String, subtitle: String, trailing: @Composable ()
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.appColors.faintText,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
@@ -665,7 +679,7 @@ private fun Label(text: String) {
         text,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 14.dp, bottom = 8.dp),
+        modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
     )
 }
 
@@ -674,7 +688,7 @@ private fun Hint(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = MaterialTheme.appColors.faintText,
         modifier = Modifier.padding(top = 8.dp),
     )
 }
@@ -685,7 +699,7 @@ private fun KeyValue(key: String, value: String) {
         Text(
             key,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.faintText,
             modifier = Modifier.width(76.dp),
         )
         Text(
@@ -714,7 +728,7 @@ private fun Field(
     var committed by remember { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
     val borderColor by animateColorAsState(
-        targetValue = if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+        targetValue = if (focused) MaterialTheme.appColors.accentInk.copy(alpha = 0.6f)
         else MaterialTheme.colorScheme.outlineVariant,
         animationSpec = tween(Motion.FAST),
         label = "field-border",
@@ -738,9 +752,9 @@ private fun Field(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .border(1.dp, borderColor, RoundedCornerShape(10.dp))
                 .padding(horizontal = 13.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -749,7 +763,7 @@ private fun Field(
                     Text(
                         placeholder,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = MaterialTheme.appColors.faintText,
                         maxLines = 1,
                     )
                 }
@@ -763,7 +777,7 @@ private fun Field(
                     singleLine = singleLine,
                     maxLines = if (singleLine) 1 else 6,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    cursorBrush = SolidColor(MaterialTheme.appColors.accentInk),
                     visualTransformation = if (secret && !revealed) PasswordVisualTransformation()
                     else VisualTransformation.None,
                     keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -777,7 +791,7 @@ private fun Field(
                 Text(
                     if (revealed) "隐藏" else "显示",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.appColors.accentInk,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .clickable { revealed = !revealed }
@@ -821,13 +835,13 @@ private fun PresetChips(settings: AppSettings, onApply: (ProviderPreset) -> Unit
 @Composable
 private fun Pill(text: String, selected: Boolean, onClick: () -> Unit) {
     val background by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary
+        targetValue = if (selected) MaterialTheme.appColors.accentInk
         else MaterialTheme.colorScheme.surfaceContainer,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
         label = "pill-bg",
     )
     val border by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary
+        targetValue = if (selected) MaterialTheme.appColors.accentInk
         else MaterialTheme.colorScheme.outlineVariant,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
         label = "pill-border",
@@ -875,7 +889,7 @@ private fun PrimaryPill(text: String, enabled: Boolean, onClick: () -> Unit) {
         shape = CircleShape,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 18.dp, vertical = 10.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
+            containerColor = MaterialTheme.appColors.accentInk,
             contentColor = MaterialTheme.colorScheme.onPrimary,
             disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -892,10 +906,10 @@ private fun GhostPill(text: String, enabled: Boolean, onClick: () -> Unit) {
         enabled = enabled,
         shape = CircleShape,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         colors = ButtonDefaults.outlinedButtonColors(
             contentColor = MaterialTheme.colorScheme.onSurface,
-            disabledContentColor = MaterialTheme.colorScheme.outline,
+            disabledContentColor = MaterialTheme.appColors.faintText,
         ),
     ) {
         Text(text, style = MaterialTheme.typography.labelLarge)

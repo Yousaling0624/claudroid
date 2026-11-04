@@ -1,7 +1,11 @@
 package app.claudroid.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,11 +21,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,13 +31,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.claudroid.AppContainer
 import app.claudroid.data.ChatSession
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.appColors
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -60,6 +64,7 @@ fun AppDrawer(
 ) {
     val sessions by container.sessions.sessions.collectAsState()
     val engineState by container.engine.state.collectAsState()
+    val haptic = LocalHapticFeedback.current
     LaunchedEffect(Unit) { container.sessions.load() }
 
     ModalDrawerSheet(
@@ -78,9 +83,9 @@ fun AppDrawer(
                 Spacer(Modifier.width(9.dp))
                 Text("Claudroid", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) {
                     Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
+                        AppIcons.Back,
                         "收起",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
@@ -93,14 +98,17 @@ fun AppDrawer(
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable(onClick = onNewChat)
+                    .background(MaterialTheme.appColors.accentInk)
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onNewChat()
+                    }
                     .padding(horizontal = 16.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
                 Icon(
-                    Icons.Default.Add,
+                    AppIcons.Plus,
                     null,
                     tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.size(17.dp),
@@ -139,7 +147,7 @@ fun AppDrawer(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    Icons.AutoMirrored.Filled.List,
+                    AppIcons.Workspace,
                     null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
@@ -154,7 +162,7 @@ fun AppDrawer(
                 Text(
                     "/work",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = MaterialTheme.appColors.faintText,
                 )
             }
 
@@ -173,10 +181,10 @@ fun AppDrawer(
                         .clip(CircleShape)
                         .background(
                             when {
-                                engineState.ready -> MaterialTheme.colorScheme.primary
+                                engineState.ready -> MaterialTheme.appColors.brand
                                 engineState.phase == app.claudroid.engine.EngineManager.Phase.Failed ->
                                     MaterialTheme.colorScheme.error
-                                else -> MaterialTheme.colorScheme.outline
+                                else -> MaterialTheme.appColors.faintText
                             }
                         )
                 )
@@ -201,11 +209,11 @@ fun AppDrawer(
                             else -> "PRoot 组件缺失"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.appColors.faintText,
                     )
                 }
                 Icon(
-                    Icons.Default.Settings,
+                    AppIcons.Settings,
                     "设置",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
@@ -217,19 +225,40 @@ fun AppDrawer(
 
 @Composable
 private fun DrawerRow(session: ChatSession, selected: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val background by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.surfaceContainer
+            pressed -> MaterialTheme.colorScheme.surfaceContainerLow
+            else -> MaterialTheme.colorScheme.surface
+        },
+        animationSpec = tween(Motion.FAST),
+        label = "drawer-row",
+    )
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 1.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.surfaceContainerHigh
-                else MaterialTheme.colorScheme.surface
+            .background(background)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
             )
-            .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selected) {
+            Box(
+                Modifier
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.appColors.accentInk)
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Text(
             session.title,
             style = MaterialTheme.typography.bodyMedium,
@@ -241,8 +270,8 @@ private fun DrawerRow(session: ChatSession, selected: Boolean, onClick: () -> Un
         Spacer(Modifier.width(8.dp))
         Text(
             compactTime(session.updatedAt),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
+            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+            color = MaterialTheme.appColors.faintText,
         )
     }
 }
