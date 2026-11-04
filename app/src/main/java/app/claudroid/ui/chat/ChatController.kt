@@ -50,6 +50,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private var job: Job? = null
     private var loaded = false
 
+    /** Bumped by [clear] so events from a cancelled turn cannot repopulate the chat. */
+    @Volatile private var generation = 0
+
     @Volatile private var dismissed = false
 
     suspend fun load() {
@@ -162,6 +165,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         var cost: Double? = null
         var duration: Long? = null
         val stderrTail = ArrayDeque<String>()
+        val turnGeneration = generation
 
         suspend fun attempt(resumeId: String?): Int {
             var code = 0
@@ -172,17 +176,21 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                     settings = settings,
                     plan = plan,
                 ) { ev ->
+                    // 「清空上下文」 during a turn must win over late stdout events.
+                    if (turnGeneration != generation) return@runTurn
                     when (ev) {
                         is EngineEvent.SessionInit -> {
                             if (ev.sessionId.isNotBlank()) claudeSessionId = ev.sessionId
                             _status.value = "已连接 ${ev.model ?: settings.model}"
                         }
                         is EngineEvent.TextDelta -> {
-                            _status.value = ""
+                            _status.value = "正在回复…"
                             mutateAssistant(assistant.id) { appendText(it, ev.text) }
                         }
-                        is EngineEvent.ThinkingDelta ->
+                        is EngineEvent.ThinkingDelta -> {
+                            _status.value = "正在思考…"
                             mutateAssistant(assistant.id) { appendThinking(it, ev.text) }
+                        }
                         is EngineEvent.ToolUse -> {
                             _status.value = "执行工具 ${ev.name}…"
                             mutateAssistant(assistant.id) { addTool(it, ev) }
@@ -255,6 +263,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             exitCode = -1
         }
 
+        if (turnGeneration != generation) return
+
         // If the backend never streamed deltas (older CLI), fall back to the final text.
         val hasText = _messages.value.firstOrNull { it.id == assistant.id }
             ?.blocks?.any { it is Block.Text && it.text.isNotBlank() } == true
@@ -302,8 +312,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             container.engine.cancel()
             job?.cancel()
         }
+        generation += 1
         _messages.value = emptyList()
         claudeSessionId = null
+        // The transcript is gone; keeping the old title would leave a conversation
+        // named after a message it no longer contains.
+        _title.value = "新对话"
         scope.launch { persist() }
     }
 

@@ -26,7 +26,8 @@ object ModelCatalog {
 
     suspend fun fetch(settings: AppSettings): Result = withContext(Dispatchers.IO) {
         val (url, headers) = endpoint(settings)
-        val body = HttpUtil.getText(url, headers)
+        // Same problem as the chat proxy: a system HTTP proxy breaks 127.0.0.1/LAN hosts.
+        val body = HttpUtil.getText(url, headers, direct = settings.isLocalEndpoint())
         Result(parse(body), url)
     }
 

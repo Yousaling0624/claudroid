@@ -1,17 +1,24 @@
 package app.claudroid.ui.components
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -22,6 +29,9 @@ import kotlin.math.PI
 /**
  * The little sunburst used as the assistant avatar. Drawn rather than shipped as an
  * asset so it stays crisp at any size and picks up the theme accent.
+ *
+ * [pulse] fades the mark while a turn is running: a quieter "alive" signal than a
+ * spinner, and it matches the dots used in the status line.
  */
 @Composable
 fun ClaudeMark(
@@ -29,8 +39,28 @@ fun ClaudeMark(
     color: Color = MaterialTheme.colorScheme.primary,
     rays: Int = 8,
     modifier: Modifier = Modifier,
+    pulse: Boolean = false,
 ) {
-    Canvas(modifier.size(size)) {
+    val alpha = if (pulse) {
+        val transition = rememberInfiniteTransition(label = "mark-pulse")
+        val value by transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.38f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1100, easing = Motion.EaseInOut),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "mark-alpha",
+        )
+        value
+    } else {
+        1f
+    }
+    Canvas(
+        modifier
+            .size(size)
+            .graphicsLayer { this.alpha = alpha }
+    ) {
         val center = Offset(this.size.width / 2f, this.size.height / 2f)
         val outer = this.size.minDimension / 2f
         val inner = outer * 0.42f

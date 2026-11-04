@@ -1,5 +1,9 @@
 package app.claudroid.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -56,8 +60,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -76,16 +82,25 @@ import app.claudroid.data.EngineMode
 import app.claudroid.data.PermissionMode
 import app.claudroid.data.ProviderPreset
 import app.claudroid.data.Providers
+import app.claudroid.data.AppRelease
+import app.claudroid.data.ReleaseCheck
+import app.claudroid.data.ReleaseStatus
 import app.claudroid.engine.EngineManager
 import app.claudroid.engine.openai.ModelCatalog
+import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.SectionLabel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
+fun SettingsScreen(
+    container: AppContainer,
+    onBack: () -> Unit,
+    onOpenWorkspace: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val appContext = LocalContext.current.applicationContext
+    val focusManager = LocalFocusManager.current
     val settings by container.settings.flow.collectAsState(initial = AppSettings())
     val engineState by container.engine.state.collectAsState()
     val logs by Logx.lines.collectAsState()
@@ -99,7 +114,22 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
     var modelError by remember { mutableStateOf<String?>(null) }
     var usage by remember { mutableStateOf<EngineManager.StorageUsage?>(null) }
     var showUninstall by remember { mutableStateOf(false) }
+    var release by remember { mutableStateOf<AppRelease?>(null) }
+    var releaseError by remember { mutableStateOf<String?>(null) }
+    var checkingRelease by remember { mutableStateOf(true) }
 
+    suspend fun checkRelease() {
+        checkingRelease = true
+        ReleaseCheck.fetch()
+            .onSuccess {
+                release = it
+                releaseError = null
+            }
+            .onFailure { releaseError = it.message ?: "网络不可用" }
+        checkingRelease = false
+    }
+
+    LaunchedEffect(Unit) { checkRelease() }
     LaunchedEffect(engineState.installedVersion) {
         usage = if (engineState.installedVersion == null) null else container.engine.storageUsage()
     }
@@ -136,6 +166,8 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
             Section("接口", "Anthropic 与 OpenAI 兼容端点都支持；OpenAI 由 App 内置代理转译") {
                 Label("服务商预设")
                 PresetChips(settings) { preset ->
+                    // Drop focus so the fields below adopt the preset values immediately.
+                    focusManager.clearFocus()
                     scope.launch { container.settings.edit { Providers.apply(it, preset) } }
                 }
                 Hint("点选后自动填好 Base URL、鉴权方式和模型，API Key 保持不变。")
@@ -428,10 +460,82 @@ fun SettingsScreen(container: AppContainer, onBack: () -> Unit) {
             }
 
             Section("关于", null) {
-                KeyValue("应用", "Claudroid " + BuildConfig.VERSION_NAME)
+                KeyValue("应用版本", "Claudroid ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
                 KeyValue("后端", "Claude Code CLI（官方 npm 发布物）")
-                KeyValue("工作区", Paths.workspace(appContext).absolutePath)
-                Hint("工作区在 jail 内映射为 /work；PRoot 与 root 模式都会挂载共享存储（若已授权）。")
+                val latest = release
+                val status = latest?.let { ReleaseCheck.status(BuildConfig.VERSION_NAME, it.tag) }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "最新发布",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            when {
+                                latest != null -> "v${latest.tag} · " + when (status) {
+                                    ReleaseStatus.UP_TO_DATE -> "已是最新"
+                                    ReleaseStatus.UPDATE_AVAILABLE -> "有新版本可下载"
+                                    ReleaseStatus.DEV_BUILD -> "当前是本地构建"
+                                    null -> ""
+                                }
+                                checkingRelease -> "正在检查…"
+                                else -> "检查失败"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (status == ReleaseStatus.UPDATE_AVAILABLE) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                    }
+                    when {
+                        latest != null -> TextButton(onClick = { openUrl(appContext, latest.url) }) {
+                            Text(
+                                if (status == ReleaseStatus.UPDATE_AVAILABLE) "去下载" else "打开发布页",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        checkingRelease -> CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 1.6.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        else -> TextButton(onClick = { scope.launch { checkRelease() } }) {
+                            Text(
+                                "重试",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+                releaseError?.let {
+                    Text(
+                        "无法连接 GitHub：$it。网络受限时可忽略此检查，直接手动打开项目 Release 页。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.padding(vertical = 10.dp),
+                )
+                SettingRow(
+                    title = "工作区文件",
+                    subtitle = Paths.workspace(appContext).absolutePath,
+                ) {
+                    GhostPill("打开", true) { onOpenWorkspace() }
+                }
+                Hint("工作区在 jail 内映射为 /work；Claude 生成的文件可以直接在应用里预览、分享或交给其他应用打开。")
             }
             Spacer(Modifier.height(40.dp))
         }
@@ -603,6 +707,27 @@ private fun Field(
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
     var revealed by remember { mutableStateOf(false) }
+    // Keep the editing buffer local. Binding BasicTextField straight to the persisted
+    // value makes every keystroke round-trip through DataStore; while that write lags,
+    // Compose can render a stale value and drop or reorder fast input.
+    var text by remember { mutableStateOf(value) }
+    var committed by remember { mutableStateOf(value) }
+    var focused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(Motion.FAST),
+        label = "field-border",
+    )
+    LaunchedEffect(value, focused) {
+        // While focused, every flow emission is an echo of our own keystrokes and may
+        // still lag behind; adopting it would undo characters. External edits (provider
+        // presets) clear focus first, so they land here once the field is idle again.
+        if (!focused && value != committed) {
+            text = value
+            committed = value
+        }
+    }
     Column(Modifier.padding(top = 12.dp)) {
         Text(
             label,
@@ -615,12 +740,12 @@ private fun Field(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
                 .padding(horizontal = 13.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.weight(1f)) {
-                if (value.isEmpty()) {
+                if (text.isEmpty()) {
                     Text(
                         placeholder,
                         style = MaterialTheme.typography.bodyMedium,
@@ -629,8 +754,12 @@ private fun Field(
                     )
                 }
                 BasicTextField(
-                    value = value,
-                    onValueChange = onChange,
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        committed = it
+                        onChange(it)
+                    },
                     singleLine = singleLine,
                     maxLines = if (singleLine) 1 else 6,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -638,7 +767,9 @@ private fun Field(
                     visualTransformation = if (secret && !revealed) PasswordVisualTransformation()
                     else VisualTransformation.None,
                     keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { focused = it.isFocused },
                 )
             }
             if (secret) {
@@ -689,28 +820,43 @@ private fun PresetChips(settings: AppSettings, onApply: (ProviderPreset) -> Unit
 
 @Composable
 private fun Pill(text: String, selected: Boolean, onClick: () -> Unit) {
+    val background by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceContainer,
+        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        label = "pill-bg",
+    )
+    val border by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        label = "pill-border",
+    )
+    val foreground by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        label = "pill-fg",
+    )
     Box(
         Modifier
             .clip(CircleShape)
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceContainer
-            )
-            .border(
-                1.dp,
-                if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outlineVariant,
-                CircleShape,
-            )
+            .background(background)
+            .border(1.dp, border, CircleShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         Text(
             text,
             style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = foreground,
         )
+    }
+}
+
+private fun openUrl(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 }
 

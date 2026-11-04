@@ -9,6 +9,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -30,9 +38,11 @@ import app.claudroid.data.AppSettings
 import app.claudroid.data.ChatSession
 import app.claudroid.ui.chat.ChatScreen
 import app.claudroid.ui.components.AppDrawer
+import app.claudroid.ui.components.Motion
 import app.claudroid.ui.home.HomeScreen
 import app.claudroid.ui.settings.SettingsScreen
 import app.claudroid.ui.theme.ClaudroidTheme
+import app.claudroid.ui.workspace.WorkspaceScreen
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -63,13 +73,34 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppRoot(container: AppContainer) {
-    // Three screens do not justify a navigation dependency; a saved route string does the job.
-    var route by rememberSaveable { mutableStateOf("home") }
+    // Three screens do not justify a navigation dependency; a saved route stack does the
+    // job and makes back behave like the user expects (folder → chat → home).
+    var stack by rememberSaveable(
+        stateSaver = listSaver(
+            save = { it },
+            restore = { it },
+        )
+    ) { mutableStateOf(listOf("home")) }
+    val route = stack.last()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val currentSessionId = if (route.startsWith("chat:")) route.removePrefix("chat:") else null
 
-    BackHandler(enabled = route != "home") { route = "home" }
+    fun push(next: String) {
+        if (stack.last() != next) stack = stack + next
+    }
+
+    fun pop() {
+        if (stack.size > 1) stack = stack.dropLast(1)
+    }
+
+    fun openChat(sessionId: String) {
+        // Opening a conversation always resets to home beneath it: switching chats from
+        // settings/workspace should not leave those screens behind the back button.
+        stack = listOf("home", "chat:$sessionId")
+        scope.launch { drawerState.close() }
+    }
+
+    BackHandler(enabled = stack.size > 1) { pop() }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -77,21 +108,20 @@ private fun AppRoot(container: AppContainer) {
         drawerContent = {
             AppDrawer(
                 container = container,
-                currentSessionId = currentSessionId,
-                onOpenSession = { id ->
-                    route = "chat:$id"
-                    scope.launch { drawerState.close() }
-                },
+                currentSessionId = route.removePrefix("chat:").takeIf { route.startsWith("chat:") },
+                onOpenSession = { id -> openChat(id) },
                 onNewChat = {
-                    scope.launch {
-                        val session = ChatSession()
-                        container.sessions.upsert(session)
-                        drawerState.close()
-                        route = "chat:${session.id}"
-                    }
+                    // Empty sessions are not persisted any more; the transcript is written
+                    // on the first message. Backing out of a new chat leaves no litter.
+                    val session = ChatSession()
+                    openChat(session.id)
                 },
                 onSettings = {
-                    route = "settings"
+                    if (route != "settings") stack = stack + "settings"
+                    scope.launch { drawerState.close() }
+                },
+                onWorkspace = {
+                    if (route != "workspace") stack = stack + "workspace"
                     scope.launch { drawerState.close() }
                 },
                 onClose = { scope.launch { drawerState.close() } },
@@ -103,19 +133,50 @@ private fun AppRoot(container: AppContainer) {
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            when {
-                route == "settings" -> SettingsScreen(container) { route = "home" }
-                route.startsWith("chat:") -> ChatScreen(
-                    container = container,
-                    sessionId = route.removePrefix("chat:"),
-                    onBack = { route = "home" },
-                )
-                else -> HomeScreen(
-                    container = container,
-                    onOpenSession = { route = "chat:$it" },
-                    onOpenSettings = { route = "settings" },
-                    onOpenDrawer = { scope.launch { drawerState.open() } },
-                )
+            AnimatedContent(
+                targetState = route,
+                transitionSpec = {
+                    fun level(value: String) = if (value == "home") 0 else 1
+                    val forward = targetState != "home" && level(targetState) >= level(initialState)
+                    if (forward) {
+                        (fadeIn(tween(Motion.FAST)) +
+                            slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { it / 10 })
+                            .togetherWith(
+                                fadeOut(tween(Motion.FAST)) +
+                                    slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { -it / 18 }
+                            )
+                    } else {
+                        (fadeIn(tween(Motion.FAST)) +
+                            slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { -it / 10 })
+                            .togetherWith(
+                                fadeOut(tween(Motion.FAST)) +
+                                    slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { it / 18 }
+                            )
+                    }
+                },
+                label = "route",
+            ) { current ->
+                when {
+                    current == "settings" -> SettingsScreen(
+                        container = container,
+                        onBack = { pop() },
+                        onOpenWorkspace = { push("workspace") },
+                    )
+                    current == "workspace" -> WorkspaceScreen(onBack = { pop() })
+                    current.startsWith("chat:") -> ChatScreen(
+                        container = container,
+                        sessionId = current.removePrefix("chat:"),
+                        onBack = { pop() },
+                        onOpenWorkspace = { push("workspace") },
+                    )
+                    else -> HomeScreen(
+                        container = container,
+                        onOpenSession = { openChat(it) },
+                        onOpenSettings = { push("settings") },
+                        onOpenWorkspace = { push("workspace") },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                    )
+                }
             }
         }
     }

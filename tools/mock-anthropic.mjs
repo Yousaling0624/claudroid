@@ -2,6 +2,7 @@
 // Usage: node mock-anthropic.mjs [port] [mode]
 //   mode = text   -> answers with a plain assistant message (2 delta chunks)
 //   mode = tool   -> first request asks for a Bash tool_use, later requests answer with text
+//   mode = long   -> streams hundreds of lines slowly, for testing chat auto-scroll
 import http from 'node:http';
 
 const port = Number(process.argv[2] || 8787);
@@ -12,10 +13,22 @@ const sse = (res, event, data) => {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 };
 
+function longAnswer() {
+  const lines = ['长输出滚动测试开始。下面会持续流式追加内容。', ''];
+  for (let i = 1; i <= 220; i += 1) {
+    lines.push(`第 ${i} 行：Claudroid 正在流式输出，滚动位置应保持在你手指停留的地方。`);
+  }
+  lines.push('', '结束。');
+  return lines.join('\n');
+}
+
 function messageScript(turn) {
   // returns array of content blocks for this assistant message
   if (mode === 'tool' && turn === 1) {
     return [{ type: 'tool_use', id: 'toolu_01', name: 'Bash', input: { command: 'echo hello-from-tool', description: 'say hello' } }];
+  }
+  if (mode === 'long') {
+    return [{ type: 'text', text: longAnswer() }];
   }
   return [{ type: 'text', text: 'Hello from the mock endpoint. Second sentence for streaming.' }];
 }
@@ -23,7 +36,7 @@ function messageScript(turn) {
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
-  req.on('end', () => {
+  req.on('end', async () => {
     console.log(`--> ${req.method} ${req.url} (${body.length} bytes)`);
     if (req.method !== 'POST' || !req.url.startsWith('/v1/messages')) {
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -55,11 +68,15 @@ const server = http.createServer((req, res) => {
     for (const b of blocks) {
       if (b.type === 'text') {
         sse(res, 'content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
-        // split into two deltas so we can observe partial streaming
+        // split into deltas so we can observe partial streaming
         const cut = Math.ceil(b.text.length / 2);
-        for (const chunk of [b.text.slice(0, cut), b.text.slice(cut)]) {
+        const parts = mode === 'long'
+          ? b.text.match(/[\s\S]{1,40}/g)
+          : [b.text.slice(0, cut), b.text.slice(cut)];
+        for (const chunk of parts) {
           sse(res, 'content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: chunk } });
           outTokens += 4;
+          if (mode === 'long') await new Promise((resolve) => setTimeout(resolve, 25));
         }
         sse(res, 'content_block_stop', { type: 'content_block_stop', index });
       } else if (b.type === 'tool_use') {

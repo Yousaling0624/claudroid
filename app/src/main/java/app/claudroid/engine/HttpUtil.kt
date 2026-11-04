@@ -3,6 +3,7 @@ package app.claudroid.engine
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.net.Proxy
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Base64
@@ -14,8 +15,11 @@ object HttpUtil {
 
     fun getText(url: String): String = getText(url, emptyMap())
 
-    fun getText(url: String, headers: Map<String, String>): String {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+    /** [direct] bypasses the device-wide HTTP proxy, required for loopback/LAN endpoints. */
+    fun getText(url: String, headers: Map<String, String>, direct: Boolean = false): String {
+        val target = URL(url)
+        val connection = if (direct) target.openConnection(Proxy.NO_PROXY) else target.openConnection()
+        val conn = (connection as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 60_000
             setRequestProperty("User-Agent", UA)

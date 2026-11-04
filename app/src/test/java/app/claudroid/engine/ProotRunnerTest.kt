@@ -1,6 +1,7 @@
 package app.claudroid.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -20,7 +21,6 @@ class ProotRunnerTest {
         jail = jail,
         workspace = workspace,
         home = home,
-        arch = "aarch64",
         version = "2.1.0",
         hasBash = hasBash,
         args = listOf("-p", "hello", "--model", "deepseek-chat"),
@@ -36,8 +36,11 @@ class ProotRunnerTest {
         assertTrue(argv.containsAll(listOf("-0", "-r", jail.absolutePath, "-w", "/work")))
         assertTrue(argv.contains("--link2symlink"))
         assertTrue(argv.contains("--kill-on-exit"))
-        assertTrue(argv.contains("/lib/ld-musl-aarch64.so.1"))
-        assertTrue(argv.contains("/opt/claude/2.1.0/claude"))
+        // PRoot resolves PT_INTERP through PROOT_LOADER. Asking the musl loader to run
+        // an ET_EXEC binary on top of that fails with "Not a valid dynamic program",
+        // so the CLI must be the exec'd program, not the loader's argument.
+        assertFalse(argv.contains("/lib/ld-musl-aarch64.so.1"))
+        assertEquals("/opt/claude/2.1.0/claude", argv[argv.size - 5])
         assertEquals(listOf("-p", "hello", "--model", "deepseek-chat"), argv.takeLast(4))
         // binds are one argv token each, never re-quoted into a shell string
         assertTrue(argv.contains("${workspace.absolutePath}:/work"))

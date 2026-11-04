@@ -3,11 +3,30 @@ package app.claudroid.ui.chat
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -32,12 +52,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -61,11 +83,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -74,11 +101,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.AppContainer
+import app.claudroid.core.Attachments
+import app.claudroid.core.WebSource
+import app.claudroid.core.WebSources
 import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
-import app.claudroid.core.Attachments
 import app.claudroid.data.Role
 import app.claudroid.ui.components.ClaudeMark
+import app.claudroid.ui.components.Motion
+import app.claudroid.ui.components.RotatingChevron
+import app.claudroid.ui.components.TypingDots
 import app.claudroid.ui.md.MarkdownText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -90,6 +122,7 @@ fun ChatScreen(
     container: AppContainer,
     sessionId: String,
     onBack: () -> Unit,
+    onOpenWorkspace: () -> Unit,
 ) {
     val controller = remember(sessionId) { container.chat(sessionId) }
     LaunchedEffect(sessionId) { controller.load() }
@@ -119,8 +152,8 @@ fun ChatScreen(
     }
     val listState = rememberLazyListState()
 
-    // Streaming text grows inside the last item, so keying only on messages.size leaves the
-    // view stuck at the top of a long answer.
+    // Streaming text grows inside the last item, so keying only on messages.size leaves
+    // the view stuck at the top of a long answer.
     val lastContentLength = messages.lastOrNull()?.blocks?.sumOf { block ->
         when (block) {
             is Block.Text -> block.text.length
@@ -129,17 +162,32 @@ fun ChatScreen(
             is Block.Error -> block.text.length
         }
     } ?: 0
-    val stickToBottom by remember {
-        androidx.compose.runtime.derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            last == null || info.totalItemsCount == 0 || last.index >= info.totalItemsCount - 1
+
+    // Follow-the-tail is a latch: user drags turn it off, settling at the true end turns
+    // it back on. Content growth alone must never re-enable it, or scrolling up during a
+    // reply would be yanked back to the bottom on every token.
+    var followBottom by remember { mutableStateOf(true) }
+    val isDragged by listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(isDragged) {
+        if (isDragged) followBottom = false
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling && !listState.canScrollForward) followBottom = true
         }
     }
     LaunchedEffect(messages.size, lastContentLength) {
-        if (messages.isNotEmpty() && (stickToBottom || running)) {
-            runCatching { listState.scrollToItem(messages.lastIndex) }
+        if (messages.isNotEmpty() && followBottom) {
+            // Wait for the new text to be measured; scrolling against the previous
+            // layout leaves a one-frame gap that reads as jitter.
+            withFrameNanos { }
+            listState.scrollToBottom()
         }
+    }
+
+    fun jumpToBottom() {
+        followBottom = true
+        scope.launch { listState.animateToBottom() }
     }
 
     Scaffold(
@@ -164,13 +212,27 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.titleMedium,
                         )
-                        Text(
-                            text = status.ifBlank { if (running) "正在思考…" else "Claude Code" },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (running) {
+                                TypingDots(dotSize = 3.dp)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            AnimatedContent(
+                                targetState = status.ifBlank { if (running) "正在思考…" else "Claude Code" },
+                                transitionSpec = {
+                                    fadeIn(tween(Motion.FAST)) togetherWith fadeOut(tween(Motion.FAST))
+                                },
+                                label = "status",
+                            ) { line ->
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 },
                 actions = {
@@ -183,6 +245,14 @@ fun ChatScreen(
                         )
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("工作区文件") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenWorkspace()
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text("清空对话上下文") },
                             leadingIcon = { Icon(Icons.Default.Delete, null) },
@@ -210,24 +280,43 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
-            if (messages.isEmpty()) {
-                EmptyChat(
-                    modifier = Modifier.weight(1f),
-                    onPick = { input = it },
-                )
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(22.dp),
-                ) {
-                    items(messages, key = { it.id }) { message ->
-                        MessageRow(message)
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (messages.isEmpty()) {
+                    EmptyChat(
+                        modifier = Modifier.fillMaxSize(),
+                        onPick = { input = it },
+                    )
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(22.dp),
+                    ) {
+                        items(messages, key = { it.id }) { message ->
+                            Box(
+                                Modifier.animateItem(
+                                    fadeInSpec = tween(240),
+                                    fadeOutSpec = tween(140),
+                                    placementSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow,
+                                    ),
+                                )
+                            ) {
+                                MessageRow(message)
+                            }
+                        }
                     }
                 }
+
+                BackToBottomButton(
+                    visible = messages.isNotEmpty() && !followBottom,
+                    onClick = { jumpToBottom() },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 10.dp),
+                )
             }
 
             Composer(
@@ -237,6 +326,7 @@ fun ChatScreen(
                 onSend = {
                     val text = input
                     input = ""
+                    followBottom = true
                     controller.send(text)
                 },
                 onStop = { controller.stop() },
@@ -247,11 +337,75 @@ fun ChatScreen(
 }
 
 @Composable
+private fun BackToBottomButton(
+    visible: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(Motion.FAST)) + scaleIn(tween(Motion.FAST), initialScale = 0.8f),
+        exit = fadeOut(tween(Motion.FAST)) + scaleOut(tween(Motion.FAST), targetScale = 0.8f),
+        modifier = modifier,
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 2.dp,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant,
+            ),
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onClick),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    "回到底部",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Keeps the tail of the last (possibly taller-than-viewport) item against the bottom. */
+private suspend fun LazyListState.scrollToBottom() {
+    val count = layoutInfo.totalItemsCount
+    if (count == 0) return
+    val last = layoutInfo.visibleItemsInfo.lastOrNull()
+    if (last == null || last.index != count - 1) {
+        scrollToItem(count - 1)
+    }
+    val tail = layoutInfo.visibleItemsInfo.lastOrNull() ?: return
+    val overflow = tail.offset + tail.size - layoutInfo.viewportEndOffset
+    if (overflow > 0) scrollBy(overflow.toFloat())
+}
+
+private suspend fun LazyListState.animateToBottom() {
+    val count = layoutInfo.totalItemsCount
+    if (count == 0) return
+    val last = layoutInfo.visibleItemsInfo.lastOrNull()
+    if (last == null || last.index != count - 1) {
+        animateScrollToItem(count - 1)
+    }
+    val tail = layoutInfo.visibleItemsInfo.lastOrNull() ?: return
+    val overflow = tail.offset + tail.size - layoutInfo.viewportEndOffset
+    if (overflow > 0) {
+        animateScrollBy(overflow.toFloat(), tween(Motion.MEDIUM, easing = Motion.EaseOut))
+    }
+}
+
+@Composable
 private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
     val hints = listOf(
-        "看看当前 Magisk 模块列表，哪些被停用了",
-        "把 /sdcard/Download/adblock.zip 刷进去",
-        "某个模块开机不生效，帮我查原因",
+        "看看工作区里都有什么文件，帮我整理成清单",
+        "写一个脚本：把工作区里的 CSV 转成 Markdown 表格",
+        "看看这台手机哪些文件最占空间",
     )
     Column(
         modifier
@@ -314,33 +468,44 @@ private fun MessageRow(message: ChatMessage) {
                 shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
                 modifier = Modifier.widthIn(max = 300.dp),
             ) {
-                Text(
-                    text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n") { it.text },
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
-                )
+                SelectionContainer {
+                    Text(
+                        text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n") { it.text },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                    )
+                }
             }
         }
 
         Role.ASSISTANT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
             ClaudeMark(
                 size = 18.dp,
+                pulse = message.streaming,
                 modifier = Modifier.padding(top = 4.dp),
             )
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
                 if (message.streaming) {
-                    Text(
-                        "正在回复",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 6.dp),
-                    )
+                    Row(
+                        Modifier.padding(bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TypingDots(dotSize = 3.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "正在回复",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 message.blocks.forEach { block ->
                     when (block) {
-                        is Block.Text -> MarkdownText(block.text, Modifier.fillMaxWidth())
+                        is Block.Text -> SelectionContainer {
+                            MarkdownText(block.text, Modifier.fillMaxWidth())
+                        }
                         is Block.Thinking -> ThinkingRow(block.text)
                         is Block.Tool -> ToolCard(block)
                         is Block.Error -> ErrorText(block.text)
@@ -387,11 +552,13 @@ private fun ErrorText(text: String) {
                 .background(MaterialTheme.colorScheme.error, RoundedCornerShape(1.dp))
         )
         Spacer(Modifier.width(10.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-        )
+        SelectionContainer {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
     }
 }
 
@@ -412,14 +579,17 @@ private fun ThinkingRow(text: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(4.dp))
-            Icon(
-                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                null,
+            RotatingChevron(
+                expanded = expanded,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(15.dp),
+                size = 15.dp,
             )
         }
-        if (expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseOut)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
             Row(Modifier.padding(top = 6.dp)) {
                 Box(
                     Modifier
@@ -428,11 +598,13 @@ private fun ThinkingRow(text: String) {
                         .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(1.dp))
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                SelectionContainer {
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -442,13 +614,18 @@ private fun ThinkingRow(text: String) {
 private fun ToolCard(block: Block.Tool) {
     var expanded by rememberSaveable(block.id) { mutableStateOf(false) }
     val detail = toolDetail(block)
+    val sources = remember(block.name, block.output) {
+        val isSearch = block.name.equals("WebSearch", ignoreCase = true) ||
+            block.output?.contains("Web search results", ignoreCase = true) == true
+        if (isSearch) WebSources.parse(block.output.orEmpty()) else emptyList()
+    }
     Column(
         Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
             .clip(RoundedCornerShape(14.dp))
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-            .animateContentSize()
+            .animateContentSize(),
     ) {
         Row(
             Modifier
@@ -505,29 +682,120 @@ private fun ToolCard(block: Block.Tool) {
                 )
             }
             Spacer(Modifier.width(6.dp))
-            Icon(
-                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                null,
-                tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(16.dp),
-            )
+            RotatingChevron(expanded = expanded, size = 16.dp)
         }
-        if (expanded) {
+        if (sources.isNotEmpty()) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 340.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp)
-            ) {
-                MonoLabel("入参")
-                MonoBlockText(block.input)
-                block.output?.let {
-                    MonoLabel("输出")
-                    MonoBlockText(it)
+            SourcesSection(sources)
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseOut)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
+            Column {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 340.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp)
+                ) {
+                    MonoLabel("入参")
+                    MonoBlockText(block.input)
+                    block.output?.let {
+                        MonoLabel("输出")
+                        MonoBlockText(it)
+                    }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Search hits are the useful part of a WebSearch tool call, so they stay visible
+ * outside the raw JSON expansion and open in the browser on tap.
+ */
+@Composable
+private fun SourcesSection(sources: List<WebSource>) {
+    val uriHandler = LocalUriHandler.current
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val visible = if (showAll) sources else sources.take(4)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "来源 · ${sources.size}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+        )
+        visible.forEachIndexed { index, source ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .clickable { runCatching { uriHandler.openUri(source.url) } }
+                    .padding(horizontal = 9.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "${index + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        source.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (source.host.isNotBlank()) {
+                        Text(
+                            source.host,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "↗",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+        if (sources.size > 4) {
+            Text(
+                if (showAll) "收起" else "展开全部 ${sources.size} 个来源",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { showAll = !showAll }
+                    .padding(horizontal = 2.dp, vertical = 3.dp),
+            )
         }
     }
 }
@@ -552,11 +820,13 @@ private fun MonoBlockText(text: String) {
             .horizontalScroll(rememberScrollState())
             .padding(9.dp)
     ) {
-        Text(
-            text.ifBlank { "（空）" },
-            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, lineHeight = 17.sp),
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        SelectionContainer {
+            Text(
+                text.ifBlank { "（空）" },
+                style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, lineHeight = 17.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 
@@ -569,6 +839,28 @@ private fun Composer(
     onStop: () -> Unit,
     onAttach: () -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
+    val borderColor by animateColorAsState(
+        targetValue = if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(Motion.FAST),
+        label = "composer-border",
+    )
+    val sendEnabled = running || value.isNotBlank()
+    val sendColor by animateColorAsState(
+        targetValue = if (sendEnabled) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceContainerHighest,
+        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        label = "send-color",
+    )
+    val sendInteraction = remember { MutableInteractionSource() }
+    val sendPressed by sendInteraction.collectIsPressedAsState()
+    val sendScale by animateFloatAsState(
+        targetValue = if (sendPressed) 0.9f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "send-scale",
+    )
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -580,7 +872,8 @@ private fun Composer(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(22.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(22.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(22.dp))
+                .animateContentSize()
                 .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.Bottom,
         ) {
@@ -591,10 +884,11 @@ private fun Composer(
                     .clickable(onClick = onAttach),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "+",
-                    style = TextStyle(fontSize = 20.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(
+                    Icons.Default.Add,
+                    "添加附件",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
                 )
             }
             Spacer(Modifier.width(2.dp))
@@ -613,19 +907,26 @@ private fun Composer(
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     maxLines = 6,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { focused = it.isFocused },
                 )
             }
             Spacer(Modifier.width(8.dp))
             Box(
                 Modifier
                     .size(34.dp)
+                    .graphicsLayer {
+                        scaleX = sendScale
+                        scaleY = sendScale
+                    }
                     .clip(CircleShape)
-                    .background(
-                        if (running || value.isNotBlank()) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceContainerHighest
-                    )
-                    .clickable(enabled = running || value.isNotBlank()) {
+                    .background(sendColor)
+                    .clickable(
+                        interactionSource = sendInteraction,
+                        indication = null,
+                        enabled = sendEnabled,
+                    ) {
                         if (running) onStop() else onSend()
                     },
                 contentAlignment = Alignment.Center,

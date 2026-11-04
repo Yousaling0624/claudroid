@@ -1,7 +1,13 @@
 package app.claudroid.ui.home
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +26,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -51,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.claudroid.AppContainer
@@ -71,10 +80,14 @@ fun HomeScreen(
     container: AppContainer,
     onOpenSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenWorkspace: () -> Unit,
     onOpenDrawer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val sessions by container.sessions.sessions.collectAsState()
+    val allSessions by container.sessions.sessions.collectAsState()
+    // Old builds persisted a session as soon as the FAB was tapped. Those empty files
+    // are not conversations and should not occupy the history list.
+    val sessions = remember(allSessions) { allSessions.filter { it.hasContent } }
     val engineState by container.engine.state.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
 
@@ -88,6 +101,13 @@ fun HomeScreen(
             }
         }
     }
+    val fabInteraction = remember { MutableInteractionSource() }
+    val fabPressed by fabInteraction.collectIsPressedAsState()
+    val fabScale by animateFloatAsState(
+        targetValue = if (fabPressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "fab",
+    )
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -111,6 +131,14 @@ fun HomeScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenWorkspace) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            "工作区文件",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(
                             Icons.Default.Settings,
@@ -127,16 +155,20 @@ fun HomeScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    val session = ChatSession()
-                    scope.launch {
-                        container.sessions.upsert(session)
-                        onOpenSession(session.id)
-                    }
+                    // Written on the first message, not here: an abandoned new chat
+                    // should not leave an empty row in history.
+                    onOpenSession(ChatSession().id)
                 },
                 containerColor = MaterialTheme.colorScheme.onBackground,
                 contentColor = MaterialTheme.colorScheme.background,
                 shape = CircleShape,
-                modifier = Modifier.size(52.dp),
+                interactionSource = fabInteraction,
+                modifier = Modifier
+                    .size(52.dp)
+                    .graphicsLayer {
+                        scaleX = fabScale
+                        scaleY = fabScale
+                    },
             ) {
                 Icon(Icons.Default.Add, "新对话", modifier = Modifier.size(22.dp))
             }
@@ -162,7 +194,7 @@ fun HomeScreen(
                 )
                 Spacer(Modifier.height(18.dp))
 
-                SearchRow(query) { query = it }
+                SearchRow(query, { query = it }, onClear = { query = "" })
                 Spacer(Modifier.height(18.dp))
             }
 
@@ -196,17 +228,28 @@ fun HomeScreen(
                     contentPadding = PaddingValues(start = 22.dp, end = 22.dp, bottom = 100.dp),
                 ) {
                     items(filtered, key = { it.id }) { session ->
-                        SessionRow(
-                            session = session,
-                            onClick = { onOpenSession(session.id) },
-                            onDelete = {
-                                scope.launch {
-                                    container.closeChat(session.id)
-                                    container.sessions.delete(session.id)
-                                }
-                            },
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Column(
+                            Modifier.animateItem(
+                                fadeInSpec = tween(240),
+                                fadeOutSpec = tween(140),
+                                placementSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                ),
+                            )
+                        ) {
+                            SessionRow(
+                                session = session,
+                                onClick = { onOpenSession(session.id) },
+                                onDelete = {
+                                    scope.launch {
+                                        container.closeChat(session.id)
+                                        container.sessions.delete(session.id)
+                                    }
+                                },
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
                     }
                 }
             }
@@ -215,7 +258,7 @@ fun HomeScreen(
 }
 
 @Composable
-private fun SearchRow(value: String, onValueChange: (String) -> Unit) {
+private fun SearchRow(value: String, onValueChange: (String) -> Unit, onClear: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -246,6 +289,18 @@ private fun SearchRow(value: String, onValueChange: (String) -> Unit) {
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (value.isNotEmpty()) {
+            Icon(
+                Icons.Default.Close,
+                "清空搜索",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onClear)
+                    .padding(5.dp),
             )
         }
     }

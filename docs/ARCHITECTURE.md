@@ -74,7 +74,7 @@ env["PROOT_LOADER"] = loader.absolutePath
 env["PROOT_TMP_DIR"] = cacheDir/proot-tmp
 env["PROOT_NO_SECCOMP"] = "1"     // 部分 Android 10+ 内核过滤 ptrace/seccomp
 argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--kill-on-exit",
-        "/lib/ld-musl-<arch>.so.1", "/opt/claude/<ver>/claude", ...]
+        "/opt/claude/<ver>/claude", ...]
 ```
 
 没有 root 时，PRoot 把工作区、HOME、`/dev`、`/proc`、`/sys`、`/system`、`/apex`、
@@ -146,7 +146,11 @@ exec /data/adb/magisk/busybox chroot "$R" \
 `EngineManager.probeRoot()` 决定 `rootGranted` / `chrootAvailable`，`ClaudeEngine` 据此选路径：
 
 1. **PRoot**（无 root，默认）
-   `exec libproot.so -0 -r <filesDir jail> -w /work … ld-musl claude`
+   `exec libproot.so -0 -r <filesDir jail> -w /work … /opt/claude/<ver>/claude`
+
+   直接 exec CLI，不要让 musl loader 作为程序参数：PRoot 已经用 `PROOT_LOADER`
+   解析 `PT_INTERP`；再手动启动 loader 会与它抢 `0x200000` 固定映射，报
+   `Not a valid dynamic program`（x86_64 的 ET_EXEC CLI 必现）。
 2. **root + chroot**（有 root，能力最全）
    `su -c "sh turn.sh"` → `busybox chroot` → `ld-musl → claude`
 3. **root，无 chroot**（设备上找不到 `chroot`）

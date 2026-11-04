@@ -56,7 +56,6 @@ class ProotRunner(private val ctx: Context) {
             jail = File(installation.jailPath),
             workspace = workspace,
             home = home,
-            arch = installation.arch,
             version = installation.version,
             hasBash = installation.hasBash,
             args = args,
@@ -80,7 +79,6 @@ class ProotRunner(private val ctx: Context) {
             jail: File,
             workspace: File,
             home: File,
-            arch: String,
             version: String,
             hasBash: Boolean,
             args: List<String>,
@@ -101,7 +99,11 @@ class ProotRunner(private val ctx: Context) {
             }
             argv += "--link2symlink"
             argv += "--kill-on-exit"
-            argv += "/lib/ld-musl-$arch.so.1"
+            // Exec the CLI directly; do not prepend the musl loader. PRoot already
+            // injects PROOT_LOADER to resolve the binary's PT_INTERP. Invoking the
+            // loader as a program fails for ET_EXEC binaries ("Not a valid dynamic
+            // program") because the loader must map the program at its fixed address
+            // (0x200000), which PRoot's own loader mapping already occupies.
             argv += "/opt/claude/$version/claude"
             argv += args
 

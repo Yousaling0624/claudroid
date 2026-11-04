@@ -7,9 +7,89 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-// CI passes these in; local builds keep the checked-in baseline.
+// CI passes these in. Local builds derive the version from the latest release tag so
+// "关于" never shows a checked-in number that does not exist anywhere on GitHub.
+fun gitOutput(vararg args: String): String? = runCatching {
+    val process = ProcessBuilder(listOf("git", *args))
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+    if (process.waitFor() == 0) output.ifBlank { null } else null
+}.getOrNull()
+
+fun gitDir(): File? {
+    val dotGit = File(rootProject.projectDir, ".git")
+    if (dotGit.isDirectory) return dotGit
+    if (!dotGit.isFile) return null
+    // Worktrees/submodules point at the real git dir from a `.git` file.
+    val line = runCatching {
+        dotGit.readLines().firstOrNull { it.startsWith("gitdir:") }
+    }.getOrNull() ?: return null
+    val path = line.removePrefix("gitdir:").trim()
+    val dir = File(path)
+    return if (dir.isAbsolute) dir else File(rootProject.projectDir, path)
+}
+
+fun packedRefs(gitDir: File): Map<String, String> = runCatching {
+    val file = File(gitDir, "packed-refs")
+    if (!file.isFile) return emptyMap()
+    val refs = mutableMapOf<String, String>()
+    var previous: String? = null
+    file.readLines().forEach { line ->
+        when {
+            line.isBlank() || line.startsWith("#") -> Unit
+            line.startsWith("^") -> {
+                previous?.let { refs[it] = line.substring(1).trim() }
+                previous = null
+            }
+            else -> {
+                val parts = line.split(' ', limit = 2)
+                if (parts.size == 2) {
+                    refs[parts[1]] = parts[0]
+                    previous = parts[1]
+                } else {
+                    previous = null
+                }
+            }
+        }
+    }
+    refs
+}.getOrDefault(emptyMap())
+
+/**
+ * This project is sometimes built by Windows Gradle against a WSL checkout, where the
+ * git CLI exists only on the Linux side. Reading refs directly still names the newest
+ * release; without the history we cannot count commits, so call it "-dev".
+ */
+fun refFallbackVersion(): String? {
+    val dir = gitDir() ?: return null
+    val tags = mutableSetOf<String>()
+    File(dir, "refs/tags").walkTopDown()
+        .filter { it.isFile }
+        .forEach { file ->
+            tags += file.relativeTo(File(dir, "refs/tags")).invariantSeparatorsPath
+        }
+    packedRefs(dir).keys.mapTo(tags) { it.removePrefix("refs/tags/") }
+    return tags
+        .filter { it.matches(Regex("v0\\.1\\.\\d+")) }
+        .maxByOrNull { it.substringAfterLast('.').toIntOrNull() ?: 0 }
+        ?.let { "${it.removePrefix("v")}-dev" }
+}
+
+fun localVersionName(): String {
+    // Tags are not fetched in every checkout; "-dev" keeps the About screen honest.
+    val tag = gitOutput("describe", "--tags", "--abbrev=0", "--match", "v0.1.*")
+        ?.removePrefix("v")
+        ?: return refFallbackVersion() ?: "0.1.0-dev"
+    val ahead = gitOutput("rev-list", "--count", "$tag..HEAD")?.toIntOrNull() ?: 0
+    val base = if (ahead > 0) "$tag-dev.$ahead" else tag
+    // An uncommitted tree is not any published release; "-dirty" says so in 关于.
+    return if (gitOutput("status", "--porcelain") != null) "$base-dirty" else base
+}
+
 val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 5
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.1.0"
+val appVersionName = (project.findProperty("versionName") as String?) ?: localVersionName()
 
 // A release keystore is optional. Without one we sign the release APK with the debug
 // key so `assembleRelease` still produces something installable (sideload project,
@@ -125,6 +205,10 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Async image decoding with a memory/disk cache: thumbnails and the zoomable
+    // preview would otherwise each decode a full bitmap on the main-thread budget.
+    implementation("io.coil-kt:coil-compose:2.7.0")
 
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

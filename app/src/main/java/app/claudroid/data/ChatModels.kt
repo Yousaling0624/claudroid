@@ -56,8 +56,21 @@ data class ChatSession(
     val model: String? = null,
     val messages: List<ChatMessage> = emptyList(),
 ) {
+    /** True once anything worth showing was recorded; empty aborted sessions are litter. */
+    val hasContent: Boolean
+        get() = messages.any { it.blocks.isNotEmpty() }
+
     val preview: String
         get() = messages.asReversed().firstOrNull { it.role == Role.ASSISTANT || it.role == Role.USER }
-            ?.let { m -> m.blocks.filterIsInstance<Block.Text>().joinToString(" ") { it.text } }
+            ?.let { m ->
+                m.blocks.mapNotNull { block ->
+                    when (block) {
+                        is Block.Text -> block.text
+                        is Block.Thinking -> block.text
+                        is Block.Error -> block.text
+                        is Block.Tool -> listOfNotNull(block.name, block.output).joinToString(" ")
+                    }
+                }.joinToString(" ")
+            }
             ?.takeIf { it.isNotBlank() } ?: "还没有消息"
 }

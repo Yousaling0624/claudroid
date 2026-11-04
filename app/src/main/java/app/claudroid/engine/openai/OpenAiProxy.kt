@@ -18,6 +18,7 @@ import java.io.OutputStreamWriter
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.net.HttpURLConnection
+import java.net.Proxy
 import java.net.URL
 
 /**
@@ -214,7 +215,16 @@ class OpenAiProxy(
 
     private fun openUpstream(payload: String, stream: Boolean): HttpURLConnection {
         val url = chatCompletionsUrl(settings)
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        // A device-wide HTTP proxy (corporate Wi-Fi, emulator setups) otherwise receives
+        // requests for 127.0.0.1 too and resets them, so a local Ollama/LM Studio never
+        // works. Local endpoints must ignore the system proxy.
+        val target = URL(url)
+        val connection = if (settings.isLocalEndpoint()) {
+            target.openConnection(Proxy.NO_PROXY)
+        } else {
+            target.openConnection()
+        }
+        val conn = (connection as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 30_000
             readTimeout = if (stream) 600_000 else 180_000

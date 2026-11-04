@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -54,6 +55,7 @@ fun AppDrawer(
     onOpenSession: (String) -> Unit,
     onNewChat: () -> Unit,
     onSettings: () -> Unit,
+    onWorkspace: () -> Unit,
     onClose: () -> Unit,
 ) {
     val sessions by container.sessions.sessions.collectAsState()
@@ -118,13 +120,42 @@ fun AppDrawer(
             )
 
             LazyColumn(Modifier.weight(1f)) {
-                items(sessions, key = { it.id }) { session ->
+                items(sessions.filter { it.hasContent }, key = { it.id }) { session ->
                     DrawerRow(
                         session = session,
                         selected = session.id == currentSessionId,
                         onClick = { onOpenSession(session.id) },
                     )
                 }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onWorkspace)
+                    .padding(horizontal = 20.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.List,
+                    null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "工作区文件",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "/work",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
