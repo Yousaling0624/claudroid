@@ -1,0 +1,30 @@
+name: claudroid_ui
+description: Claudroid's Flutter frontend, added to the Android app as a module.
+publish_to: none
+version: 0.0.1
+
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+  flutter: '>=3.47.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The visual language (liquid glass, glyphs, list sections) comes from prism_ui,
+  # the package FlClash is built on. Pinned: the API surface is still 0.x.
+  prism_ui: 0.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # prism_ui draws its own glyphs; the Material icon font would only add weight.
+  uses-material-design: false
+  # Marks this project as a module for embedding in the Android host. These ids
+  # are fixed at generation time; changing them desyncs the generated .android/.
+  module:
+    androidX: true
+    androidPackage: app.claudroid.claudroid_ui
+    iosBundleIdentifier: app.claudroid.claudroidUi

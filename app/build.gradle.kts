@@ -97,6 +97,11 @@ val appVersionName = (project.findProperty("versionName") as String?) ?: localVe
 val envKeystore = System.getenv("CLAUDROID_KEYSTORE") ?: (project.findProperty("keystorePath") as String?)
 val hasEnvKeystore = envKeystore != null && File(envKeystore).isFile
 
+// Flutter is an opt-in add-to-app module: the Compose UI stays the shipped frontend
+// until the Dart one reaches feature parity. settings.gradle.kts only includes
+// :flutter under the same flag, so this block is inert for a normal build.
+val flutterUi = (project.findProperty("flutterUi") as String?) == "true"
+
 android {
     namespace = "app.claudroid"
     // AGP 9 splits the platform minor version out of compileSdk; the installed
@@ -171,6 +176,12 @@ android {
         // here because the targetSdk warning is deliberate. Run `lintDebug` explicitly.
         checkReleaseBuilds = false
     }
+
+    if (flutterUi) {
+        // Platform-channel bridge. Kept out of src/main/java so the default build
+        // never needs the Flutter embedding on the classpath.
+        sourceSets.getByName("main").java.srcDir("src/main/flutter/java")
+    }
 }
 
 // AGP 9's built-in Kotlin exposes the standard `kotlin` extension; the old
@@ -202,6 +213,10 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
+    if (flutterUi) {
+        implementation(project(":flutter"))
+    }
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
