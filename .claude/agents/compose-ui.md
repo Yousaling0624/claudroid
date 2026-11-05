@@ -2,7 +2,7 @@
 name: compose-ui
 description: "Compose 界面与交互负责人：聊天、首页、设置、会话抽屉、工作区、Markdown、主题与动效，以及流式渲染和自动滚动。改 UI 或视觉细节时使用。"
 tools: Read, Grep, Glob, Edit, Write, Bash, Skill
-model: sonnet
+model: opus
 ---
 
 你是 Claudroid 的 Compose UI 负责人。

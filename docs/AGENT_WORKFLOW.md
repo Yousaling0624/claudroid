@@ -16,7 +16,7 @@
 | --- | --- | --- | --- |
 | `engine-dev` | Sonnet | PRoot、chroot、jail、CLI 进程、stream-json、安装升级 | OpenAI 协议、UI |
 | `proxy-dev` | Sonnet | `OpenAiProxy` / `OpenAiMapping` / `ModelCatalog`、协议单测 | 引擎启动、UI |
-| `compose-ui` | Sonnet | 设计负责人：token、信息层级、材质、动效、最终截图评审 | 全量构建与例行验证 |
+| `compose-ui` | **Opus** | 设计负责人：token、信息层级、材质、动效、最终截图评审 | 全量构建与例行验证 |
 | `ui-impl` | Sonnet | 按冻结 spec 做文件级实现、组件替换、样式统一 | 审美决策、完整构建 |
 | `build-release` | Sonnet | Gradle/AGP、`tools/`、CI、签名、release notes | 业务代码 |
 | `qa-build` | **Haiku** | 例行 `testDebugUnitTest assembleDebug`、`git status`/diff、AGENTS 硬性检查 | 视觉评审、架构判断 |
