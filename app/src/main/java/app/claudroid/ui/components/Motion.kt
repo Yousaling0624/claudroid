@@ -18,11 +18,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.appColors
@@ -44,6 +44,16 @@ object Motion {
 
     /** Settles quickly and without visible rebound; paper should not feel rubbery. */
     val Press = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessHigh)
+
+    /**
+     * Release curve for [pressFeedback]: lower stiffness than [Press] and just-under-
+     * critical damping give a soft, slightly springy "Q" settle instead of a hard snap,
+     * without the wobble that would read as playful on paper.
+     */
+    val Release = spring<Float>(dampingRatio = 0.72f, stiffness = 340f)
+
+    /** Dp variant of [Release] for size/layout animations (switch thumb, code fold). */
+    val ReleaseDp = spring<Dp>(dampingRatio = 0.72f, stiffness = 340f)
 }
 
 /**

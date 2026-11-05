@@ -1,6 +1,7 @@
 package app.claudroid.ui.theme
 
 import android.app.Activity
+import android.provider.Settings
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -12,13 +13,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -237,13 +242,36 @@ private val AppTypography = Typography(
     labelSmall = AppType.captionMedium,
 )
 
-/** 10 / 12 / 16 / 18 / 24: soft paper corners, never full-screen pills. */
+/**
+ * One rounded-corner scale for the whole app. Cards, fields, chips, sheets and dialogs
+ * all read from here so a later refinement is a one-line change instead of a hunt for
+ * scattered `RoundedCornerShape(...)` literals. The steps are intentionally close:
+ * paper should feel softly pressed, not pill-shaped everywhere.
+ */
+object Radii {
+    val xs: Dp = 12.dp
+    val sm: Dp = 16.dp
+    val md: Dp = 20.dp
+    val lg: Dp = 24.dp
+    val xl: Dp = 28.dp
+    val xxl: Dp = 32.dp
+
+    fun shape(size: Dp) = RoundedCornerShape(size)
+    val xsShape get() = shape(xs)
+    val smShape get() = shape(sm)
+    val mdShape get() = shape(md)
+    val lgShape get() = shape(lg)
+    val xlShape get() = shape(xl)
+    val xxlShape get() = shape(xxl)
+}
+
+/** Mapped onto the M3 shape scale so stock components inherit the same softness. */
 private val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(10.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(18.dp),
-    extraLarge = RoundedCornerShape(24.dp),
+    extraSmall = Radii.xsShape,
+    small = Radii.smShape,
+    medium = Radii.mdShape,
+    large = Radii.lgShape,
+    extraLarge = Radii.xxlShape,
 )
 
 /** Page rhythm shared by every screen. */
@@ -251,6 +279,26 @@ object Spacing {
     val page = 20.dp
     val gap = 12.dp
     val section = 20.dp
+}
+
+/**
+ * Android's "remove animations" accessibility setting. Motion helpers read this so a
+ * user who asks for a calmer UI gets instant state changes instead of springs/fades.
+ */
+val LocalReduceMotion = compositionLocalOf { false }
+
+@Composable
+fun rememberReduceMotion(): Boolean {
+    val context = LocalContext.current
+    return remember {
+        runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
 }
 
 @Composable
@@ -272,7 +320,10 @@ fun ClaudroidTheme(themeMode: Int = 0, content: @Composable () -> Unit) {
             }
         }
     }
-    androidx.compose.runtime.CompositionLocalProvider(LocalAppColors provides appColors) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalAppColors provides appColors,
+        LocalReduceMotion provides rememberReduceMotion(),
+    ) {
         MaterialTheme(colorScheme = colors, typography = AppTypography, shapes = AppShapes, content = content)
     }
 }

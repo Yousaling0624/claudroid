@@ -47,6 +47,7 @@ import app.claudroid.data.AppSettings
 import app.claudroid.data.ModelTier
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 
 private @Composable
@@ -86,10 +87,12 @@ fun ModelChoiceRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    val shape = Radii.smShape
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .pressFeedback(shape = shape)
+            .clip(shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -132,6 +135,7 @@ fun ModelChoiceRow(
 fun ModelPickerSheet(
     settings: AppSettings,
     onSelectTier: (ModelTier?) -> Unit,
+    onSelectAuto: () -> Unit,
     onManageTiers: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -152,16 +156,26 @@ fun ModelPickerSheet(
         ) {
             SheetTitle(
                 "选择模型",
-                "档位交给 Claude Code 路由；具体模型可在设置里按档位映射。",
+                "二选一：选具体档位按映射传 --model；选「默认 / 路由组」则把「接口与模型」里填的" +
+                    "模型 ID 原样传给 --model，路由组（如 auto/dfmodel[1m]）也填在那里。",
             )
             Spacer(Modifier.height(8.dp))
             val active = settings.resolvedActiveTier
             ModelChoiceRow(
-                title = "默认模型",
+                title = "默认 / 路由组",
                 subtitle = settings.model.ifBlank { "未设置" },
-                selected = active == null,
+                selected = active == null && !settings.usesAutoModel,
             ) {
                 onSelectTier(null)
+                onDismiss()
+            }
+            ClaudeDivider(Modifier.padding(horizontal = 12.dp))
+            ModelChoiceRow(
+                title = "CLI 默认（不指定模型）",
+                subtitle = "不传 --model，由 Claude Code 用自身默认模型",
+                selected = settings.usesAutoModel,
+            ) {
+                onSelectAuto()
                 onDismiss()
             }
             ClaudeDivider(Modifier.padding(horizontal = 12.dp))
@@ -229,19 +243,21 @@ fun ModelListSheet(
 
             if (emptyOption != null) {
                 val selected = current.isBlank()
+                val shape = Radii.smShape
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .pressFeedback(shape = shape)
+                        .clip(shape)
                         .background(
-                            if (selected) MaterialTheme.appColors.orangeSoft
+                            if (selected) MaterialTheme.appColors.surface1
                             else MaterialTheme.appColors.paper
                         )
                         .border(
                             1.dp,
-                            if (selected) MaterialTheme.appColors.orange
+                            if (selected) MaterialTheme.appColors.ink
                             else MaterialTheme.appColors.sand,
-                            RoundedCornerShape(12.dp),
+                            shape,
                         )
                         .clickable {
                             onSelect("")
@@ -289,7 +305,8 @@ fun ModelListSheet(
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
+                                .pressFeedback(shape = Radii.xsShape)
+                                .clip(Radii.xsShape)
                                 .clickable {
                                     onSelect(model)
                                     onDismiss()
@@ -348,9 +365,9 @@ private fun SheetSearch(value: String, onValueChange: (String) -> Unit) {
         Modifier
             .fillMaxWidth()
             .height(42.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radii.smShape)
             .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.appColors.sand, Radii.smShape)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

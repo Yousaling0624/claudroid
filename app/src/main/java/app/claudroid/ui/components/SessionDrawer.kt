@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,6 +56,7 @@ import app.claudroid.AppContainer
 import app.claudroid.data.ChatSession
 import app.claudroid.engine.EngineManager
 import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
 
@@ -119,14 +119,16 @@ fun AppDrawer(
                 }
             }
 
+            val newChatShape = Radii.smShape
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
                     .height(46.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .pressFeedback(shape = newChatShape)
+                    .clip(newChatShape)
                     .background(MaterialTheme.appColors.paper)
-                    .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.appColors.sand, newChatShape)
                     .clickable {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onNewChat()
@@ -231,9 +233,9 @@ private fun DrawerSearch(value: String, onValueChange: (String) -> Unit) {
             .fillMaxWidth()
             .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 8.dp)
             .height(40.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radii.smShape)
             .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), Radii.smShape)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -297,13 +299,15 @@ private fun DrawerSessionRow(
         animationSpec = tween(Motion.FAST, easing = Motion.EaseChrome),
         label = "drawer-row",
     )
+    val shape = Radii.smShape
     Box {
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
                 .height(50.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .pressFeedback(shape = shape)
+                .clip(shape)
                 .background(background)
                 .combinedClickable(
                     interactionSource = interaction,
@@ -323,7 +327,7 @@ private fun DrawerSessionRow(
                         Modifier
                             .width(2.dp)
                             .height(20.dp)
-                            .background(MaterialTheme.appColors.orange, RoundedCornerShape(1.dp))
+                            .background(MaterialTheme.appColors.orange, Radii.xsShape)
                     )
                 }
             }
@@ -384,6 +388,8 @@ private fun DrawerActionRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .pressFeedback(shape = Radii.smShape)
+            .clip(Radii.smShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -418,12 +424,14 @@ private fun EngineCard(state: EngineManager.State, onClick: () -> Unit, modifier
         state.phase == EngineManager.Phase.Failed -> MaterialTheme.appColors.error
         else -> MaterialTheme.appColors.stone
     }
+    val shape = Radii.smShape
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .pressFeedback(shape = shape)
+            .clip(shape)
             .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

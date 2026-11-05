@@ -210,6 +210,14 @@ dependencies {
     // preview would otherwise each decode a full bitmap on the main-thread budget.
     implementation("io.coil-kt:coil-compose:2.7.0")
 
+    // Frosted top bars / sheets: a real blur pass instead of a flat translucent fill.
+    // Pinned to 1.0.1: later lines move to Kotlin 2.1 / Compose 1.12 and cannot compile
+    // against this project's Kotlin 2.0.21 + Compose 1.7.0.
+    implementation("dev.chrisbanes.haze:haze:1.0.1")
+
+    // Organic corner morphs for the loading/brand moment; 1.1.0 is built on Kotlin 2.0.21.
+    implementation("androidx.graphics:graphics-shapes:1.1.0")
+
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")

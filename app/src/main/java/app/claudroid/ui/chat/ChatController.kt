@@ -8,6 +8,7 @@ import app.claudroid.data.ChatSession
 import app.claudroid.data.ApiFlavor
 import app.claudroid.data.Role
 import app.claudroid.engine.EngineEvent
+import app.claudroid.engine.TitleGenerator
 import app.claudroid.engine.TurnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +38,18 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private val _title = MutableStateFlow("新对话")
     val title: StateFlow<String> = _title.asStateFlow()
 
+    /** True while the title is still the auto-derived first-message placeholder. */
+    @Volatile private var titleIsTemporary = true
+
+    /** Guards title jobs so a late network result cannot overwrite a rename/switch. */
+    @Volatile private var titleGeneration = 0
+
+    private val _titleBusy = MutableStateFlow(false)
+    val titleBusy: StateFlow<Boolean> = _titleBusy.asStateFlow()
+
+    private val _titleNotice = MutableStateFlow<String?>(null)
+    val titleNotice: StateFlow<String?> = _titleNotice.asStateFlow()
+
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
@@ -63,6 +76,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         _session.value = session
         _title.value = session.title
         claudeSessionId = session.claudeSessionId
+        // A title that still matches the first-message placeholder has never been
+        // summarized (or was never renamed); only those are eligible for auto-summary.
+        titleIsTemporary = isPlaceholderTitle(session.title, session.messages)
 
         // A process killed mid-turn leaves streaming=true and tool cards spinning forever.
         // Repair them the first time the transcript is opened after a crash.
@@ -86,6 +102,113 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     /** Fire-and-forget error surface for callers outside the send coroutine. */
     fun notifyError(message: String) {
         scope.launch { appendError(message) }
+    }
+
+    /**
+     * A title is "placeholder" when it is still the default label or the truncated
+     * first user message. Both are what [sendLocked] writes before a summary exists.
+     */
+    private fun isPlaceholderTitle(title: String, messages: List<ChatMessage>): Boolean {
+        if (title == "新对话") return true
+        val firstUser = messages.firstOrNull { it.role == Role.USER }
+            ?.blocks?.filterIsInstance<Block.Text>()
+            ?.joinToString("\n") { it.text }
+            ?.trim()
+            ?: return false
+        return title == firstUser.replace('\n', ' ').take(28)
+    }
+
+    /**
+     * Best-effort background title summary after the first completed turn. Runs off the
+     * turn coroutine so it never blocks streaming; failures are silent for the auto path.
+     */
+    private fun maybeSummarizeTitle() {
+        if (!titleIsTemporary) return
+        val messages = _messages.value
+        // Only the first exchange: once a second user turn exists, the placeholder has
+        // been around long enough that the user likely accepts it.
+        if (messages.count { it.role == Role.USER } != 1) return
+        val firstUser = messages.firstOrNull { it.role == Role.USER }
+            ?.blocks?.filterIsInstance<Block.Text>()
+            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+        val assistant = messages.lastOrNull { it.role == Role.ASSISTANT }
+            ?.blocks?.filterIsInstance<Block.Text>()
+            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+        if (firstUser.isEmpty() || assistant.isEmpty()) return
+        val expectedTitle = _title.value
+        val generationAtStart = titleGeneration
+        scope.launch {
+            val result = runCatching {
+                TitleGenerator.generate(container.settings.flow.first(), firstUser, assistant)
+            }.getOrNull()
+            // Do not clobber a manual rename, a session switch, or a cleared transcript.
+            if (generationAtStart != titleGeneration) return@launch
+            if (_title.value != expectedTitle || !titleIsTemporary) return@launch
+            if (dismissed) return@launch
+            // The drawer may have renamed the persisted session while the request ran.
+            if (container.sessions.find(sessionId)?.title?.let { it != expectedTitle } == true) return@launch
+            if (!result.isNullOrBlank() && result != expectedTitle) {
+                _title.value = result
+                titleIsTemporary = false
+                runCatching { persist() }
+            }
+        }
+    }
+
+    /**
+     * Manual "重新生成标题" from the chat menu. Unlike the auto path it reports short
+     * progress/failure feedback and is disabled while a turn is running.
+     */
+    fun regenerateTitle() {
+        if (_running.value || _titleBusy.value) return
+        val messages = _messages.value
+        val firstUser = messages.firstOrNull { it.role == Role.USER }
+            ?.blocks?.filterIsInstance<Block.Text>()
+            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+        val assistant = messages.lastOrNull { it.role == Role.ASSISTANT }
+            ?.blocks?.filterIsInstance<Block.Text>()
+            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+        if (firstUser.isEmpty() || assistant.isEmpty()) {
+            _titleNotice.value = "还没有可总结的对话内容"
+            return
+        }
+        val expectedTitle = _title.value
+        val generationAtStart = ++titleGeneration
+        _titleBusy.value = true
+        _titleNotice.value = "正在生成标题…"
+        scope.launch {
+            val result = runCatching {
+                TitleGenerator.generate(container.settings.flow.first(), firstUser, assistant)
+            }.getOrNull()
+            if (generationAtStart != titleGeneration || dismissed) {
+                _titleBusy.value = false
+                return@launch
+            }
+            if (_title.value != expectedTitle) {
+                // Renamed mid-flight; keep the user's choice.
+                _titleNotice.value = "标题已手动修改，保留当前名称"
+            } else if (!result.isNullOrBlank()) {
+                _title.value = result
+                titleIsTemporary = false
+                _titleNotice.value = "标题已更新"
+                runCatching { persist() }
+            } else {
+                _titleNotice.value = "标题生成失败，已保留原名称。可稍后重试或检查接口配置。"
+            }
+            _titleBusy.value = false
+        }
+    }
+
+    /** Clears a transient title notice once the UI has shown it. */
+    fun consumeTitleNotice() { _titleNotice.value = null }
+
+    /** Called by a rename action so a pending auto-summary can never overwrite it. */
+    fun markTitleUserEdited(newTitle: String) {
+        if (newTitle == _title.value) return
+        titleGeneration++
+        titleIsTemporary = false
+        _title.value = newTitle
+        scope.launch { persist() }
     }
 
     fun stop() {
@@ -156,6 +279,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         if (session.title == "新对话") {
             session = session.copy(title = text.replace('\n', ' ').take(28))
             _title.value = session.title
+            titleIsTemporary = true
         }
         session = session.copy(model = settings.model)
         _session.value = session
@@ -196,7 +320,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                             mutateAssistant(assistant.id) { appendThinking(it, ev.text) }
                         }
                         is EngineEvent.ToolUse -> {
-                            _status.value = "执行工具 ${ev.name}…"
+                            // Human verb only: commands, paths and JSON stay out of the
+                            // live status line and are revealed in the collapsed cards.
+                            _status.value = ToolPresentation.verb(ev.name) + "…"
                             mutateAssistant(assistant.id) { addTool(it, ev) }
                         }
                         is EngineEvent.ToolResult ->
@@ -321,6 +447,10 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         mutateAssistant(assistant.id) {
             it.copy(streaming = false, costUsd = cost, durationMs = duration)
         }
+
+        // Summarize only after a real answer exists; a failed/empty turn keeps the
+        // first-message placeholder. This is deliberately fire-and-forget.
+        maybeSummarizeTitle()
     }
 
     private suspend fun appendError(message: String) {
@@ -340,6 +470,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         // The transcript is gone; keeping the old title would leave a conversation
         // named after a message it no longer contains.
         _title.value = "新对话"
+        titleIsTemporary = true
+        titleGeneration += 1
+        _titleNotice.value = null
         scope.launch { persist() }
     }
 
@@ -378,8 +511,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     private fun addTool(msg: ChatMessage, ev: EngineEvent.ToolUse): ChatMessage {
         if (msg.blocks.any { it is Block.Tool && it.id == ev.id }) return msg
-        val label = toolHeadline(ev.name, ev.inputJson)
-        _status.value = "执行 $label…"
+        _status.value = ToolPresentation.verb(ev.name) + "…"
         return msg.copy(blocks = msg.blocks + Block.Tool(id = ev.id, name = ev.name, input = ev.inputJson))
     }
 

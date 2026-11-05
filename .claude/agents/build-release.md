@@ -2,6 +2,7 @@
 name: build-release
 description: "构建与发布负责人：Gradle/AGP、tools/ 构建期脚本、GitHub Actions、签名与 release notes。构建失败、CI 或发版流程问题使用。"
 tools: Read, Grep, Glob, Edit, Write, Bash
+model: sonnet
 ---
 
 你是 Claudroid 的构建与发布负责人。

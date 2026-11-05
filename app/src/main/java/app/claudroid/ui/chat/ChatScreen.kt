@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,6 +45,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -52,7 +55,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
@@ -104,14 +106,20 @@ import app.claudroid.data.Role
 import app.claudroid.ui.components.ClaudeComposer
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.ModelPickerSheet
+import app.claudroid.ui.components.OrganicHalo
 import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.RotatingChevron
 import app.claudroid.ui.components.TypingDots
 import app.claudroid.ui.components.chatModelLabel
 import app.claudroid.ui.components.composerModelLabel
+import app.claudroid.ui.components.frosted
+import app.claudroid.ui.components.hazeSource
+import app.claudroid.ui.components.pressFeedback
+import app.claudroid.ui.components.rememberFrostedState
 import app.claudroid.ui.md.MarkdownText
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -143,6 +151,8 @@ fun ChatScreen(
     val running by controller.running.collectAsState()
     val status by controller.status.collectAsState()
     val title by controller.title.collectAsState()
+    val titleBusy by controller.titleBusy.collectAsState()
+    val titleNotice by controller.titleNotice.collectAsState()
     val settings by container.settings.flow.collectAsState(initial = AppSettings())
 
     var input by rememberSaveable(sessionId) { mutableStateOf("") }
@@ -151,6 +161,15 @@ fun ChatScreen(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // Short, transient feedback for the manual "重新生成标题" action; auto-summary
+    // is silent by design, so only explicit failures/progress surface here.
+    LaunchedEffect(titleNotice) {
+        if (titleNotice != null) {
+            android.widget.Toast.makeText(context, titleNotice, android.widget.Toast.LENGTH_SHORT).show()
+            controller.consumeTitleNotice()
+        }
+    }
     // Picked files are copied into the workspace and referenced as @attachments/<name>,
     // which is exactly the syntax Claude Code understands for file references.
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -207,112 +226,37 @@ fun ChatScreen(
     val model = chatModelLabel(settings)
     val statusLine = chatStatusLine(running = running, rawStatus = status, model = model)
 
-    Column(
+    val frostedState = rememberFrostedState()
+    val headerHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 56.dp
+
+    Box(
         Modifier
             .fillMaxSize()
             .navigationBarsPadding()
             .imePadding()
     ) {
-        Row(
+        Column(
             Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .height(56.dp)
-                .padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxSize()
+                .hazeSource(frostedState)
+                .background(MaterialTheme.appColors.canvas)
         ) {
-            IconButton(onClick = onOpenDrawer, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    AppIcons.Menu,
-                    "会话记录",
-                    tint = MaterialTheme.appColors.graphite,
-                    modifier = Modifier.size(21.dp),
-                )
-            }
-            Column(
-                Modifier
-                    .weight(1f)
-                    .padding(horizontal = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    title,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.appColors.ink,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (running) {
-                        TypingDots(dotSize = 2.6.dp)
-                        Spacer(Modifier.width(5.dp))
-                    }
-                    AnimatedContent(
-                        targetState = statusLine,
-                        transitionSpec = {
-                            fadeIn(tween(Motion.FAST)) togetherWith fadeOut(tween(Motion.FAST))
-                        },
-                        label = "status",
-                    ) { line ->
-                        Text(
-                            line,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.appColors.stone,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-            Box {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        AppIcons.More,
-                        "更多",
-                        tint = MaterialTheme.appColors.graphite,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("工作区文件") },
-                        leadingIcon = { Icon(AppIcons.Folder, null) },
-                        onClick = {
-                            menuOpen = false
-                            onOpenWorkspace()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("清空对话上下文") },
-                        leadingIcon = { Icon(AppIcons.Trash, null) },
-                        onClick = {
-                            menuOpen = false
-                            controller.clear()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("返回首页") },
-                        leadingIcon = { Icon(AppIcons.Back, null) },
-                        onClick = {
-                            menuOpen = false
-                            onBack()
-                        },
-                    )
-                }
-            }
-        }
-
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (messages.isEmpty()) {
                 EmptyChat(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().padding(top = headerHeight),
                     onPick = { input = it },
                 )
             } else {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
+                    contentPadding = PaddingValues(
+                        start = 20.dp,
+                        end = 20.dp,
+                        top = headerHeight + 10.dp,
+                        bottom = 24.dp,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(32.dp),
                 ) {
                     items(messages, key = { it.id }) { message ->
@@ -361,6 +305,25 @@ fun ChatScreen(
             onAttach = { filePicker.launch(arrayOf("*/*")) },
             onModelClick = { showModelPicker = true },
         )
+        }
+
+        ChatHeader(
+            title = title,
+            running = running,
+            statusLine = statusLine,
+            menuOpen = menuOpen,
+            titleBusy = titleBusy,
+            hasMessages = messages.isNotEmpty(),
+            onOpenDrawer = onOpenDrawer,
+            onMenuOpenChange = { menuOpen = it },
+            onOpenWorkspace = onOpenWorkspace,
+            onClear = { controller.clear() },
+            onRegenerateTitle = { controller.regenerateTitle() },
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .frosted(frostedState, MaterialTheme.appColors.canvas),
+        )
     }
 
     if (showModelPicker) {
@@ -371,9 +334,129 @@ fun ChatScreen(
                     container.settings.edit { it.copy(activeTier = tier?.name ?: "") }
                 }
             },
+            onSelectAuto = {
+                scope.launch {
+                    container.settings.edit { it.copy(activeTier = AppSettings.AUTO_MODEL) }
+                }
+            },
             onManageTiers = onOpenSettings,
             onDismiss = { showModelPicker = false },
         )
+    }
+}
+
+@Composable
+private fun ChatHeader(
+    title: String,
+    running: Boolean,
+    statusLine: String,
+    menuOpen: Boolean,
+    titleBusy: Boolean,
+    hasMessages: Boolean,
+    onOpenDrawer: () -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
+    onOpenWorkspace: () -> Unit,
+    onClear: () -> Unit,
+    onRegenerateTitle: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .height(56.dp)
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onOpenDrawer, modifier = Modifier.size(44.dp)) {
+            Icon(
+                AppIcons.Menu,
+                "会话记录",
+                tint = MaterialTheme.appColors.graphite,
+                modifier = Modifier.size(21.dp),
+            )
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .padding(horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.appColors.ink,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (running) {
+                    TypingDots(dotSize = 2.6.dp)
+                    Spacer(Modifier.width(5.dp))
+                }
+                AnimatedContent(
+                    targetState = statusLine,
+                    transitionSpec = {
+                        fadeIn(tween(Motion.FAST)) togetherWith fadeOut(tween(Motion.FAST))
+                    },
+                    label = "status",
+                ) { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.appColors.stone,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Box {
+            IconButton(onClick = { onMenuOpenChange(true) }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    AppIcons.More,
+                    "更多",
+                    tint = MaterialTheme.appColors.graphite,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenuOpenChange(false) }) {
+                DropdownMenuItem(
+                    text = { Text("工作区文件") },
+                    leadingIcon = { Icon(AppIcons.Folder, null) },
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onOpenWorkspace()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("清空对话上下文") },
+                    leadingIcon = { Icon(AppIcons.Trash, null) },
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onClear()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (titleBusy) "正在生成标题…" else "重新生成标题") },
+                    leadingIcon = { Icon(AppIcons.Sparkle, null) },
+                    enabled = !running && !titleBusy && hasMessages,
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onRegenerateTitle()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("返回首页") },
+                    leadingIcon = { Icon(AppIcons.Back, null) },
+                    onClick = {
+                        onMenuOpenChange(false)
+                        onBack()
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -449,7 +532,13 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 30.dp)
+        Box(contentAlignment = Alignment.Center) {
+            OrganicHalo(
+                size = 78.dp,
+                color = MaterialTheme.appColors.orange.copy(alpha = 0.10f),
+            )
+            ClaudeMark(size = 30.dp)
+        }
         Spacer(Modifier.height(18.dp))
         Text(
             "开始对话",
@@ -468,9 +557,9 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(Radii.smShape)
                     .background(MaterialTheme.appColors.paper)
-                    .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.appColors.sand, Radii.smShape)
                     .clickable { onPick(hint) }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -514,7 +603,7 @@ private fun UserBubble(message: ChatMessage) {
             Box(
                 Modifier
                     .widthIn(max = maxBubbleWidth)
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(Radii.lgShape)
                     .background(MaterialTheme.appColors.surface1)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
@@ -532,6 +621,16 @@ private fun UserBubble(message: ChatMessage) {
 
 @Composable
 private fun AssistantMessage(message: ChatMessage, model: String, statusLine: String) {
+    // Tool calls are deliberately kept out of the main body. Until the first real
+    // answer text arrives they appear only as compact "activity lines" (verb + icon,
+    // never a command/path/JSON). Once output starts, they collapse into one quiet
+    // "工具调用 N" disclosure at the tail of the turn, default collapsed.
+    val tools = remember(message.blocks) { message.blocks.filterIsInstance<Block.Tool>() }
+    val hasOutput = remember(message.blocks) {
+        message.blocks.any { it is Block.Text && it.text.isNotBlank() }
+    }
+    val errorCount = remember(tools) { tools.count { it.isError } }
+
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ClaudeMark(size = 18.dp, pulse = message.streaming)
@@ -570,9 +669,32 @@ private fun AssistantMessage(message: ChatMessage, model: String, statusLine: St
                     text = block.text,
                     active = message.streaming && index == message.blocks.lastIndex,
                 )
-                is Block.Tool -> ToolCard(block)
+                is Block.Tool -> Unit // surfaced by the activity line / disclosure below
                 is Block.Error -> ErrorNotice(block.text)
             }
+        }
+
+        // The moment real output appears, the activity lines fold away into the
+        // disclosure. AnimatedVisibility keeps that transition from reading as a jump.
+        AnimatedVisibility(
+            visible = !hasOutput && tools.isNotEmpty(),
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
+            Column(Modifier.padding(top = 8.dp)) {
+                tools.forEach { tool -> ActivityLine(tool) }
+            }
+        }
+        AnimatedVisibility(
+            visible = hasOutput && tools.isNotEmpty(),
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
+            ToolCallDisclosure(
+                messageId = message.id,
+                tools = tools,
+                errorCount = errorCount,
+            )
         }
 
         if (!message.streaming) {
@@ -604,9 +726,9 @@ private fun ErrorNotice(text: String) {
         Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radii.smShape)
             .background(error.copy(alpha = 0.06f))
-            .border(1.dp, error.copy(alpha = 0.28f), RoundedCornerShape(10.dp))
+            .border(1.dp, error.copy(alpha = 0.28f), Radii.smShape)
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         SelectionContainer {
@@ -626,8 +748,8 @@ private fun ThinkingPill(text: String, active: Boolean, placeholder: Boolean = f
     Column(Modifier.padding(top = 10.dp)) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .background(colors.orangeSoft)
+                .clip(Radii.mdShape)
+                .background(colors.surface1)
                 .clickable(enabled = !placeholder) { expanded = !expanded }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -676,8 +798,120 @@ private fun ThinkingPill(text: String, active: Boolean, placeholder: Boolean = f
     }
 }
 
+/**
+ * Pre-output "activity line": one compact row with a Chinese verb and a line icon.
+ * It intentionally shows no command, file path, input or output — only that the agent
+ * is doing something, in language the user can read at a glance.
+ */
 @Composable
-private fun ToolCard(block: Block.Tool) {
+private fun ActivityLine(block: Block.Tool) {
+    val colors = MaterialTheme.appColors
+    val icon = ToolPresentation.icon(block.name)
+    val verb = ToolPresentation.verb(block.name)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (block.isError) colors.error else colors.stone,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            verb,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+            color = colors.graphite,
+        )
+        if (block.running) {
+            Spacer(Modifier.width(8.dp))
+            PulsingDot(colors.orange, size = 4.dp)
+        } else if (block.isError) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "失败",
+                style = AppType.caption,
+                color = colors.error,
+            )
+        } else {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                AppIcons.Check,
+                contentDescription = null,
+                tint = colors.stone,
+                modifier = Modifier.size(12.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Low-key "工具调用 N" disclosure at the tail of a finished answer. Default collapsed;
+ * expanding reveals the original per-call detail (name, input, output, sources). Error
+ * count is surfaced in the label so a failed tool is never silently hidden.
+ */
+@Composable
+private fun ToolCallDisclosure(
+    messageId: String,
+    tools: List<Block.Tool>,
+    errorCount: Int,
+) {
+    // Stable per message so streaming recompositions never reset the user's choice.
+    var expanded by rememberSaveable(messageId) { mutableStateOf(false) }
+    val colors = MaterialTheme.appColors
+    val shape = Radii.smShape
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .clip(shape)
+            .border(1.dp, colors.sand.copy(alpha = 0.7f), shape)
+            .animateContentSize(),
+    ) {
+        Row(
+            Modifier
+                .pressFeedback(shape = shape)
+                .fillMaxWidth()
+                .clip(shape)
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                AppIcons.Wrench,
+                contentDescription = null,
+                tint = colors.stone,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                toolCallLabel(tools.size, errorCount),
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+                color = if (errorCount > 0) colors.error else colors.graphite,
+                modifier = Modifier.weight(1f),
+            )
+            RotatingChevron(expanded = expanded, size = 15.dp)
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
+            Column {
+                tools.forEach { tool ->
+                    HorizontalDivider(color = colors.sand.copy(alpha = 0.6f))
+                    ToolCard(tool, embedded = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCard(block: Block.Tool, embedded: Boolean = false) {
     var expanded by rememberSaveable(block.id) { mutableStateOf(false) }
     val colors = MaterialTheme.appColors
     val detail = toolDetail(block)
@@ -704,38 +938,31 @@ private fun ToolCard(block: Block.Tool) {
         animationSpec = tween(Motion.FAST),
         label = "tool-border-color",
     )
-    val shape = RoundedCornerShape(12.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 10.dp)
-            .clip(shape)
-            .background(colors.paper)
-            .border(1.dp, borderColor, shape)
-            .animateContentSize(),
-    ) {
+    val shape = Radii.smShape
+    val toolbar = Modifier
+        .fillMaxWidth()
+        .then(if (embedded) Modifier else Modifier.padding(top = 10.dp))
+        .clip(shape)
+        .background(if (embedded) Color.Transparent else colors.paper)
+        .then(if (embedded) Modifier else Modifier.border(1.dp, borderColor, shape))
+        .animateContentSize()
+    Column(toolbar) {
         Row(
             Modifier
+                .pressFeedback(shape = shape)
                 .fillMaxWidth()
+                .clip(shape)
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 11.dp, vertical = 9.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                Modifier
-                    .size(22.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(colors.surface1),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "›_",
-                    fontSize = 8.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = colors.stone,
-                )
-            }
-            Spacer(Modifier.width(9.dp))
+            Icon(
+                ToolPresentation.icon(block.name),
+                contentDescription = null,
+                tint = if (block.isError) colors.error else colors.graphite,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     block.name,
@@ -857,7 +1084,7 @@ private fun SourcesSection(sources: List<WebSource>) {
                 Modifier
                     .fillMaxWidth()
                     .padding(vertical = 2.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(Radii.smShape)
                     .background(colors.surface1)
                     .clickable { runCatching { uriHandler.openUri(source.url) } }
                     .padding(horizontal = 9.dp, vertical = 8.dp),
@@ -910,7 +1137,7 @@ private fun SourcesSection(sources: List<WebSource>) {
                 color = colors.accentInk,
                 modifier = Modifier
                     .padding(top = 6.dp)
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(Radii.xsShape)
                     .clickable { showAll = !showAll }
                     .padding(horizontal = 2.dp, vertical = 3.dp),
             )
@@ -934,7 +1161,7 @@ private fun MonoCodeBlock(text: String, error: Boolean = false) {
     Box(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(Radii.xsShape)
             .background(colors.codeBg)
             .horizontalScroll(rememberScrollState())
             .padding(10.dp)

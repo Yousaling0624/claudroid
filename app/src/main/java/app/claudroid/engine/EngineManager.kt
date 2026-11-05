@@ -269,9 +269,11 @@ class EngineManager(
         val signature = listOf(
             settings.baseUrl, settings.apiKey, settings.authStyle.name, settings.model,
             // The proxy resolves tier aliases from a settings snapshot taken at start, so
-            // every field that changes that resolution must force a rebuild.
+            // every field that changes that resolution must force a rebuild. Subagent /
+            // classifier models are forwarded verbatim by that same snapshot.
             settings.activeTier, settings.opusModel, settings.fableModel,
             settings.sonnetModel, settings.haikuModel, settings.smallModel,
+            settings.subagentModel, settings.autoModeModel,
         ).joinToString("|")
         val current = proxy
         if (current != null && proxySignature == signature) {
@@ -487,6 +489,9 @@ class EngineManager(
             }
         }
         EngineEnv.applyModel(env, s)
+        // Keep the self-test environment identical to a real turn: feature switches can
+        // change CLI startup, so omitting them here would hide failures seen in chat.
+        EngineEnv.applyFeatures(env, s)
         env["DISABLE_TELEMETRY"] = "1"
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_AUTOUPDATER"] = "1"

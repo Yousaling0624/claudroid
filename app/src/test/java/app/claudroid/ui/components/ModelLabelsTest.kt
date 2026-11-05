@@ -46,13 +46,28 @@ class ModelLabelsTest {
     }
 
     @Test
-    fun activeTierSummaryExplainsDefault() {
-        assertEquals("默认模型 · auto/hy4free", activeTierSummary(base))
+    fun activeTierSummaryExplainsDefaultRouteGroup() {
+        assertEquals("默认 / 路由组 · auto/hy4free", activeTierSummary(base))
     }
 
     @Test
     fun activeTierSummaryExplainsSelectedTier() {
         val settings = base.copy(activeTier = ModelTier.OPUS.name, opusModel = "auto/hy4free")
         assertEquals("Opus · auto/hy4free", activeTierSummary(settings))
+    }
+
+    @Test
+    fun autoMeansNoModelFlagRatherThanARawModelId() {
+        val auto = base.copy(activeTier = AppSettings.AUTO_MODEL)
+        assertEquals("CLI 默认", composerModelLabel(auto))
+        assertEquals("CLI 默认 · 不指定模型", chatModelLabel(auto))
+        assertEquals("CLI 默认 · 不指定模型", activeTierSummary(auto))
+    }
+
+    @Test
+    fun emptyModelFieldIsReportedAsCliDefault() {
+        val empty = AppSettings(model = "")
+        assertEquals("默认", composerModelLabel(empty))
+        assertEquals("CLI 默认 · 不指定模型", chatModelLabel(empty))
     }
 }

@@ -133,8 +133,10 @@ bash tools/build-apk.sh
 | API Key | 本地/内网端点（127.0.0.1、192.168.x、10.x、172.16-31.x、`.local`）可以留空 |
 | 鉴权方式 | `Authorization: Bearer` / `x-api-key` / 两个都发；官方 Anthropic 用 `x-api-key` |
 | 模型 | 可从接口拉取，也可手填；会写进 `ANTHROPIC_MODEL` 与 `--model` |
+| 自动路由 | 使用 Magpie 等网关的路由组时，把组 ID（如 `auto/dfmodel[1m]`）填进「默认模型」并保持「模型档位 → 默认 / 路由组」；App 会原样透传，由网关混合调度 |
 | 引擎模式 | **自动**（有 root 用 chroot，否则 PRoot）/ **Proot** / **Root** |
-| 权限模式 | `完全放行` / `自动改文件` / `默认（只读）` / `只读规划` |
+| 权限模式 | **自动（官方 Auto）** / `完全放行` / `自动改文件` / `默认（只读）` / `只读规划` |
+| 功能与实验 | Agent teams、workflows、auto memory、后台任务、扩展思考、effort、子代理模型、Auto 分类器模型 |
 
 首次启动会在后台下载内置 CLI（约 150 MB，落盘约 310 MB，建议 Wi-Fi）。
 完成后点**自检**，看到 `2.1.x (Claude Code)` 和实际启动方式（PRoot / root + chroot）说明这台机器能跑。
@@ -197,6 +199,8 @@ claudroid/
 │   └── ui/theme/               暖纸色 + 陶土橙配色
 ├── app/src/test/java/…         单测（协议翻译 / 解析 / tar / proot 参数 / 设置）
 ├── prototype/index.html        高保真可点击 Web 原型
+├── docs/DESIGN.md             设计系统：配色 / 圆角 / 图标 / 动效 / 工具与代码折叠
+├── docs/ARCHITECTURE.md       架构与 Auto 模型、功能开关环境变量
 ├── docs/screenshots/           原型真实渲染截图（浅色 / 深色）
 ├── tools/
 │   ├── fetch-proot.py          构建期下载 Termux PRoot 并改写成 jniLibs

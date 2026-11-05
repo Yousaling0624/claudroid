@@ -16,10 +16,25 @@ enum class ApiFlavor(val label: String, val hint: String) {
 }
 
 enum class PermissionMode(val cli: String, val label: String, val hint: String) {
+    AUTO(
+        "auto",
+        "自动",
+        "官方 Auto 模式：分类器审查每次敏感操作。需要支持审查模型的网关，不可用时 CLI 会退回只读。",
+    ),
     BYPASS("bypassPermissions", "完全放行", "不询问，所有工具直接执行。root 场景常用。"),
     ACCEPT_EDITS("acceptEdits", "自动改文件", "文件编辑和常见文件命令自动通过，其他命令仍会被拒绝。"),
     MANUAL("default", "默认（只读）", "无交互宿主：需要批准的工具调用会被直接拒绝，并告知模型。"),
     PLAN("plan", "只读规划", "只做计划，不落地修改。"),
+}
+
+/** Official `--effort` levels. [cli] is blank for "let Claude Code decide". */
+enum class EffortLevel(val cli: String, val label: String, val hint: String) {
+    AUTO("", "自动", "沿用官方默认 effort"),
+    LOW("low", "低", "更快、更省"),
+    MEDIUM("medium", "中", "平衡"),
+    HIGH("high", "高", "更深入的推理"),
+    XHIGH("xhigh", "很高", "长任务与复杂调试"),
+    MAX("max", "最高", "最难的任务，耗时与消耗最高"),
 }
 
 /** How the embedded CLI is launched. */
@@ -56,6 +71,17 @@ data class AppSettings(
     val themeMode: Int = 0, // 0 system, 1 light, 2 dark
     val extraSystemPrompt: String = "",
     val extraEnv: String = "",
+    /** Experimental Claude Code features, surfaced as switches in 设置 → 功能与实验. */
+    val agentTeams: Boolean = false,
+    val workflows: Boolean = true,
+    val autoMemory: Boolean = true,
+    val backgroundTasks: Boolean = true,
+    val extendedThinking: Boolean = true,
+    val effort: EffortLevel = EffortLevel.AUTO,
+    /** Optional model for subagents/teammates; blank inherits the lead model. */
+    val subagentModel: String = "",
+    /** Optional classifier model for official Auto permission mode. */
+    val autoModeModel: String = "",
 ) {
     /**
      * Local gateways (Ollama, LM Studio, llama.cpp) usually have no key. Requiring one
@@ -93,9 +119,16 @@ data class AppSettings(
         return url.ifBlank { "https://api.anthropic.com" }
     }
 
+    /**
+     * "Auto" is an app-level choice, not a CLI alias: Claude Code has no `--model auto`.
+     * It means "omit --model and let the CLI resolve its official default".
+     */
+    val usesAutoModel: Boolean
+        get() = activeTier.trim().equals(AUTO_MODEL, ignoreCase = true)
+
     /** Null means "no tier selected"; callers should fall back to [model]. */
     val resolvedActiveTier: ModelTier?
-        get() = ModelTier.fromStored(activeTier)
+        get() = if (usesAutoModel) null else ModelTier.fromStored(activeTier)
 
     fun tierModel(tier: ModelTier): String = when (tier) {
         ModelTier.OPUS -> opusModel
@@ -122,22 +155,27 @@ data class AppSettings(
     fun modelForTier(tier: ModelTier): String = tierModel(tier).ifBlank { model.trim() }
 
     /**
-     * True when [candidate] already is one of the concrete models configured for a tier.
-     * The CLI may resolve an alias against `ANTHROPIC_DEFAULT_*_MODEL` before it reaches
-     * the local OpenAI proxy, so the proxy must recognize that mapped id and forward it
-     * instead of replacing it with the global default model.
+     * True when [candidate] is a concrete model the user explicitly configured and that
+     * the OpenAI-compatible proxy must forward verbatim. Tier mappings are here because
+     * the CLI may resolve an alias against `ANTHROPIC_DEFAULT_*_MODEL` before the request
+     * reaches the proxy. Subagent and Auto-mode classifier models are equally explicit
+     * choices: without this the proxy would rewrite them to the global default and the
+     * subagent / classifier would never receive the model the user selected.
      */
     fun isConfiguredTierModel(candidate: String): Boolean {
         val value = candidate.trim()
         if (value.isEmpty()) return false
-        return ModelTier.entries.any { tierModel(it).equals(value, ignoreCase = true) }
+        return ModelTier.entries.any { tierModel(it).equals(value, ignoreCase = true) } ||
+            listOf(subagentModel, autoModeModel).any { it.trim().equals(value, ignoreCase = true) }
     }
 
     /**
      * What `--model` receives. A tier alias keeps the CLI's own prompt/model routing
-     * intact and is what makes the per-tier env mappings take effect.
+     * intact and is what makes the per-tier env mappings take effect. Auto omits the
+     * flag entirely so the CLI can use its runtime/account default.
      */
-    fun effectiveModelArg(): String = resolvedActiveTier?.alias ?: model.trim()
+    fun effectiveModelArg(): String =
+        if (usesAutoModel) "" else resolvedActiveTier?.alias ?: model.trim()
 
     /**
      * Env overrides understood by Claude Code. Empty tiers are omitted so the CLI's
@@ -157,6 +195,11 @@ data class AppSettings(
             ?.let { put("ANTHROPIC_DEFAULT_HAIKU_MODEL", it) }
         val small = smallModel.trim().ifBlank { tierModel(ModelTier.HAIKU) }
         if (small.isNotBlank()) put("ANTHROPIC_SMALL_FAST_MODEL", small)
+    }
+
+    companion object {
+        /** Stored in [activeTier] for the app-level "Auto" model choice. */
+        const val AUTO_MODEL = "AUTO"
     }
 }
 

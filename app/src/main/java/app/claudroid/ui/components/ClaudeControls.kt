@@ -2,7 +2,6 @@ package app.claudroid.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -27,7 +26,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
@@ -48,7 +46,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
@@ -65,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 
 /**
@@ -125,7 +123,7 @@ fun ClaudeTopBar(
     }
 }
 
-/** A paper section card: 16dp corners, hairline sand border, no shadow. */
+/** A paper section card: rounded from the shared scale, hairline sand border, no shadow. */
 @Composable
 fun SettingsSection(
     title: String,
@@ -133,14 +131,15 @@ fun SettingsSection(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val shape = Radii.lgShape
     Column(
         modifier
             .fillMaxWidth()
             .padding(top = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(shape)
             .background(MaterialTheme.appColors.paper)
-            .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(16.dp))
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .border(1.dp, MaterialTheme.appColors.sand, shape)
+            .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
         SectionLabel(title)
         if (subtitle != null) {
@@ -156,12 +155,17 @@ fun SettingsSection(
     }
 }
 
-/** 56dp settings row; interactive rows get a quiet pressed tint instead of a ripple. */
+/**
+ * 56dp settings row; interactive rows get the shared press physics (scale + settle)
+ * and a quiet pressed tint instead of a ripple. A leading icon slot lets the new
+ * two-level settings IA label each row without adding ad-hoc padding elsewhere.
+ */
 @Composable
 fun SettingsRow(
     title: String,
     subtitle: String? = null,
     onClick: (() -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -172,10 +176,12 @@ fun SettingsRow(
         animationSpec = tween(Motion.FAST),
         label = "settings-row",
     )
+    val shape = Radii.smShape
     Row(
         Modifier
+            .then(if (onClick != null) Modifier.pressFeedback(shape = shape) else Modifier)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(shape)
             .background(background)
             .then(
                 if (onClick != null) {
@@ -186,10 +192,13 @@ fun SettingsRow(
                     )
                 } else Modifier
             )
-            .heightIn(min = 56.dp)
+            .heightIn(min = 60.dp)
             .padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (leading != null) {
+            Box(Modifier.padding(end = 12.dp), contentAlignment = Alignment.Center) { leading() }
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 title,
@@ -267,10 +276,10 @@ fun ClaudeField(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(Radii.smShape)
                 .background(MaterialTheme.appColors.surface1)
-                .border(1.dp, borderColor, RoundedCornerShape(12.dp))
-                .padding(horizontal = 13.dp, vertical = 11.dp),
+                .border(1.dp, borderColor, Radii.smShape)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.weight(1f)) {
@@ -309,7 +318,7 @@ fun ClaudeField(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.appColors.accentInk,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(Radii.xsShape)
                         .clickable { revealed = !revealed }
                         .padding(horizontal = 6.dp, vertical = 3.dp),
                 )
@@ -318,7 +327,11 @@ fun ClaudeField(
     }
 }
 
-/** Selected chip: solid terracotta. Unselected: paper with a hairline sand border. */
+/**
+ * Selected chip: quiet ink fill, not terracotta. Orange is reserved for the one key
+ * action / focus ring, so a row of selected options no longer floods the page with it.
+ * Unselected stays paper with a hairline sand border.
+ */
 @Composable
 fun PillChip(
     text: String,
@@ -331,21 +344,21 @@ fun PillChip(
     val background by animateColorAsState(
         targetValue = when {
             !enabled -> MaterialTheme.appColors.surface2.copy(alpha = 0.5f)
-            selected -> MaterialTheme.appColors.accentInk
+            selected -> MaterialTheme.appColors.ink
             else -> MaterialTheme.appColors.paper
         },
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
         label = "chip-bg",
     )
     val border by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.appColors.accentInk else MaterialTheme.appColors.sand,
+        targetValue = if (selected) MaterialTheme.appColors.ink else MaterialTheme.appColors.sand,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
         label = "chip-border",
     )
     val foreground by animateColorAsState(
         targetValue = when {
             !enabled -> MaterialTheme.appColors.bone
-            selected -> MaterialTheme.colorScheme.onPrimary
+            selected -> MaterialTheme.appColors.paper
             else -> MaterialTheme.appColors.graphite
         },
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
@@ -353,6 +366,7 @@ fun PillChip(
     )
     Box(
         modifier
+            .pressFeedback(enabled = enabled, shape = CircleShape)
             .clip(CircleShape)
             .background(background)
             .border(1.dp, border, CircleShape)
@@ -360,7 +374,7 @@ fun PillChip(
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
-            .padding(horizontal = 13.dp, vertical = 7.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         Text(text, style = MaterialTheme.typography.labelMedium, color = foreground)
     }
@@ -375,13 +389,8 @@ fun PrimaryButton(
     destructive: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed && enabled) 0.97f else 1f,
-        animationSpec = Motion.Press,
-        label = "primary-scale",
-    )
+    // Primary is the one place a terracotta fill is allowed: it is the key action.
+    val shape = Radii.mdShape
     val fill = when {
         !enabled -> MaterialTheme.appColors.surface2
         destructive -> MaterialTheme.appColors.error
@@ -394,19 +403,15 @@ fun PrimaryButton(
     }
     Box(
         modifier
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(12.dp))
+            .pressFeedback(enabled = enabled, shape = shape)
+            .clip(shape)
             .background(fill)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                enabled = enabled,
-            ) {
+            .clickable(enabled = enabled) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
-            .heightIn(min = 42.dp)
-            .padding(horizontal = 16.dp, vertical = 11.dp),
+            .heightIn(min = 44.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, style = MaterialTheme.typography.labelLarge, color = foreground)
@@ -421,16 +426,18 @@ fun GhostButton(
     enabled: Boolean = true,
     destructive: Boolean = false,
 ) {
+    val shape = Radii.mdShape
     val border = if (destructive) MaterialTheme.appColors.error.copy(alpha = 0.45f)
     else MaterialTheme.appColors.sand
     Box(
         modifier
-            .clip(RoundedCornerShape(12.dp))
+            .pressFeedback(enabled = enabled, shape = shape)
+            .clip(shape)
             .background(MaterialTheme.appColors.paper)
-            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .border(1.dp, border, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .heightIn(min = 42.dp)
-            .padding(horizontal = 16.dp, vertical = 11.dp),
+            .heightIn(min = 44.dp)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -450,17 +457,18 @@ fun GhostButton(
 fun WarmSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     val haptic = LocalHapticFeedback.current
     val track by animateColorAsState(
-        targetValue = if (checked) MaterialTheme.appColors.accentInk else MaterialTheme.appColors.surface2,
+        targetValue = if (checked) MaterialTheme.appColors.ink else MaterialTheme.appColors.surface2,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseChrome),
         label = "switch-track",
     )
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 20.dp else 2.dp,
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseChrome),
+        animationSpec = Motion.ReleaseDp,
         label = "switch-thumb",
     )
     Box(
         Modifier
+            .pressFeedback(shape = CircleShape)
             .size(width = 44.dp, height = 26.dp)
             .clip(CircleShape)
             .background(track)
@@ -495,11 +503,11 @@ fun ClaudeDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
+            shape = Radii.xlShape,
             color = MaterialTheme.appColors.paper,
             border = BorderStroke(1.dp, MaterialTheme.appColors.sand),
         ) {
-            Column(Modifier.padding(22.dp)) {
+            Column(Modifier.padding(24.dp)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.titleLarge,
@@ -539,13 +547,13 @@ fun CodeCard(
         modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radii.mdShape)
             .background(MaterialTheme.appColors.codeBg),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(34.dp)
+                .height(38.dp)
                 .padding(start = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

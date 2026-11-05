@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,9 +51,12 @@ import app.claudroid.ui.components.BrandLockup
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.ClaudeComposer
 import app.claudroid.ui.components.ModelPickerSheet
+import app.claudroid.ui.components.OrganicHalo
 import app.claudroid.ui.components.composerModelLabel
+import app.claudroid.ui.components.pressFeedback
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -149,7 +151,13 @@ fun HomeScreen(
         Column(Modifier.weight(1f).fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
             Column(Modifier.fillMaxWidth().padding(horizontal = 26.dp)) {
-                ClaudeMark(size = 24.dp)
+                Box(contentAlignment = Alignment.Center) {
+                    OrganicHalo(
+                        size = 62.dp,
+                        color = MaterialTheme.appColors.orange.copy(alpha = 0.11f),
+                    )
+                    ClaudeMark(size = 24.dp)
+                }
                 Spacer(Modifier.height(14.dp))
                 Text(
                     remember { greetingForHour(LocalTime.now().hour) },
@@ -215,6 +223,11 @@ fun HomeScreen(
                     container.settings.edit { it.copy(activeTier = tier?.name ?: "") }
                 }
             },
+            onSelectAuto = {
+                scope.launch {
+                    container.settings.edit { it.copy(activeTier = AppSettings.AUTO_MODEL) }
+                }
+            },
             onManageTiers = onOpenSettings,
             onDismiss = { showModelPicker = false },
         )
@@ -229,11 +242,13 @@ private val SUGGESTIONS = listOf(
 
 @Composable
 private fun SuggestionChip(text: String, onClick: () -> Unit) {
+    val shape = Radii.lgShape
     Row(
         Modifier
-            .clip(RoundedCornerShape(18.dp))
+            .pressFeedback(shape = shape)
+            .clip(shape)
             .background(MaterialTheme.appColors.paper)
-            .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(18.dp))
+            .border(1.dp, MaterialTheme.appColors.sand, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -262,11 +277,13 @@ private fun EngineHint(state: EngineManager.State, onOpenSettings: () -> Unit) {
         state.phase == EngineManager.Phase.Failed -> MaterialTheme.appColors.error
         else -> MaterialTheme.appColors.orange
     }
+    val shape = Radii.smShape
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 18.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .pressFeedback(shape = shape)
+            .clip(shape)
             .background(MaterialTheme.appColors.surface1)
             .clickable(onClick = onOpenSettings)
             .padding(horizontal = 12.dp, vertical = 10.dp),

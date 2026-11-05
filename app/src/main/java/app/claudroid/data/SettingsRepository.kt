@@ -35,6 +35,14 @@ class SettingsRepository(private val context: Context) {
         val themeMode = intPreferencesKey("theme_mode")
         val extraSystemPrompt = stringPreferencesKey("extra_system_prompt")
         val extraEnv = stringPreferencesKey("extra_env")
+        val agentTeams = booleanPreferencesKey("agent_teams")
+        val workflows = booleanPreferencesKey("workflows")
+        val autoMemory = booleanPreferencesKey("auto_memory")
+        val backgroundTasks = booleanPreferencesKey("background_tasks")
+        val extendedThinking = booleanPreferencesKey("extended_thinking")
+        val effort = stringPreferencesKey("effort")
+        val subagentModel = stringPreferencesKey("subagent_model")
+        val autoModeModel = stringPreferencesKey("auto_mode_model")
     }
 
     val flow: Flow<AppSettings> = context.settingsStore.data.map { p -> decode(p) }
@@ -65,6 +73,14 @@ class SettingsRepository(private val context: Context) {
             themeMode = p[K.themeMode] ?: d.themeMode,
             extraSystemPrompt = p[K.extraSystemPrompt] ?: d.extraSystemPrompt,
             extraEnv = p[K.extraEnv] ?: d.extraEnv,
+            agentTeams = p[K.agentTeams] ?: d.agentTeams,
+            workflows = p[K.workflows] ?: d.workflows,
+            autoMemory = p[K.autoMemory] ?: d.autoMemory,
+            backgroundTasks = p[K.backgroundTasks] ?: d.backgroundTasks,
+            extendedThinking = p[K.extendedThinking] ?: d.extendedThinking,
+            effort = p[K.effort]?.let { runCatching { EffortLevel.valueOf(it) }.getOrNull() } ?: d.effort,
+            subagentModel = p[K.subagentModel] ?: d.subagentModel,
+            autoModeModel = p[K.autoModeModel] ?: d.autoModeModel,
         )
     }
 
@@ -100,6 +116,14 @@ class SettingsRepository(private val context: Context) {
             p[K.themeMode] = next.themeMode
             p[K.extraSystemPrompt] = next.extraSystemPrompt
             p[K.extraEnv] = next.extraEnv
+            p[K.agentTeams] = next.agentTeams
+            p[K.workflows] = next.workflows
+            p[K.autoMemory] = next.autoMemory
+            p[K.backgroundTasks] = next.backgroundTasks
+            p[K.extendedThinking] = next.extendedThinking
+            p[K.effort] = next.effort.name
+            p[K.subagentModel] = next.subagentModel
+            p[K.autoModeModel] = next.autoModeModel
         }
     }
 }

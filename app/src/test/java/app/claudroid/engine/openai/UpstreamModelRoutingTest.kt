@@ -136,4 +136,42 @@ class UpstreamModelRoutingTest {
             OpenAiProxy.upstreamModel(request("mysonnet-pro"), settings),
         )
     }
+
+    @Test
+    fun `subagent and classifier models are forwarded verbatim`() {
+        val settings = mapped.copy(
+            model = "gateway-fallback",
+            subagentModel = "  subagent-fast  ",
+            autoModeModel = "classifier-v2",
+        )
+        // The CLI asks for these concrete ids because of CLAUDE_CODE_SUBAGENT_MODEL /
+        // CLAUDE_CODE_AUTO_MODE_MODEL. Rewriting them to settings.model would silently
+        // defeat both settings.
+        assertEquals(
+            "subagent-fast",
+            OpenAiProxy.upstreamModel(request("subagent-fast"), settings),
+        )
+        assertEquals(
+            "classifier-v2",
+            OpenAiProxy.upstreamModel(request("classifier-v2"), settings),
+        )
+        // The CLI may echo the id back with different casing; it is still the same
+        // explicitly chosen model and must not be rewritten to the global fallback.
+        assertEquals(
+            "SUBAGENT-FAST",
+            OpenAiProxy.upstreamModel(request("SUBAGENT-FAST"), settings),
+        )
+        assertEquals(
+            "CLASSIFIER-V2",
+            OpenAiProxy.upstreamModel(request("CLASSIFIER-V2"), settings),
+        )
+        // Blank switches must not make an ordinary model look "explicitly configured".
+        assertEquals(
+            "gateway-fallback",
+            OpenAiProxy.upstreamModel(
+                request("deepseek-chat"),
+                settings.copy(subagentModel = "   ", autoModeModel = ""),
+            ),
+        )
+    }
 }

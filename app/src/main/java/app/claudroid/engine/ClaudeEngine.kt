@@ -297,45 +297,6 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         }
     }
 
-    private fun buildArgs(prompt: String, resume: String?, s: AppSettings, cliVersion: String): List<String> {
-        val args = mutableListOf(
-            "-p", prompt,
-            "--output-format", "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--permission-mode", s.permissionMode.cli,
-        )
-        // With a tier active this is the CLI alias (opus/sonnet/...), which lets the
-        // ANTHROPIC_DEFAULT_*_MODEL mappings resolve it; otherwise it stays the raw model.
-        val model = s.effectiveModelArg()
-        if (model.isNotBlank()) args += listOf("--model", model)
-        if (resume != null) args += listOf("--resume", resume)
-        if (s.extraSystemPrompt.isNotBlank()) {
-            args += listOf("--append-system-prompt", s.extraSystemPrompt)
-            // A resumed conversation reuses the system prompt captured on its first
-            // request. Without this, editing the setting would silently have no effect
-            // (flag exists since 2.1.257).
-            if (versionAtLeast(cliVersion, 2, 1, 257)) {
-                args += listOf("--system-prompt-snapshot", "off")
-            }
-        }
-        if (s.maxTurns > 0) args += listOf("--max-turns", s.maxTurns.toString())
-        return args
-    }
-
-    /** Compares the numeric major.minor.patch prefix of a CLI version string. */
-    private fun versionAtLeast(version: String, major: Int, minor: Int, patch: Int): Boolean {
-        val parts = Regex("\\d+").findAll(version).map { it.value.toIntOrNull() ?: 0 }
-            .take(3).toList()
-        if (parts.size < 3) return false
-        val want = listOf(major, minor, patch)
-        for (i in 0 until 3) {
-            val cmp = parts[i].compareTo(want[i])
-            if (cmp != 0) return cmp > 0
-        }
-        return true
-    }
-
     private fun buildEnv(s: AppSettings, plan: LaunchPlan): Map<String, String> {
         val env = linkedMapOf<String, String>()
         env["PATH"] = when {
@@ -364,6 +325,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             }
         }
         EngineEnv.applyModel(env, s)
+        EngineEnv.applyFeatures(env, s)
         // The app owns upgrades and there is no telemetry endpoint we want to reach.
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_TELEMETRY"] = "1"
@@ -383,6 +345,59 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             }
         return env
     }
+
+    /**
+     * Argument assembly is pure (it reads only [s] and the passed values), so it lives in
+     * the companion object: the same code serves the real turn and a unit test that must
+     * not spin up a CLI process or need an Android Context. `internal` keeps it out of the
+     * public API while allowing `ClaudeEngine.buildArgs(...)` from tests.
+     */
+    companion object {
+        internal fun buildArgs(
+            prompt: String,
+            resume: String?,
+            s: AppSettings,
+            cliVersion: String,
+        ): List<String> {
+            val args = mutableListOf(
+                "-p", prompt,
+                "--output-format", "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--permission-mode", s.permissionMode.cli,
+            )
+            // With a tier active this is the CLI alias (opus/sonnet/...), which lets the
+            // ANTHROPIC_DEFAULT_*_MODEL mappings resolve it; otherwise it stays the raw model.
+            val model = s.effectiveModelArg()
+            if (model.isNotBlank()) args += listOf("--model", model)
+            if (resume != null) args += listOf("--resume", resume)
+            if (s.extraSystemPrompt.isNotBlank()) {
+                args += listOf("--append-system-prompt", s.extraSystemPrompt)
+                // A resumed conversation reuses the system prompt captured on its first
+                // request. Without this, editing the setting would silently have no effect
+                // (flag exists since 2.1.257).
+                if (versionAtLeast(cliVersion, 2, 1, 257)) {
+                    args += listOf("--system-prompt-snapshot", "off")
+                }
+            }
+            if (s.maxTurns > 0) args += listOf("--max-turns", s.maxTurns.toString())
+            if (s.effort.cli.isNotBlank()) args += listOf("--effort", s.effort.cli)
+            return args
+        }
+
+        /** Compares the numeric major.minor.patch prefix of a CLI version string. */
+        private fun versionAtLeast(version: String, major: Int, minor: Int, patch: Int): Boolean {
+            val parts = Regex("\\d+").findAll(version).map { it.value.toIntOrNull() ?: 0 }
+                .take(3).toList()
+            if (parts.size < 3) return false
+            val want = listOf(major, minor, patch)
+            for (i in 0 until 3) {
+                val cmp = parts[i].compareTo(want[i])
+                if (cmp != 0) return cmp > 0
+            }
+            return true
+        }
+    }
 }
 
 /**
@@ -398,8 +413,27 @@ internal object EngineEnv {
      * `extraEnv` after this block, so a user override still wins.
      */
     fun applyModel(env: MutableMap<String, String>, settings: AppSettings) {
+        // Auto deliberately leaves ANTHROPIC_MODEL unset: the CLI then resolves its
+        // official default instead of being pinned to a model id.
         val model = settings.effectiveModelArg()
         if (model.isNotBlank()) env["ANTHROPIC_MODEL"] = model
+        settings.subagentModel.trim().takeIf { it.isNotBlank() }
+            ?.let { env["CLAUDE_CODE_SUBAGENT_MODEL"] = it }
+        settings.autoModeModel.trim().takeIf { it.isNotBlank() }
+            ?.let { env["CLAUDE_CODE_AUTO_MODE_MODEL"] = it }
         env.putAll(settings.modelEnv())
+    }
+
+    /**
+     * Experimental feature switches. `extraEnv` is merged after this block, so a user
+     * can always override a switch by setting the same variable explicitly.
+     */
+    fun applyFeatures(env: MutableMap<String, String>, settings: AppSettings) {
+        // Agent teams are opt-in upstream; "0" keeps the feature off explicitly.
+        env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = if (settings.agentTeams) "1" else "0"
+        if (!settings.workflows) env["CLAUDE_CODE_DISABLE_WORKFLOWS"] = "1"
+        if (!settings.autoMemory) env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        if (!settings.backgroundTasks) env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        if (!settings.extendedThinking) env["CLAUDE_CODE_DISABLE_THINKING"] = "1"
     }
 }

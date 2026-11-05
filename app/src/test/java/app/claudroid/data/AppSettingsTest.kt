@@ -145,4 +145,87 @@ class AppSettingsTest {
         assertEquals(null, ModelTier.fromAliasOrId("gpt-4o"))
         assertEquals(null, ModelTier.fromAliasOrId("deepseek-chat"))
     }
+
+    @Test
+    fun `auto model is mutually exclusive with a tier and restores the alias when switched back`() {
+        val auto = AppSettings(
+            model = "deepseek-chat",
+            activeTier = AppSettings.AUTO_MODEL,
+            opusModel = "opus-backend",
+        )
+
+        assertTrue(auto.usesAutoModel)
+        assertEquals("", auto.effectiveModelArg())
+        assertEquals(null, auto.resolvedActiveTier)
+        // The Auto sentinel is case-insensitive and tolerant of surrounding whitespace.
+        assertTrue(AppSettings(activeTier = "  auto ").usesAutoModel)
+
+        val opus = auto.copy(activeTier = ModelTier.OPUS.name)
+        assertFalse(opus.usesAutoModel)
+        assertEquals(ModelTier.OPUS, opus.resolvedActiveTier)
+        assertEquals("opus", opus.effectiveModelArg())
+
+        // Clearing the tier falls back to the raw model, exactly like pre-Auto installs.
+        val cleared = opus.copy(activeTier = "")
+        assertFalse(cleared.usesAutoModel)
+        assertEquals(null, cleared.resolvedActiveTier)
+        assertEquals("deepseek-chat", cleared.effectiveModelArg())
+    }
+
+    @Test
+    fun `auto model keeps tier mappings available even with no active tier`() {
+        val settings = AppSettings(
+            activeTier = AppSettings.AUTO_MODEL,
+            opusModel = "opus-backend",
+            haikuModel = "haiku-backend",
+            smallModel = "small-explicit",
+        )
+
+        assertEquals("opus-backend", settings.modelForTier(ModelTier.OPUS))
+        assertEquals(
+            mapOf(
+                "ANTHROPIC_DEFAULT_OPUS_MODEL" to "opus-backend",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL" to "haiku-backend",
+                "ANTHROPIC_SMALL_FAST_MODEL" to "small-explicit",
+            ),
+            settings.modelEnv(),
+        )
+    }
+
+    @Test
+    fun `auto permission mode exists and maps to the official auto value`() {
+        val mode = PermissionMode.AUTO
+        assertEquals("auto", mode.cli)
+        assertEquals(mode, PermissionMode.valueOf("AUTO"))
+        assertTrue(PermissionMode.entries.contains(mode))
+    }
+
+    @Test
+    fun `effort levels expose cli values and auto is blank`() {
+        assertEquals("", EffortLevel.AUTO.cli)
+        assertEquals("low", EffortLevel.LOW.cli)
+        assertEquals("high", EffortLevel.HIGH.cli)
+        assertEquals("xhigh", EffortLevel.XHIGH.cli)
+        assertEquals("max", EffortLevel.MAX.cli)
+    }
+
+    @Test
+    fun `subagent and classifier models count as explicitly configured for the proxy`() {
+        val settings = AppSettings(
+            opusModel = "gateway-opus",
+            subagentModel = "  subagent-fast  ",
+            autoModeModel = "classifier-v2",
+        )
+        assertTrue(settings.isConfiguredTierModel("gateway-opus"))
+        assertTrue(settings.isConfiguredTierModel("subagent-fast"))
+        assertTrue(settings.isConfiguredTierModel("  SUBAGENT-FAST  "))
+        assertTrue(settings.isConfiguredTierModel("CLASSIFIER-V2"))
+        assertFalse(settings.isConfiguredTierModel("deepseek-chat"))
+
+        // Blank switches must never match, otherwise the proxy would forward every
+        // ordinary model verbatim instead of applying the global fallback.
+        val blank = settings.copy(subagentModel = "   ", autoModeModel = "")
+        assertFalse(blank.isConfiguredTierModel("deepseek-chat"))
+        assertFalse(blank.isConfiguredTierModel(""))
+    }
 }

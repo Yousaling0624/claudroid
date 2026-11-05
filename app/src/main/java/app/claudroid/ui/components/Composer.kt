@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
@@ -47,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 
 /**
@@ -70,7 +70,7 @@ fun ClaudeComposer(
     var focused by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val colors = MaterialTheme.appColors
-    val shape = RoundedCornerShape(24.dp)
+    val shape = Radii.lgShape
     val borderWidth by animateDpAsState(
         targetValue = if (focused) 1.5.dp else 1.dp,
         animationSpec = tween(Motion.FAST, easing = Motion.EaseChrome),
@@ -143,6 +143,7 @@ fun ClaudeComposer(
                 Box(
                     Modifier
                         .size(32.dp)
+                        .pressFeedback(shape = CircleShape)
                         .clip(CircleShape)
                         .clickable(onClick = onAttach),
                     contentAlignment = Alignment.Center,
@@ -155,10 +156,12 @@ fun ClaudeComposer(
                     )
                 }
                 Spacer(Modifier.width(4.dp))
+                val modelShape = Radii.xsShape
                 Row(
                     Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(10.dp))
+                        .pressFeedback(shape = modelShape)
+                        .clip(modelShape)
                         .clickable(onClick = onModelClick)
                         .padding(horizontal = 7.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,

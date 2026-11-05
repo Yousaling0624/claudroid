@@ -1,10 +1,12 @@
 package app.claudroid.ui.md
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -37,6 +38,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,8 +65,11 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.claudroid.ui.components.Motion
+import app.claudroid.ui.components.RotatingChevron
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -94,6 +99,28 @@ sealed interface MdBlock {
     ) : MdBlock
 
     data object Rule : MdBlock
+}
+
+/**
+ * Folding policy for fenced code blocks. Pure so it can be unit-tested and so a
+ * streaming recomposition cannot flip a block between folded/unfolded on a whim.
+ * A block is "long" past either threshold (lines or characters); short code stays whole.
+ */
+object CodeFold {
+    const val LINE_THRESHOLD = 8
+    const val CHAR_THRESHOLD = 480
+    const val COLLAPSED_LINES = 6
+
+    fun isLong(code: String): Boolean {
+        val lines = code.count { it == '\n' } + if (code.isEmpty()) 0 else 1
+        return lines > LINE_THRESHOLD || code.length > CHAR_THRESHOLD
+    }
+
+    /** Line/character count shown in the code header. */
+    fun headerMeta(code: String): String {
+        val lines = code.count { it == '\n' } + if (code.isEmpty()) 0 else 1
+        return "$lines 行 · ${code.length} 字"
+    }
 }
 
 object Markdown {
@@ -526,13 +553,13 @@ private fun StreamingCaret(alpha: State<Float>) {
         Modifier
             .size(8.dp, 18.dp)
             .graphicsLayer { this.alpha = value }
-            .background(MaterialTheme.appColors.orange, RoundedCornerShape(1.dp))
+            .background(MaterialTheme.appColors.orange, Radii.xsShape)
     )
 }
 
 @Composable
 private fun TableBlock(table: MdBlock.Table) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = Radii.smShape
     Column(
         Modifier
             .fillMaxWidth()
@@ -575,39 +602,86 @@ private fun TableBlock(table: MdBlock.Table) {
     }
 }
 
+/**
+ * Fenced code block. Long snippets (>8 lines or >480 chars) start folded at roughly
+ * six lines with a fading tail; the header carries language + line/char count and a
+ * spring-animated expand/collapse. The whole header row toggles the fold (the copy
+ * button keeps its own tap). Copy is always available regardless of fold state. Fold
+ * state is a per-slot [rememberSaveable]:
+ * streaming recompositions (which append characters to earlier blocks) never reset a
+ * user's explicit choice — content-derived keys would, and are forbidden here.
+ */
 @Composable
 fun CodeBlock(code: String, lang: String?, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(code) { mutableStateOf(false) }
     val colors = MaterialTheme.appColors
+    val long = remember(code) { CodeFold.isLong(code) }
+    // Per-slot state, not a content key: streaming appends characters to the same block,
+    // and a content-derived key would reset an explicit expand/collapse on every chunk.
+    var expanded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
             delay(1_500)
             copied = false
         }
     }
+
+    // Collapsed height ~= 6 lines of AppType.code (21sp each) plus padding. Expanded is
+    // unconstrained and animateContentSize walks the container from one to the other, so
+    // even a 2000-line snippet reaches its true height instead of a hard 4000dp cap.
+    val collapsedHeight = 6 * 21 + 24
+    val shape = Radii.mdShape
     Column(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(shape)
             .background(colors.codeBg)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .then(
+                    // The whole header toggles the fold; the copy button below re-consumes
+                    // its own tap so both stay reachable.
+                    if (long) Modifier.clickable { expanded = !expanded } else Modifier
+                )
                 .background(colors.codeFg.copy(alpha = 0.045f))
-                .padding(start = 14.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+                .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = lang?.lowercase()?.ifBlank { null } ?: "代码",
                 style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.2.sp),
-                color = colors.codeFg.copy(alpha = 0.55f),
+                color = colors.codeFg.copy(alpha = 0.62f),
             )
+            if (long) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    CodeFold.headerMeta(code),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.codeFg.copy(alpha = 0.4f),
+                )
+            }
             Spacer(Modifier.weight(1f))
+            if (long) {
+                Row(
+                    Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RotatingChevron(expanded = expanded, tint = colors.codeFg.copy(alpha = 0.62f), size = 12.dp)
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        if (expanded) "收起" else "展开",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.codeFg.copy(alpha = 0.62f),
+                    )
+                }
+                Spacer(Modifier.width(2.dp))
+            }
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(Radii.xsShape)
                     .clickable {
                         clipboard.setText(AnnotatedString(code))
                         copied = true
@@ -642,14 +716,36 @@ fun CodeBlock(code: String, lang: String?, modifier: Modifier = Modifier) {
         Box(
             Modifier
                 .fillMaxWidth()
+                .animateContentSize(
+                    animationSpec = spring(dampingRatio = 0.72f, stiffness = 340f),
+                )
+                .then(
+                    // Tapping the folded tail is the most natural "show me the rest" gesture;
+                    // once expanded the body is scrollable/selectable and must not intercept.
+                    if (long && !expanded) Modifier.clickable { expanded = true } else Modifier
+                )
+                .then(if (long && !expanded) Modifier.height(collapsedHeight.dp) else Modifier)
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             SelectionContainer {
                 Text(
                     text = code,
                     style = AppType.code,
                     color = colors.codeFg,
+                )
+            }
+            if (long && !expanded) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .height(30.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                listOf(Color.Transparent, colors.codeBg),
+                            )
+                        )
                 )
             }
         }

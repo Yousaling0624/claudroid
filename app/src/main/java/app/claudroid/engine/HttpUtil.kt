@@ -2,6 +2,7 @@ package app.claudroid.engine
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URL
@@ -12,6 +13,11 @@ object HttpUtil {
 
     private const val UA = "Claudroid/1.0 (Android)"
     private const val MAX_ATTEMPTS = 3
+    private const val MAX_RESPONSE_CHARS = 512_000
+    private const val MAX_ERROR_CHARS = 4_096
+
+    /** Some gateways echo request headers back in an error body; never let a key leak. */
+    private val bearerEcho = Regex("""Bearer\s+\S+""", RegexOption.IGNORE_CASE)
 
     fun getText(url: String): String = getText(url, emptyMap())
 
@@ -33,6 +39,72 @@ object HttpUtil {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /**
+     * POSTs a JSON payload and returns the 2xx response body.
+     *
+     * [direct] bypasses the device-wide HTTP proxy for loopback/LAN endpoints. Response
+     * bodies are capped because every upstream answer is untrusted input; error bodies
+     * are additionally truncated and flattened before going into an exception message.
+     * The URL's query is stripped from that message — a few gateways accept the key as a
+     * query parameter, and no exception text may carry credentials.
+     */
+    fun postJson(
+        url: String,
+        body: String,
+        headers: Map<String, String>,
+        direct: Boolean = false,
+    ): String {
+        val target = URL(url)
+        val connection = if (direct) target.openConnection(Proxy.NO_PROXY) else target.openConnection()
+        val conn = (connection as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            doOutput = true
+            setRequestProperty("User-Agent", UA)
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/json")
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+        }
+        try {
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val echoedSecrets = headers
+                    .filterKeys { it.equals("Authorization", true) || it.equals("x-api-key", true) }
+                    .values
+                    .filter { it.isNotBlank() }
+                val detail = runCatching { readLimited(conn.errorStream, MAX_ERROR_CHARS) }
+                    .getOrDefault("")
+                    .replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+                    .let { bearerEcho.replace(it, "Bearer ***") }
+                    .let { text -> echoedSecrets.fold(text) { acc, secret -> acc.replace(secret, "***") } }
+                    .trim()
+                    .take(500)
+                val safeUrl = url.substringBefore('?')
+                error(if (detail.isEmpty()) "HTTP $code for $safeUrl" else "HTTP $code for $safeUrl: $detail")
+            }
+            return readLimited(conn.inputStream, MAX_RESPONSE_CHARS)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Reads at most [maxChars] characters, so a misbehaving endpoint cannot exhaust memory. */
+    private fun readLimited(stream: InputStream?, maxChars: Int): String {
+        if (stream == null) return ""
+        val out = StringBuilder()
+        stream.bufferedReader().use { reader ->
+            val buf = CharArray(4_096)
+            while (out.length < maxChars) {
+                val n = reader.read(buf, 0, minOf(buf.size, maxChars - out.length))
+                if (n <= 0) break
+                out.append(buf, 0, n)
+            }
+        }
+        return out.toString()
     }
 
     /**

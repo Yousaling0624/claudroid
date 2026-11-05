@@ -277,6 +277,33 @@ Claude Code 在 Linux 上有一条硬规则：**uid 0 时拒绝「完全放行�
 如果哪天上游删掉这个开关，备选方案是：CLI 以普通 uid 运行，只在 Bash 工具的 PATH 前面放一个
 `bash` 包装脚本，内部 `exec su -c "$*"` —— 这样 CLI 拿不到 root 身份，但每条命令仍然是 root。
 
+## 9.2 Auto 模型、Auto 权限与功能开关
+
+Claude Code 官方没有 `--model auto`。设置里的「CLI 默认（不指定模型）」是 App 层语义：
+**不传 `--model`、也不写 `ANTHROPIC_MODEL`**，让 CLI 用自身版本/账号的默认模型。这样新版本
+默认模型变化时 App 不需要跟着改；具体档位仍然通过 `--model <tier>` + `ANTHROPIC_DEFAULT_*_MODEL` 映射。
+Magpie 路由组（如 `auto/dfmodel[1m]`）走另一条路：「默认 / 路由组」把模型字段原样透传给
+`--model`，由网关混合调度，App 不做自动路由。
+
+`--permission-mode auto` 是官方权限模式，需要分类器模型；`CLAUDE_CODE_AUTO_MODE_MODEL`
+只影响分类器，不是主模型。网关不支持对应协议时，CLI 会退回只读，因此设置页必须写清限制。
+
+实验开关直接映射为环境变量（`extraEnv` 最后合并，用户手写值优先）：
+
+| 设置 | 环境变量 |
+| --- | --- |
+| Agent teams | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1/0` |
+| Workflows 关闭 | `CLAUDE_CODE_DISABLE_WORKFLOWS=1` |
+| Auto memory 关闭 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
+| 后台任务关闭 | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` |
+| 扩展思考关闭 | `CLAUDE_CODE_DISABLE_THINKING=1` |
+| 子代理模型 | `CLAUDE_CODE_SUBAGENT_MODEL` |
+| Auto 权限分类器 | `CLAUDE_CODE_AUTO_MODE_MODEL` |
+| 推理强度 | `--effort low/medium/high/xhigh/max`（Auto 不传） |
+
+注意：非交互 `-p` 模式下 agent teams 的队友无法真正启动，开关只能保证 CLI 侧特性开启，
+设置页需要如实标注「实验」。
+
 ## 10. OpenAI 兼容桥
 
 Claude Code 只会说 Anthropic Messages 协议，所以"支持 OpenAI 接口"不能靠改 base URL，
