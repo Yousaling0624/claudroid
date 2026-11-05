@@ -55,6 +55,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
@@ -63,6 +64,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -566,11 +568,24 @@ fun GlassOptionSheet(
         val blendPx = with(density) { 28.dp.toPx() }
         val rimDepthPx = with(density) { 8.dp.toPx() }
         val contentBlurPx = with(density) { Motion.PICKER_CONTENT_BLUR.dp.toPx() }
-        val dropletFill = colors.paper.copy(alpha = 0.92f)
-        val dropletRim = if (colors.dark) {
+        // The platter underlay is the paper body behind the glass. The split droplet is
+        // drawn above the glass (see below), so it needs its own, stronger colours:
+        // paper-on-paper would vanish on the warm page in light mode.
+        val platterFill = colors.paper.copy(alpha = 0.92f)
+        val platterRim = if (colors.dark) {
             colors.ink.copy(alpha = 0.18f)
         } else {
             colors.sand.copy(alpha = 0.70f)
+        }
+        val dropletFill = if (colors.dark) {
+            colors.paper.copy(alpha = 0.78f)
+        } else {
+            colors.surface1.copy(alpha = 0.92f)
+        }
+        val dropletRim = if (colors.dark) {
+            colors.ink.copy(alpha = 0.20f)
+        } else {
+            colors.ink.copy(alpha = 0.12f)
         }
 
         // Trigger only; the animations run on the composition scope, so the second
@@ -596,9 +611,9 @@ fun GlassOptionSheet(
                 .pointerInput(Unit) { detectTapGestures { close() } },
         )
 
-        // The droplet and bridge are paper silhouettes behind the glass: Haze cannot
-        // refract an arbitrary path, so the panel stays a rounded rect and this layer
-        // supplies the liquid outline while the two silhouettes are still joined.
+        // Paper body behind the glass. Haze cannot refract an arbitrary path, so the
+        // panel itself stays a rounded rect; this layer gives the growing platter its
+        // paper body until the glass fades in.
         if (started) {
             Canvas(Modifier.fillMaxSize()) {
                 val anchor = anchorOverlay ?: return@Canvas
@@ -611,13 +626,11 @@ fun GlassOptionSheet(
                     height,
                 )
                 val platter = platterMorph(anchor, card, morph.value, cardRadiusPx, corners.value)
-                val droplet = dropletMorph(anchor, card, morph.value, blendPx, rimDepthPx)
                 // Like the reference's source-colour fill: the paper silhouette sits
                 // behind the glass and fades out as the platter settles, so the bubble
                 // starts as paper and ends as glass. At the very start the glass layer
                 // is still transparent, hence the full paper fill rather than a ring.
-                val settle = morph.value.coerceIn(0f, 1f)
-                val fillAlpha = 1f - settle
+                val fillAlpha = (1f - morph.value).coerceIn(0f, 1f)
                 if (fillAlpha <= 0.01f) return@Canvas
                 val platterPath = Path().apply {
                     addRoundRect(
@@ -630,51 +643,10 @@ fun GlassOptionSheet(
                         )
                     )
                 }
-                val dropletPath = Path().apply {
-                    addRoundRect(
-                        RoundRect(
-                            droplet.left,
-                            droplet.top,
-                            droplet.right,
-                            droplet.bottom,
-                            CornerRadius(droplet.cornerRadius),
-                        )
-                    )
-                }
-                // The goo silhouette is the union of the platter, the droplet and the
-                // prism_ui bridge fan. The platter is the glass panel itself, so the fill
-                // under it reads through the tint and fades with [settle].
-                val union = Path()
-                if (!union.op(dropletPath, platterPath, PathOperation.Union)) {
-                    union.reset()
-                    union.addPath(dropletPath)
-                }
-                val bridge = gooBridge(
-                    PickerRect(platter.left, platter.top, platter.width, platter.height),
-                    platter.cornerRadius,
-                    PickerRect(droplet.left, droplet.top, droplet.width, droplet.height),
-                    blendPx,
-                )
-                if (bridge != null) {
-                    val fan = Path()
-                    for (polygon in bridge) {
-                        if (polygon.size < 3) continue
-                        fan.moveTo(polygon[0].x, polygon[0].y)
-                        for (index in 1 until polygon.size) {
-                            fan.lineTo(polygon[index].x, polygon[index].y)
-                        }
-                        fan.close()
-                    }
-                    val merged = Path()
-                    if (merged.op(union, fan, PathOperation.Union)) {
-                        union.reset()
-                        union.addPath(merged)
-                    }
-                }
-                drawPath(union, dropletFill.copy(alpha = dropletFill.alpha * fillAlpha))
+                drawPath(platterPath, platterFill.copy(alpha = platterFill.alpha * fillAlpha))
                 drawPath(
-                    union,
-                    dropletRim.copy(alpha = dropletRim.alpha * fillAlpha),
+                    platterPath,
+                    platterRim.copy(alpha = platterRim.alpha * fillAlpha),
                     style = Stroke(width = 1.dp.toPx()),
                 )
             }
@@ -789,6 +761,104 @@ fun GlassOptionSheet(
                             close()
                         }
                     }
+                }
+            }
+        }
+
+        // The split droplet and its goo neck sit above the glass: the glass tint is too
+        // close to paper for a paper-on-paper droplet to read in light mode. The layer
+        // fades with how much of the droplet the platter has swallowed, so it can never
+        // sit on the finished list. The panel's taps still land: a Canvas without a
+        // pointerInput does not consume them.
+        if (started) {
+            Canvas(Modifier.fillMaxSize()) {
+                val anchor = anchorOverlay ?: return@Canvas
+                val height = panelSize.height.toFloat()
+                if (height <= 0f) return@Canvas
+                val card = PickerRect(
+                    finalLeft,
+                    finalTop,
+                    panelSize.width.toFloat().coerceAtLeast(1f),
+                    height,
+                )
+                val platter = platterMorph(anchor, card, morph.value, cardRadiusPx, corners.value)
+                val droplet = dropletMorph(anchor, card, morph.value, blendPx, rimDepthPx)
+                val platterRect = PickerRect(platter.left, platter.top, platter.width, platter.height)
+                val dropletRect = PickerRect(droplet.left, droplet.top, droplet.width, droplet.height)
+                val absorption = dropletAbsorption(
+                    platterRect,
+                    platter.cornerRadius,
+                    dropletRect,
+                    blendPx,
+                )
+                val alpha = (
+                    1f - (absorption - Motion.PICKER_DROPLET_FADE_START) /
+                        (Motion.PICKER_DROPLET_FADE_END - Motion.PICKER_DROPLET_FADE_START)
+                    ).coerceIn(0f, 1f)
+                if (alpha <= 0.01f) return@Canvas
+                val dropletPath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            droplet.left,
+                            droplet.top,
+                            droplet.right,
+                            droplet.bottom,
+                            CornerRadius(droplet.cornerRadius),
+                        )
+                    )
+                }
+                // The fan starts at the droplet centre and stops where the smooth-min
+                // field crosses zero, so the neck only paints while the two silhouettes
+                // are genuinely apart. The union keeps the neck from cutting the capsule.
+                val union = Path().apply { addPath(dropletPath) }
+                val bridge = gooBridge(platterRect, platter.cornerRadius, dropletRect, blendPx)
+                if (bridge != null) {
+                    val fan = Path()
+                    for (polygon in bridge) {
+                        if (polygon.size < 3) continue
+                        fan.moveTo(polygon[0].x, polygon[0].y)
+                        for (index in 1 until polygon.size) {
+                            fan.lineTo(polygon[index].x, polygon[index].y)
+                        }
+                        fan.close()
+                    }
+                    val merged = Path()
+                    if (merged.op(union, fan, PathOperation.Union)) {
+                        union.reset()
+                        union.addPath(merged)
+                    }
+                }
+                val platterPath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            platter.left,
+                            platter.top,
+                            platter.right,
+                            platter.bottom,
+                            CornerRadius(platter.cornerRadius),
+                        )
+                    )
+                }
+                // While the platter is still inside the droplet the whole bubble is
+                // painted. Once it pokes out, clipping the droplet against the platter
+                // removes the internal capsule edge, so the platter reads as swallowing
+                // the bubble instead of two outlines crossing.
+                if (platterPokesOut(platterRect, dropletRect)) {
+                    clipPath(platterPath, ClipOp.Difference) {
+                        drawPath(union, dropletFill.copy(alpha = dropletFill.alpha * alpha))
+                        drawPath(
+                            union,
+                            dropletRim.copy(alpha = dropletRim.alpha * alpha),
+                            style = Stroke(width = 1.dp.toPx()),
+                        )
+                    }
+                } else {
+                    drawPath(union, dropletFill.copy(alpha = dropletFill.alpha * alpha))
+                    drawPath(
+                        union,
+                        dropletRim.copy(alpha = dropletRim.alpha * alpha),
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
                 }
             }
         }

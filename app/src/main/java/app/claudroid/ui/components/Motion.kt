@@ -86,6 +86,14 @@ object Motion {
     const val PICKER_GLASS_IN = 0.12f
     const val PICKER_GLASS_FULL = 0.26f
 
+    /**
+     * The split droplet is painted above the glass, so it must not linger on the
+     * finished list. It fades out over this range of [dropletAbsorption]: fully visible
+     * while it is still its own bubble, gone once the platter has mostly swallowed it.
+     */
+    const val PICKER_DROPLET_FADE_START = 0.20f
+    const val PICKER_DROPLET_FADE_END = 0.85f
+
     /** Content blur at the start of the morph, in dp; skipped below API 31. */
     const val PICKER_CONTENT_BLUR = 4f
 }

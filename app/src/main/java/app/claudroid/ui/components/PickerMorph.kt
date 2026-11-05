@@ -139,6 +139,56 @@ internal fun dropletMorph(
 }
 
 /**
+ * How much of [droplet] the [platter] has swallowed, from 0 (still separate) to 1
+ * (fully covered).
+ *
+ * The droplet is painted above the glass so its fill stays readable on the warm page;
+ * that also means it would otherwise sit on the finished list. The last points to
+ * disappear are the capsule's four extremes: until all of them are inside the platter
+ * the droplet is still visibly its own bubble. Once they are, the platter has swallowed
+ * it and the drawing layer fades it out. [blend] is the depth over which that fade runs.
+ */
+internal fun dropletAbsorption(
+    platter: PickerRect,
+    platterRadius: Float,
+    droplet: PickerRect,
+    blend: Float,
+): Float {
+    if (blend <= 0f || droplet.width <= 0f || droplet.height <= 0f) return 1f
+    val extremes = arrayOf(
+        MorphPoint(droplet.left, droplet.centerY),
+        MorphPoint(droplet.right, droplet.centerY),
+        MorphPoint(droplet.centerX, droplet.top),
+        MorphPoint(droplet.centerX, droplet.bottom),
+    )
+    var least = Float.MAX_VALUE
+    for (point in extremes) {
+        least = min(least, -roundedRectDistance(platter, platterRadius, point.x, point.y))
+    }
+    return (least / blend).coerceIn(0f, 1f)
+}
+
+/**
+ * True once any of the platter's four extremes has left the droplet.
+ *
+ * While the platter is still entirely inside the droplet the whole droplet is painted;
+ * subtracting the platter then would punch a hole through the bubble. As soon as the
+ * platter pokes out, the droplet layer clips itself against the platter so the two
+ * silhouettes read as one liquid instead of two overlapping outlines.
+ */
+internal fun platterPokesOut(platter: PickerRect, droplet: PickerRect): Boolean {
+    if (droplet.width <= 0f || droplet.height <= 0f) return true
+    val dropletRadius = droplet.shortestSide / 2f
+    val extremes = arrayOf(
+        MorphPoint(platter.left, platter.centerY),
+        MorphPoint(platter.right, platter.centerY),
+        MorphPoint(platter.centerX, platter.top),
+        MorphPoint(platter.centerX, platter.bottom),
+    )
+    return extremes.any { roundedRectDistance(droplet, dropletRadius, it.x, it.y) > 0f }
+}
+
+/**
  * Signed distance from [a]'s rounded rect to the farthest corner of [b], minus [blend].
  * Negative while the blend still swells [a] toward [b]; non-negative once [b] lies deep
  * enough inside [a] that the two silhouettes read as one.

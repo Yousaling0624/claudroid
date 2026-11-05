@@ -165,6 +165,59 @@ class PickerMorphTest {
         assertClose(0f, roundedRectDistance(rect, radius = 10f, x = 100f, y = 100f))
     }
 
+    @Test
+    fun `droplet absorption stays low while the platter is inside it`() {
+        val droplet = PickerRect(left = 100f, top = 100f, width = 200f, height = 80f)
+        val platter = PickerRect(left = 180f, top = 180f, width = 40f, height = 40f)
+
+        val absorption = dropletAbsorption(platter, 20f, droplet, blend = 28f)
+
+        assertTrue(absorption < 0.2f)
+    }
+
+    @Test
+    fun `droplet absorption reaches one once the platter covers it`() {
+        val droplet = PickerRect(left = 150f, top = 100f, width = 100f, height = 60f)
+        val platter = PickerRect(left = 0f, top = 0f, width = 400f, height = 300f)
+
+        assertClose(1f, dropletAbsorption(platter, 40f, droplet, blend = 28f))
+    }
+
+    @Test
+    fun `droplet absorption grows as the platter swallows it`() {
+        val droplet = PickerRect(left = 100f, top = 100f, width = 200f, height = 80f)
+        val small = dropletAbsorption(
+            PickerRect(left = 180f, top = 180f, width = 40f, height = 40f),
+            platterRadius = 20f,
+            droplet = droplet,
+            blend = 28f,
+        )
+        val medium = dropletAbsorption(
+            PickerRect(left = 90f, top = 30f, width = 220f, height = 220f),
+            platterRadius = 110f,
+            droplet = droplet,
+            blend = 28f,
+        )
+        val covered = dropletAbsorption(
+            PickerRect(left = 0f, top = 0f, width = 400f, height = 300f),
+            platterRadius = 40f,
+            droplet = droplet,
+            blend = 28f,
+        )
+
+        assertTrue(small < medium)
+        assertTrue(medium < covered)
+        assertClose(1f, covered)
+    }
+
+    @Test
+    fun `droplet absorption is complete when there is nothing to sample`() {
+        val droplet = PickerRect(left = 100f, top = 100f, width = 0f, height = 0f)
+        val platter = PickerRect(left = 0f, top = 0f, width = 10f, height = 10f)
+
+        assertClose(1f, dropletAbsorption(platter, 5f, droplet, blend = 28f))
+    }
+
     /** Ray-casting point-in-polygon; proves the fan actually covers the neck gap. */
     private fun contains(polygon: List<MorphPoint>, x: Float, y: Float): Boolean {
         var inside = false
