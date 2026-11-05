@@ -3,25 +3,32 @@ package app.claudroid.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -37,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -306,16 +312,11 @@ fun SettingsGlassDialog(
                     scaleX = scale
                     scaleY = scale
                 }
-                .shadow(
-                    elevation = 20.dp,
+                .glass(
+                    state = frostedState,
                     shape = Radii.xlShape,
-                    clip = false,
-                    ambientColor = colors.ink.copy(alpha = 0.16f),
-                    spotColor = colors.ink.copy(alpha = 0.20f),
+                    tint = colors.paper.copy(alpha = 0.12f),
                 )
-                .clip(Radii.xlShape)
-                .background(colors.paper)
-                .border(1.dp, colors.sand, Radii.xlShape)
                 .pointerInput(Unit) { detectTapGestures { } }
                 .padding(24.dp),
         ) {
@@ -332,6 +333,203 @@ fun SettingsGlassDialog(
             )
             Spacer(Modifier.height(18.dp))
             content()
+        }
+    }
+}
+
+/**
+ * The settings picker: a floating liquid-glass list over the blurred page.
+ *
+ * It must stay in the settings window — a Dialog/Popup/ModalBottomSheet would render in
+ * its own window, where Haze cannot sample the page behind it. The screen root owns the
+ * single instance and opens it through [LocalGlassPicker], so pages do not thread a
+ * sheet parameter through every level.
+ *
+ * Entry is deliberately under-damped: the panel overshoots a hair past 1.0 in scale and
+ * lands back, which is the "q" of the material. Exit is a short tween — a spring on the
+ * way out would feel like the list is resisting the tap. The panel hugs its content up
+ * to 60% of the viewport; longer lists scroll inside.
+ */
+@Composable
+fun GlassOptionSheet(
+    request: GlassPickerRequest,
+    onDismiss: () -> Unit,
+    frostedState: HazeState?,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.appColors
+    val reduceMotion = LocalReduceMotion.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val progress = remember { Animatable(0f) }
+    var closing by remember { mutableStateOf(false) }
+
+    fun close() {
+        if (closing) return
+        closing = true
+        scope.launch {
+            if (reduceMotion) progress.snapTo(0f)
+            else progress.animateTo(0f, tween(160, easing = Motion.EaseChrome))
+            onDismiss()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (reduceMotion) progress.snapTo(1f)
+        else progress.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 420f))
+    }
+    BackHandler { close() }
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val panelMaxHeight = maxHeight * 0.60f
+        GlassScrim(
+            frostedState = frostedState,
+            onTap = { close() },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) },
+            blurRadius = 26.dp,
+            tintAlpha = 0.20f,
+            dimAlpha = 0.12f,
+        )
+        Column(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .padding(horizontal = 24.dp)
+                .heightIn(max = panelMaxHeight)
+                .graphicsLayer {
+                    val p = progress.value
+                    alpha = p.coerceIn(0f, 1f)
+                    val scale = 0.90f + 0.10f * p
+                    scaleX = scale
+                    scaleY = scale
+                    translationY = (1f - p) * 16.dp.toPx()
+                }
+                // The shared glass material already owns the lift shadow; adding a
+                // second one here would stack two dark halos around the panel.
+                .glass(
+                    state = frostedState,
+                    shape = Radii.xlShape,
+                    tint = colors.paper.copy(alpha = 0.10f),
+                )
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, top = 12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(Modifier.weight(1f).padding(top = 8.dp)) {
+                    Text(
+                        request.title,
+                        style = SettingsType.h2,
+                        color = colors.ink,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (request.description != null) {
+                        Text(
+                            request.description,
+                            style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                            color = colors.stone,
+                            modifier = Modifier.padding(top = 4.dp),
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                // The panel is glass itself; sampling it would punch a blurry window
+                // through the material, so the close button uses the paper fallback.
+                GlassIconButton(
+                    icon = AppIcons.Close,
+                    label = "关闭",
+                    onClick = { close() },
+                    frostedState = null,
+                    iconSize = 18.dp,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            LazyColumn(
+                Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                items(request.options) { option ->
+                    GlassOptionRow(option) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        option.onSelect()
+                        close()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 52dp radio row; selected state is carried by the ink check, not a terracotta wash. */
+@Composable
+private fun GlassOptionRow(option: GlassOption, onClick: () -> Unit) {
+    val colors = MaterialTheme.appColors
+    val interaction = remember { MutableInteractionSource() }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .pressFeedback(shape = Radii.mdShape)
+            .clip(Radii.mdShape)
+            .background(
+                if (option.selected) colors.surface1.copy(alpha = 0.80f) else Color.Transparent
+            )
+            .selectable(
+                selected = option.selected,
+                interactionSource = interaction,
+                indication = null,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                option.label,
+                style = SettingsType.rowTitle,
+                color = colors.ink,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (option.subtitle != null) {
+                Text(
+                    option.subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                    color = colors.stone,
+                    modifier = Modifier.padding(top = 2.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (option.selected) colors.ink else Color.Transparent)
+                .border(1.dp, if (option.selected) colors.ink else colors.sand, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (option.selected) {
+                Icon(
+                    AppIcons.Check,
+                    contentDescription = "已选择",
+                    tint = colors.paper,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
         }
     }
 }

@@ -34,6 +34,7 @@ import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.glass.GlassStyle
 
 /**
  * App-level actions offered by the slash palette. These are intentionally not Claude
@@ -126,7 +127,12 @@ fun SlashPalette(
     Column(
         modifier
             .fillMaxWidth()
-            .glass(frostedState, Radii.lgShape, tintAlpha = 0.74f)
+            .glass(
+                frostedState,
+                Radii.lgShape,
+                style = GlassStyle.clear,
+                tint = colors.paper.copy(alpha = 0.12f),
+            )
             .padding(vertical = 6.dp),
     ) {
         Row(

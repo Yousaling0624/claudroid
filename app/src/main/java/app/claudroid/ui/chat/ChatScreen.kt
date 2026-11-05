@@ -118,11 +118,11 @@ import app.claudroid.ui.components.SlashAction
 import app.claudroid.ui.components.StopSlashCommand
 import app.claudroid.ui.components.TitleMenuWidth
 import app.claudroid.ui.components.chatModelLabel
-import app.claudroid.ui.components.hazeSource
+import app.claudroid.ui.components.glassSource
 import app.claudroid.ui.components.pressFeedback
 import app.claudroid.ui.components.quietClickable
 import app.claudroid.ui.components.rememberAiSuggestions
-import app.claudroid.ui.components.rememberFrostedState
+import app.claudroid.ui.components.rememberGlassState
 import app.claudroid.ui.components.rememberSuggestionSkeletonAlpha
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.md.MarkdownText
@@ -252,7 +252,7 @@ fun ChatScreen(
         }
     }
 
-    val frostedState = rememberFrostedState()
+    val glassState = rememberGlassState()
     val headerHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
         FloatingTopBarHeight
 
@@ -272,8 +272,8 @@ fun ChatScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 // Keep the composer outside the sampled layer: its slash palette is a
-                // haze child, and Haze forbids a child from living inside its source.
-                .hazeSource(frostedState)
+                // glass surface, and Haze forbids a child from living inside its source.
+                .glassSource(glassState)
         ) {
             if (messages.isEmpty()) {
                 EmptyChat(
@@ -386,7 +386,7 @@ fun ChatScreen(
                     }
                 }
             },
-            frostedState = frostedState,
+            frostedState = glassState,
         )
         }
 
@@ -399,7 +399,7 @@ fun ChatScreen(
             onModelClick = { showModelMenu = !showModelMenu },
             onNewChat = onNewChat,
             modifier = Modifier.align(Alignment.TopCenter),
-            frostedState = frostedState,
+            frostedState = glassState,
             titleMenuOpen = menuOpen,
             modelMenuOpen = showModelMenu,
             onTitleClick = { menuOpen = !menuOpen },

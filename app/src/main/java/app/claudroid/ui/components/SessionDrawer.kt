@@ -60,6 +60,7 @@ import app.claudroid.engine.EngineManager
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
+import dev.chrisbanes.haze.glass.GlassStyle
 import kotlinx.coroutines.launch
 
 /**
@@ -131,7 +132,12 @@ fun AppDrawer(
                     .padding(horizontal = 14.dp)
                     .height(52.dp)
                     .pressFeedback(shape = newChatShape, dragMorph = true)
-                    .glass(null, newChatShape, tintAlpha = 0.72f)
+                    .glass(
+                        state = null,
+                        shape = newChatShape,
+                        style = GlassStyle.clear,
+                        tint = MaterialTheme.appColors.paper.copy(alpha = 0.16f),
+                    )
                     .quietClickable {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onNewChat()
@@ -435,7 +441,7 @@ private fun DrawerEnginePill(
         modifier
             .height(46.dp)
             .pressFeedback(shape = CircleShape, dragMorph = true)
-            .glass(null, CircleShape, tintAlpha = 0.72f)
+            .glass(null, CircleShape, tint = colors.paper.copy(alpha = 0.16f))
             .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()

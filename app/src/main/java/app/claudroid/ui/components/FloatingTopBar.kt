@@ -65,9 +65,9 @@ private val MenuVerticalOffset = 6.dp
  * button, the long title pill, a compact model switcher and a round new-chat button.
  *
  * The row draws nothing behind the gaps, so scrolling content stays visible between
- * the pills; on the chat screen each pill mounts the same Haze child so the text
- * underneath blurs through. On the landing page there is no scrolling source, so the
- * pills fall back to translucent paper and keep the same silhouette.
+ * the pills; on the chat screen each pill samples the same Haze source so the text
+ * underneath refracts through. On the landing page there is no scrolling source, so
+ * the pills fall back to translucent paper and keep the same silhouette.
  *
  * Both pills own a downward dropdown anchored to their own bounds. The slots receive
  * the already-computed offset so the screens only declare menu content; title menus
@@ -234,7 +234,7 @@ private fun TitlePill(
         Modifier
             .fillMaxSize()
             .pressFeedback(enabled = hasMenu, shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape, tintAlpha = 0.72f)
+            .glass(frostedState, CircleShape, tint = colors.paper.copy(alpha = 0.18f))
             .quietClickable(enabled = hasMenu) { onClick?.invoke() }
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -290,7 +290,7 @@ private fun ModelPill(
             .height(46.dp)
             .widthIn(max = 132.dp)
             .pressFeedback(shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape, tintAlpha = 0.70f)
+            .glass(frostedState, CircleShape, tint = colors.paper.copy(alpha = 0.18f))
             .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()

@@ -259,41 +259,42 @@
 内容增长本身**不得**重新启用跟随，否则回复中上翻会被每个 token 拉回底部。
 `scrollToBottom` 处理"最后一项比视口还高"的尾部溢出。
 
-## 11. 毛玻璃与有机形变（Haze / graphics-shapes）
+## 11. 液态玻璃与有机形变（Haze 2.1 / graphics-shapes）
 
 两个"重"库只用在明确的浮层与玻璃节点上，不做无意义的炫技。所有玻璃都只能在**同一个 window**
-内采样；跨 window 的 `Dialog` / `ModalBottomSheet` 会失去真实模糊，改用同窗口 overlay。
-Haze 固定 1.0.1，Android 11 及以下退化为 `fallbackTint` 近不透明表面，文字必须仍然可读。
+内采样；跨 window 的 `Dialog` / `ModalBottomSheet` 会失去真实折射，改用同窗口 overlay。
+Haze 固定 2.1.0（`haze` / `haze-blur` / `haze-glass`），需要 AGP 9 / compileSdk 37；
+Android 12 以下由 Haze 的有限渲染器近似，文字必须仍然可读。
 
-- **共享玻璃材质**（`ui/components/Glass.kt`）：`Modifier.glass` 默认 `blurRadius = 30dp`；
-  图标型胶囊 tint `0.58–0.66`，文字型胶囊 `0.68–0.74`（保证对比度），共享实现再抬 0.04、
-  上限 0.84；`noiseFactor = 0.06`。阴影 12dp 柔光；亮边为白色→沙色的竖向渐变
-  （浅色 0.92/0.80，深色 0.28/0.48）；内部再叠一层顶部高光→中部透明→底部微墨/微纸的
-  sheen，让浅色模式下的胶囊和 canvas 拉开层次。无 Haze 源时退化为 paper 竖向渐变
-  （浅色 0.94→0.86，深色 0.95→0.90），仍保留同样的阴影和 rim，不能变成一块死白。
-- **悬浮顶栏玻璃**（`ui/components/FloatingTopBar.kt` + `Frosted.kt`）：聊天/首页顶栏由四个
-  独立胶囊组成——圆形侧栏、标题长胶囊（点按打开菜单）、模型切换胶囊、圆形新会话。聊天页
-  滚动内容挂 `Modifier.hazeSource(state)`，每个胶囊挂 `Modifier.frosted(...)`；
-  `HazeStyle` 用 `blurRadius = 28–30dp`、canvas tint、`noiseFactor = 0.06`。首页没有滚动源，
-  胶囊退化为半透明 `paper` + 柔和阴影。顶栏总高 **62dp（不含状态栏）**，
-  `LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`，消息从胶囊之间和下方穿过。
-- **设置悬浮返回键**：46dp 正圆，直接复用同一个 `GlassIconButton`（阴影 / Haze / rim /
-  dragMorph / 长按触感）。设置页顶栏只有这个操作胶囊，**标题是 H1 纸面文字，不做标题气泡**。
-- **模糊模型面板**（`ModelListSheet`）：同窗口浮层。全屏 `GlassScrim` 用 26dp 模糊 +
-  低透明 canvas tint 与压暗；面板本身保持 paper 以保证长模型 ID 的可读性，顶部圆角 28dp。
-  面板高度约 88%，关闭键用共享玻璃轮廓的 fallback paper 形态（面板不透明，若用 Haze
-  会在卡片上开一个透出背景的小窗）。
+- **共享玻璃材质**（`ui/components/Glass.kt`）：`rememberGlassState()` 建状态，滚动内容挂
+  `Modifier.glassSource(state)`，浮层挂 `Modifier.glass(state, shape, style, tint)`。
+  `hazeGlass` 负责边缘折射、Fresnel、镜面高光和 edge shadow；`GlassStyle.regular` 用于
+  顶栏/圆钮，`GlassStyle.clear` 用于斜杠面板等需要更透的表面。tint 只加 0.10–0.18 的暖纸色，
+  不再用 0.6+ 实底、手绘 sheen 或 1dp rim；阴影 10dp 柔光。无 Haze 源时退化为
+  paper→surface1 的低透明度渐变（0.62/0.50），不是旧版的 0.86–0.95 实底。
+- **悬浮顶栏玻璃**（`ui/components/FloatingTopBar.kt`）：聊天/首页顶栏由四个独立胶囊组成——
+  圆形侧栏、标题长胶囊（点按打开菜单）、模型切换胶囊、圆形新会话。聊天页消息列表挂
+  `Modifier.glassSource(state)`，胶囊用同一个 state；首页没有滚动源，走低透明度 fallback。
+  顶栏总高 **62dp（不含状态栏）**，`LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`。
+- **设置悬浮返回键**：46dp 正圆，复用 `GlassIconButton`（新材质 / dragMorph / 长按触感）。
+- **液态玻璃选择列表**（`GlassSelect.kt` + `SettingsChrome.kt`）：服务商预设、接口协议、
+  Key 传递方式、当前档位、引擎模式、Effort、主题等多选项统一为一行“当前值 + chevron”；
+  点击由设置根层弹出 `GlassOptionSheet`，同窗口采样、低 tint 玻璃面板、spring 入场（q 弹），
+  退场 160ms tween。选项行 52dp，radio 语义；列表最高 60% 屏高，内部滚动。
+- **模型面板**（`ModelListSheet`）：同窗口浮层。全屏 `GlassScrim` 用 26dp 模糊 +
+  低透明 canvas tint 与压暗；面板改为玻璃 + 低 paper tint，入场 spring 滑入，高度约 88%。
+  关闭键用 `GlassIconButton(frostedState = null)`，避免在玻璃面板上再开一个采样窗。
 - **侧边栏玻璃入口**（`SessionDrawer.kt`）：抽屉是 paper Surface，没有自己的 Haze 源，
-  因此 X 收起键、新对话、底部三个入口统一用半透明 paper fallback + 12dp 阴影 + rim。
+  因此 X 收起键、新对话、底部三个入口统一用低透明度 paper fallback + 10dp 阴影；
   底部固定为一条行：引擎状态胶囊（weight 1）+ 工作区圆钮 + 设置圆钮，三个控件均 46dp，间距 8dp；
   会话行、搜索框仍是安静按压，不加 dragMorph。
 - **输入胶囊**（`ui/components/Composer.kt`）：`Radii.mdShape`（20dp）长条包住附件、可增高
   输入框和发送/停止；paper 填充 + 1dp 沙色/橙色边框 + 8dp 柔和阴影。`maxLines = 7` 后内部
   滚动，不再继续撑高。编辑消息时上方出现一条 `orangeSoft` 胶囊提示，不把工具条塞回输入框内部。
-- **斜杠功能卡片**（`ui/components/SlashPalette.kt`）：同窗口玻璃卡（共享 30dp 模糊、tint 0.74、
-  12dp 阴影），悬在输入胶囊上方，向上展开 + 淡入；行高 54dp，图标圆容器 + 14.5sp SemiBold
-  标题 + 12sp 说明 + 右侧 `/key` 等宽小字；最大高度 300dp（键盘弹出时取可用高度的 55%），
-  内部滚动。空草稿输入 `/` 才触发，空格 / 清空 / 选中 / 返回即收起；已有草稿不触发。
+- **斜杠功能卡片**（`ui/components/SlashPalette.kt`）：同窗口玻璃卡（`GlassStyle.clear`、
+  paper tint 0.12），悬在输入胶囊上方，向上展开 + 淡入；行高 54dp，图标圆容器 + 14.5sp
+  SemiBold 标题 + 12sp 说明 + 右侧 `/key` 等宽小字；最大高度 300dp（键盘弹出时取可用高度的
+  55%），内部滚动。空草稿输入 `/` 才触发，空格 / 清空 / 选中 / 返回即收起；已有草稿不触发。
   动作只做 App 级操作（新建、模型、附件、工作区、设置、停止、重试），不假装支持 CLI 斜杠命令。
 - **顶栏下拉菜单**（`FloatingMenu` / `ModelDropdownMenu`）：模型与标题菜单都从胶囊向下展开，
   不再用 `ModalBottomSheet`。两者共用 paper 背景、`Radii.menu = 22dp`、0 tonal elevation、

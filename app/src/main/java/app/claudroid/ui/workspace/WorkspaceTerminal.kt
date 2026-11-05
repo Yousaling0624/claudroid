@@ -59,13 +59,16 @@ import app.claudroid.engine.TerminalRunner
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.ClaudeTopBar
 import app.claudroid.ui.components.glass
+import app.claudroid.ui.components.glassSource
 import app.claudroid.ui.components.pressFeedback
 import app.claudroid.ui.components.quietClickable
+import app.claudroid.ui.components.rememberGlassState
 import app.claudroid.ui.theme.AppColors
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
+import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -162,6 +165,9 @@ fun WorkspaceTerminalScreen(
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.appColors
+    // The terminal is its own window: the scrolling output is the source, the input
+    // capsule below it is the glass surface that samples it.
+    val glassState = rememberGlassState()
     val runner = remember(context, container) {
         TerminalRunner(context.applicationContext, container.engine.rootExec)
     }
@@ -281,6 +287,7 @@ fun WorkspaceTerminalScreen(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .glassSource(glassState)
         ) {
             if (!available) {
                 TerminalUnavailable(
@@ -305,6 +312,7 @@ fun WorkspaceTerminalScreen(
                 running = running,
                 onSubmit = ::submit,
                 onStop = { job?.cancel() },
+                glassState = glassState,
             )
         }
     }
@@ -431,6 +439,7 @@ private fun TerminalInput(
     running: Boolean,
     onSubmit: () -> Unit,
     onStop: () -> Unit,
+    glassState: HazeState?,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.appColors
@@ -442,7 +451,7 @@ private fun TerminalInput(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 8.dp)
-            .glass(null, shape, tintAlpha = 0.72f)
+            .glass(glassState, shape, tint = colors.paper.copy(alpha = 0.18f))
             .padding(6.dp)
             .heightIn(min = 52.dp),
         verticalAlignment = Alignment.CenterVertically,

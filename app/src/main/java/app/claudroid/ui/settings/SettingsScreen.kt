@@ -33,10 +33,10 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -70,6 +70,7 @@ import app.claudroid.data.EffortLevel
 import app.claudroid.data.EngineMode
 import app.claudroid.data.ModelTier
 import app.claudroid.data.PermissionMode
+import app.claudroid.data.ProviderPreset
 import app.claudroid.data.Providers
 import app.claudroid.data.ReleaseCheck
 import app.claudroid.data.ReleaseStatus
@@ -79,10 +80,13 @@ import app.claudroid.ui.components.ClaudeDivider
 import app.claudroid.ui.components.ClaudeField
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.CodeCard
+import app.claudroid.ui.components.GlassOption
+import app.claudroid.ui.components.GlassOptionSheet
+import app.claudroid.ui.components.GlassSelectRow
 import app.claudroid.ui.components.GhostButton
+import app.claudroid.ui.components.LocalGlassPicker
 import app.claudroid.ui.components.ModelListSheet
 import app.claudroid.ui.components.Motion
-import app.claudroid.ui.components.PillChip
 import app.claudroid.ui.components.PrimaryButton
 import app.claudroid.ui.components.SettingsCategoryCard
 import app.claudroid.ui.components.SettingsGlassDialog
@@ -93,8 +97,9 @@ import app.claudroid.ui.components.SettingsSection
 import app.claudroid.ui.components.SettingsTopBar
 import app.claudroid.ui.components.WarmSwitch
 import app.claudroid.ui.components.activeTierSummary
-import app.claudroid.ui.components.hazeSource
-import app.claudroid.ui.components.rememberFrostedState
+import app.claudroid.ui.components.glassSource
+import app.claudroid.ui.components.rememberGlassPickerState
+import app.claudroid.ui.components.rememberGlassState
 import app.claudroid.ui.components.tierMappingLabel
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.LocalReduceMotion
@@ -150,7 +155,10 @@ fun SettingsScreen(
     val engineState by container.engine.state.collectAsState()
     val logs by Logx.lines.collectAsState()
     val reduceMotion = LocalReduceMotion.current
-    val frostedState = rememberFrostedState()
+    val frostedState = rememberGlassState()
+    // One picker state for the whole screen: pages open lists through LocalGlassPicker,
+    // and the overlay below is composed once, above every page and the floating bar.
+    val pickerState = rememberGlassPickerState()
     // AnimatedContent disposes the outgoing page, so a page-local rememberScrollState
     // would forget where the user was. Keep one state per destination for the life of
     // the settings screen; returning from a third-level page lands back on its row.
@@ -282,7 +290,7 @@ fun SettingsScreen(
         Box(
             Modifier
                 .fillMaxSize()
-                .hazeSource(frostedState)
+                .glassSource(frostedState)
                 .background(MaterialTheme.appColors.canvas)
         ) {
             AnimatedContent(
@@ -337,82 +345,86 @@ fun SettingsScreen(
                     // bar; 76dp lets the first heading start just under it while the
                     // page still scrolls behind the glass.
                     Spacer(Modifier.height(76.dp))
-                    when {
-                        targetSub == SubPage.PERMISSIONS -> PermissionsPage(settings, scope, container)
-                        targetSub == SubPage.ENGINE_LOGS -> EngineLogsPage(logs)
-                        targetSub == SubPage.EXTRA_ENV -> EnvPage(settings, scope, container)
-                        targetPage == Page.ROOT -> RootPage(
-                            settings = settings,
-                            engineState = engineState,
-                            onOpen = { openPage(it) },
-                        )
-                        targetPage == Page.API -> ApiPage(
-                            settings = settings,
-                            scope = scope,
-                            container = container,
-                            focusManager = focusManager,
-                            loadingModels = loadingModels,
-                            testingConnection = testingConnection,
-                            modelError = modelError,
-                            connectionMessage = connectionMessage,
-                            connectionOk = connectionOk,
-                            modelList = modelList,
-                            onFetchModels = ::fetchModels,
-                            onTestConnection = ::testConnection,
-                            onPickSmall = { modelTarget = ModelTarget.SMALL },
-                        )
-                        targetPage == Page.TIERS -> TierPage(
-                            settings = settings,
-                            onSetTier = ::setActiveTier,
-                            onSelectAuto = ::selectAutoModel,
-                            onOpenTier = { tier -> tierSheet = tier },
-                        )
-                        targetPage == Page.ENGINE -> EnginePage(
-                            container = container,
-                            settings = settings,
-                            engineState = engineState,
-                            scope = scope,
-                            testingEngine = testingEngine,
-                            onTestingChange = { testingEngine = it },
-                            onUninstall = { showUninstall = true },
-                            onOpenPermissions = { openSub(SubPage.PERMISSIONS) },
-                        )
-                        targetPage == Page.LABS -> LabsPage(
-                            settings = settings,
-                            scope = scope,
-                            container = container,
-                        )
-                        targetPage == Page.APPEARANCE -> AppearancePage(
-                            settings = settings,
-                            haptic = haptic,
-                            scope = scope,
-                            container = container,
-                        )
-                        targetPage == Page.WORKSPACE -> WorkspacePage(
-                            appContext = appContext,
-                            usage = usage,
-                            onOpenWorkspace = onOpenWorkspace,
-                            onUninstall = { showUninstall = true },
-                        )
-                        targetPage == Page.ADVANCED -> AdvancedPage(
-                            settings = settings,
-                            scope = scope,
-                            container = container,
-                            onOpenEnv = { openSub(SubPage.EXTRA_ENV) },
-                        )
-                        else -> AboutPage(
-                            appContext = appContext,
-                            logs = logs,
-                            release = release,
-                            releaseError = releaseError,
-                            checkingRelease = checkingRelease,
-                            testingEngine = testingEngine,
-                            scope = scope,
-                            container = container,
-                            onCheckRelease = { scope.launch { checkRelease() } },
-                            onTestingChange = { testingEngine = it },
-                            onOpenLogs = { openSub(SubPage.ENGINE_LOGS) },
-                        )
+                    // Pages open the shared picker through the local instead of taking
+                    // another parameter; the overlay itself is composed once at the root.
+                    CompositionLocalProvider(LocalGlassPicker provides pickerState) {
+                        when {
+                            targetSub == SubPage.PERMISSIONS -> PermissionsPage(settings, scope, container)
+                            targetSub == SubPage.ENGINE_LOGS -> EngineLogsPage(logs)
+                            targetSub == SubPage.EXTRA_ENV -> EnvPage(settings, scope, container)
+                            targetPage == Page.ROOT -> RootPage(
+                                settings = settings,
+                                engineState = engineState,
+                                onOpen = { openPage(it) },
+                            )
+                            targetPage == Page.API -> ApiPage(
+                                settings = settings,
+                                scope = scope,
+                                container = container,
+                                focusManager = focusManager,
+                                loadingModels = loadingModels,
+                                testingConnection = testingConnection,
+                                modelError = modelError,
+                                connectionMessage = connectionMessage,
+                                connectionOk = connectionOk,
+                                modelList = modelList,
+                                onFetchModels = ::fetchModels,
+                                onTestConnection = ::testConnection,
+                                onPickSmall = { modelTarget = ModelTarget.SMALL },
+                            )
+                            targetPage == Page.TIERS -> TierPage(
+                                settings = settings,
+                                onSetTier = ::setActiveTier,
+                                onSelectAuto = ::selectAutoModel,
+                                onOpenTier = { tier -> tierSheet = tier },
+                            )
+                            targetPage == Page.ENGINE -> EnginePage(
+                                container = container,
+                                settings = settings,
+                                engineState = engineState,
+                                scope = scope,
+                                testingEngine = testingEngine,
+                                onTestingChange = { testingEngine = it },
+                                onUninstall = { showUninstall = true },
+                                onOpenPermissions = { openSub(SubPage.PERMISSIONS) },
+                            )
+                            targetPage == Page.LABS -> LabsPage(
+                                settings = settings,
+                                scope = scope,
+                                container = container,
+                            )
+                            targetPage == Page.APPEARANCE -> AppearancePage(
+                                settings = settings,
+                                haptic = haptic,
+                                scope = scope,
+                                container = container,
+                            )
+                            targetPage == Page.WORKSPACE -> WorkspacePage(
+                                appContext = appContext,
+                                usage = usage,
+                                onOpenWorkspace = onOpenWorkspace,
+                                onUninstall = { showUninstall = true },
+                            )
+                            targetPage == Page.ADVANCED -> AdvancedPage(
+                                settings = settings,
+                                scope = scope,
+                                container = container,
+                                onOpenEnv = { openSub(SubPage.EXTRA_ENV) },
+                            )
+                            else -> AboutPage(
+                                appContext = appContext,
+                                logs = logs,
+                                release = release,
+                                releaseError = releaseError,
+                                checkingRelease = checkingRelease,
+                                testingEngine = testingEngine,
+                                scope = scope,
+                                container = container,
+                                onCheckRelease = { scope.launch { checkRelease() } },
+                                onTestingChange = { testingEngine = it },
+                                onOpenLogs = { openSub(SubPage.ENGINE_LOGS) },
+                            )
+                        }
                     }
                     Spacer(Modifier.height(40.dp))
                 }
@@ -506,6 +518,16 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+        }
+
+        // Topmost overlay: the shared liquid-glass list for every select row. Keeping it
+        // last means it also wins BackHandler and covers the model sheet if both exist.
+        pickerState.request?.let { request ->
+            GlassOptionSheet(
+                request = request,
+                onDismiss = { pickerState.dismiss() },
+                frostedState = frostedState,
+            )
         }
     }
 }
@@ -615,6 +637,23 @@ private fun themeLabel(mode: Int): String = when (mode) {
     else -> "跟随系统"
 }
 
+/**
+ * A preset is active only when both the protocol and the normalized base URL match.
+ * Anything else is a hand-edited endpoint, which the select row labels 自定义.
+ */
+internal fun activeProviderPreset(settings: AppSettings): ProviderPreset? =
+    Providers.all.firstOrNull {
+        settings.apiFlavor == it.flavor &&
+            settings.baseUrl.trimEnd('/') == it.baseUrl.trimEnd('/')
+    }
+
+/** One shared explanation for the auth row and its picker options. */
+private fun authStyleHint(style: AuthStyle): String = when (style) {
+    AuthStyle.BEARER -> "发送 Authorization: Bearer <key>（多数自建网关用这个）"
+    AuthStyle.API_KEY -> "发送 x-api-key: <key>（Anthropic 官方风格）"
+    AuthStyle.BOTH -> "两种头都发；若网关报重复鉴权请只选一种"
+}
+
 // ---------------------------------------------------------------- API
 @Composable
 private fun ApiPage(
@@ -642,19 +681,23 @@ private fun ApiPage(
         "服务商预设",
         "点选后自动填好 Base URL、鉴权方式和默认模型；API Key 保持不变。",
     ) {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Providers.all.forEach { preset ->
-                val active = settings.apiFlavor == preset.flavor &&
-                    settings.baseUrl.trimEnd('/') == preset.baseUrl.trimEnd('/')
-                PillChip(preset.label, active) {
-                    focusManager.clearFocus()
-                    scope.launch { container.settings.edit { Providers.apply(it, preset) } }
-                }
-            }
-        }
+        val activePreset = activeProviderPreset(settings)
+        GlassSelectRow(
+            title = "服务商",
+            value = activePreset?.label ?: "自定义",
+            options = Providers.all.map { preset ->
+                GlassOption(
+                    label = preset.label,
+                    subtitle = preset.hint,
+                    selected = preset == activePreset,
+                    onSelect = {
+                        focusManager.clearFocus()
+                        scope.launch { container.settings.edit { Providers.apply(it, preset) } }
+                    },
+                )
+            },
+            sheetDescription = "选择后自动填写 Base URL、鉴权和默认模型，API Key 保持不变。",
+        )
         Hint("档位映射与小模型会清空。")
     }
 
@@ -662,12 +705,19 @@ private fun ApiPage(
         "连接",
         "Base URL 只填到网关根路径：CLI 会自动追加 /v1/messages，带了 /v1 会被自动去掉。",
     ) {
-        GroupLabel("接口协议")
-        ChipRow(
-            options = ApiFlavor.entries.toList(),
-            selected = settings.apiFlavor,
-            label = { it.label },
-            onSelect = { v -> scope.launch { container.settings.edit { it.copy(apiFlavor = v) } } },
+        GlassSelectRow(
+            title = "接口协议",
+            value = settings.apiFlavor.label,
+            options = ApiFlavor.entries.map { flavor ->
+                GlassOption(
+                    label = flavor.label,
+                    subtitle = flavor.hint,
+                    selected = settings.apiFlavor == flavor,
+                    onSelect = {
+                        scope.launch { container.settings.edit { it.copy(apiFlavor = flavor) } }
+                    },
+                )
+            },
         )
         Hint(settings.apiFlavor.hint)
         ClaudeField(
@@ -684,20 +734,22 @@ private fun ApiPage(
             secret = true,
             onChange = { v -> scope.launch { container.settings.edit { it.copy(apiKey = v) } } },
         )
-        GroupLabel("Key 的传递方式")
-        ChipRow(
-            options = AuthStyle.entries.toList(),
-            selected = settings.authStyle,
-            label = { it.label },
-            onSelect = { v -> scope.launch { container.settings.edit { it.copy(authStyle = v) } } },
+        ClaudeDivider(Modifier.padding(top = 14.dp))
+        GlassSelectRow(
+            title = "Key 的传递方式",
+            value = settings.authStyle.label,
+            options = AuthStyle.entries.map { style ->
+                GlassOption(
+                    label = style.label,
+                    subtitle = authStyleHint(style),
+                    selected = settings.authStyle == style,
+                    onSelect = {
+                        scope.launch { container.settings.edit { it.copy(authStyle = style) } }
+                    },
+                )
+            },
         )
-        Hint(
-            when (settings.authStyle) {
-                AuthStyle.BEARER -> "发送 Authorization: Bearer <key>（多数自建网关用这个）"
-                AuthStyle.API_KEY -> "发送 x-api-key: <key>（Anthropic 官方风格）"
-                AuthStyle.BOTH -> "两种头都发；若网关报重复鉴权请只选一种"
-            }
-        )
+        Hint(authStyleHint(settings.authStyle))
     }
 
     SettingsSection(
@@ -776,19 +828,44 @@ private fun TierPage(
         "当前档位",
         "「默认 / 路由组」会把「接口与模型」里填写的模型 ID 原样传给 --model。",
     ) {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PillChip("默认 / 路由组", settings.resolvedActiveTier == null && !settings.usesAutoModel) {
-                onSetTier(null)
-            }
-            // App-level "Auto": omit --model so the official CLI default applies.
-            PillChip("CLI 默认（不指定模型）", settings.usesAutoModel) { onSelectAuto() }
-            ModelTier.entries.forEach { tier ->
-                PillChip(tier.label, settings.resolvedActiveTier == tier) { onSetTier(tier) }
-            }
-        }
+        val activeTier = settings.resolvedActiveTier
+        GlassSelectRow(
+            title = "档位",
+            value = when {
+                settings.usesAutoModel -> "CLI 默认（不指定模型）"
+                activeTier != null -> activeTier.label
+                else -> "默认 / 路由组"
+            },
+            options = buildList {
+                add(
+                    GlassOption(
+                        label = "默认 / 路由组",
+                        subtitle = settings.model.ifBlank { "未设置模型" },
+                        selected = activeTier == null && !settings.usesAutoModel,
+                        onSelect = { onSetTier(null) },
+                    )
+                )
+                // App-level "Auto": omit --model so the official CLI default applies.
+                add(
+                    GlassOption(
+                        label = "CLI 默认（不指定模型）",
+                        subtitle = "不传 --model / ANTHROPIC_MODEL",
+                        selected = settings.usesAutoModel,
+                        onSelect = { onSelectAuto() },
+                    )
+                )
+                ModelTier.entries.forEach { tier ->
+                    add(
+                        GlassOption(
+                            label = tier.label,
+                            subtitle = tierMappingLabel(settings, tier),
+                            selected = activeTier == tier,
+                            onSelect = { onSetTier(tier) },
+                        )
+                    )
+                }
+            },
+        )
         Hint(
             if (settings.usesAutoModel) "CLI 默认 · 不传 --model / ANTHROPIC_MODEL，由 Claude Code 使用自身默认模型"
             else activeTierSummary(settings)
@@ -860,16 +937,22 @@ private fun EnginePage(
             },
         )
 
-        GroupLabel("引擎模式")
-        ChipRow(
-            options = EngineMode.entries.toList(),
-            selected = settings.engineMode,
-            label = { it.label },
-            onSelect = { mode ->
-                scope.launch {
-                    container.settings.edit { it.copy(engineMode = mode) }
-                    if (mode != EngineMode.PROOT) container.engine.probeRoot()
-                }
+        ClaudeDivider(Modifier.padding(top = 10.dp))
+        GlassSelectRow(
+            title = "引擎模式",
+            value = settings.engineMode.label,
+            options = EngineMode.entries.map { mode ->
+                GlassOption(
+                    label = mode.label,
+                    subtitle = mode.hint,
+                    selected = settings.engineMode == mode,
+                    onSelect = {
+                        scope.launch {
+                            container.settings.edit { it.copy(engineMode = mode) }
+                            if (mode != EngineMode.PROOT) container.engine.probeRoot()
+                        }
+                    },
+                )
             },
         )
         Hint(settings.engineMode.hint)
@@ -1030,12 +1113,19 @@ private fun LabsPage(
     }
 
     SettingsSection("推理强度", "AUTO 时不传该参数，沿用官方默认。") {
-        GroupLabel("Effort")
-        ChipRow(
-            options = EffortLevel.entries.toList(),
-            selected = settings.effort,
-            label = { it.label },
-            onSelect = { v -> scope.launch { container.settings.edit { it.copy(effort = v) } } },
+        GlassSelectRow(
+            title = "Effort",
+            value = settings.effort.label,
+            options = EffortLevel.entries.map { level ->
+                GlassOption(
+                    label = level.label,
+                    subtitle = level.hint,
+                    selected = settings.effort == level,
+                    onSelect = {
+                        scope.launch { container.settings.edit { it.copy(effort = level) } }
+                    },
+                )
+            },
         )
         Hint(settings.effort.hint)
     }
@@ -1095,17 +1185,23 @@ private fun AppearancePage(
         intro = "整页跟随系统或固定浅色/深色；没有纯黑和蓝灰。",
     )
     SettingsSection("主题", "切换后立即生效，不会重建正在进行的对话。") {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            listOf("跟随系统", "浅色", "深色").forEachIndexed { index, label ->
-                PillChip(label, settings.themeMode == index) {
-                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                    scope.launch { container.settings.edit { it.copy(themeMode = index) } }
-                }
-            }
-        }
+        val themes = listOf("跟随系统", "浅色", "深色")
+        GlassSelectRow(
+            title = "主题模式",
+            value = themes.getOrElse(settings.themeMode) { themes[0] },
+            options = themes.mapIndexed { index, label ->
+                GlassOption(
+                    label = label,
+                    selected = settings.themeMode == index,
+                    onSelect = {
+                        haptic.performHapticFeedback(
+                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                        )
+                        scope.launch { container.settings.edit { it.copy(themeMode = index) } }
+                    },
+                )
+            },
+        )
         Hint("当前：${themeLabel(settings.themeMode)}。")
     }
 }
@@ -1401,28 +1497,6 @@ private fun EnvPage(
 }
 
 // ---------------------------------------------------------------- shared chrome
-@Composable
-private fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        options.forEach { option ->
-            PillChip(label(option), option == selected) { onSelect(option) }
-        }
-    }
-}
-
-@Composable
-private fun GroupLabel(text: String) {
-    Text(
-        text,
-        style = SettingsType.eyebrow,
-        color = MaterialTheme.appColors.stone,
-        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-    )
-}
-
 @Composable
 private fun Hint(text: String) {
     Text(

@@ -1,22 +1,21 @@
 package app.claudroid.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -24,95 +23,113 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.claudroid.ui.theme.appColors
+import dev.chrisbanes.haze.ExperimentalHazeApi
+import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.HazeColorEffect
+import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.glass.GlassStyle
+import dev.chrisbanes.haze.glass.hazeGlass
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 
 /**
- * How much denser the shared glass runs than the call site's hint. The lift is applied
- * in one place so every capsule keeps text contrast while the sheen and rim (not a flat
- * opaque fill) carry the liquid look.
- */
-private const val GlassTintLift = 0.04f
-private const val GlassTintMax = 0.84f
-
-/**
- * The shared liquid-glass surface: warm soft shadow, a clipped Haze child (or a
- * translucent paper gradient when there is no source to blur), an interior sheen and a
- * bright-to-sand rim that catches the light like iOS's floating capsules.
+ * The shared state for one screen's glass. The scrolling content mounts
+ * [Modifier.glassSource] with this state and every floating surface in the same window
+ * consumes it through [Modifier.glass].
  *
- * The layering is what separates a glass chip from the near-identical canvas in light
- * mode: the shadow lifts it off the page, the top-edge white sheen gathers light just
- * under the rim, and the bottom shade gives the material a little thickness. On dark
- * mode the same layers stay dim so the capsule does not turn gray or milky. All of it
- * lives here — call sites only choose shape, tint and blur.
- *
- * Extracted from the chat top bar so the settings chrome can reuse the exact same
- * material instead of growing a second, slightly different glass recipe.
+ * Haze can only sample nodes from the same window, which is why overlays that must blur
+ * the page (slash palette, model sheets, scrims) live in the screen instead of a Dialog.
  */
 @Composable
+fun rememberGlassState(): HazeState = rememberHazeState()
+
+/** Marks the scrolling content that the floating glass surfaces sample. */
+fun Modifier.glassSource(state: HazeState): Modifier = hazeSource(state)
+
+/**
+ * Liquid-glass material on top of Haze 2's `hazeGlass`.
+ *
+ * Haze 2 renders the refraction, specular rim, edge shadow and Fresnel response itself;
+ * this wrapper only owns the shared parts:
+ * - the shape, because `hazeGlass` receives it through the Style rather than a modifier
+ *   parameter;
+ * - one shared specular/ambient/dispersion calibration so a capsule reads as glass
+ *   instead of a flat translucent rectangle (kept subtle: 0.045 is visible on edges,
+ *   not a rainbow, and the dark values stay below the milky threshold);
+ * - the warm [tint] (applied to refracted content, not painted as an opaque wash);
+ * - a lower-opacity lift shadow, so it does not fight Haze's own edge shadow.
+ *
+ * With no source (home, drawer, an opaque sheet) the surface falls back to a
+ * low-opacity paper gradient. It stays translucent on purpose: a 0.86-0.95 fill was
+ * what made the old chrome read as an outlined card rather than glass.
+ */
+@OptIn(ExperimentalHazeApi::class)
+@Composable
 fun Modifier.glass(
-    frostedState: HazeState?,
-    shape: Shape,
-    blurRadius: Dp = 30.dp,
-    tintAlpha: Float = 0.64f,
+    state: HazeState?,
+    shape: RoundedCornerShape,
+    style: GlassStyle = GlassStyle.regular,
+    tint: Color? = null,
 ): Modifier {
     val colors = MaterialTheme.appColors
     val dark = colors.dark
-    val tint = (tintAlpha + GlassTintLift).coerceAtMost(GlassTintMax)
 
-    // A bright top edge and a warmer/deeper bottom edge. The contrast is raised from
-    // the old two-stop rim so the 46dp capsules keep an outline even when the canvas
-    // and paper fills are only a few RGB points apart.
-    val rim = Brush.verticalGradient(
-        listOf(
-            Color.White.copy(alpha = if (dark) 0.28f else 0.92f),
-            colors.sand.copy(alpha = if (dark) 0.48f else 0.80f),
-        )
-    )
-    // Painted above the tint/blur but below the content: a specular top band, a soft
-    // mid falloff and a warm bottom edge. Only the light values are strong; dark mode
-    // gets a faint white kiss and a canvas-colored base so it stays charcoal, not gray.
-    val sheen = Brush.verticalGradient(
-        0f to Color.White.copy(alpha = if (dark) 0.06f else 0.28f),
-        0.32f to Color.White.copy(alpha = if (dark) 0.015f else 0.07f),
-        0.60f to Color.Transparent,
-        1f to (if (dark) colors.canvas.copy(alpha = 0.24f) else colors.ink.copy(alpha = 0.045f)),
-    )
-    // Without a same-window Haze source (home, drawer, model sheet) the fill is still a
-    // slightly translucent paper gradient rather than one flat swatch, so the sheen and
-    // rim have something to sit on.
-    val fallback = Brush.verticalGradient(
-        listOf(
-            colors.paper.copy(alpha = if (dark) 0.95f else 0.94f),
-            colors.paper.copy(alpha = if (dark) 0.90f else 0.86f),
-        )
-    )
-
-    return this
-        .shadow(
-            elevation = 12.dp,
-            shape = shape,
-            clip = false,
-            ambientColor = colors.ink.copy(alpha = if (dark) 0.48f else 0.16f),
-            spotColor = colors.ink.copy(alpha = if (dark) 0.58f else 0.22f),
-        )
-        .clip(shape)
-        .then(
-            if (frostedState != null) {
-                Modifier.frosted(
-                    state = frostedState,
-                    surface = colors.canvas,
-                    blurRadius = blurRadius,
-                    tintAlpha = tint,
-                )
-            } else {
-                Modifier.background(fallback)
-            }
-        )
-        .drawWithContent {
-            drawRect(brush = sheen)
-            drawContent()
+    // Styles compare by identity and are resolved on every frame; rebuilding this in
+    // each composition would replace the node's material unnecessarily.
+    val resolved = remember(style, shape, tint, dark) {
+        var result = style.then {
+            this.shape(shape)
+            // One shared calibration on top of Regular/Clear: enough highlight and
+            // dispersion to read as glass, still calmer than the built-in defaults in
+            // dark mode where a bright ambient response turns the capsule milky.
+            specularIntensity(if (dark) 0.46f else 0.54f)
+            ambientResponse(if (dark) 0.16f else 0.24f)
+            chromaticAberrationStrength(0.045f)
+            edgeSoftness(1.dp)
+            // Haze resolves its built-in light/dark base from the *system* appearance,
+            // while this app can force its own theme. Override every appearance-dependent
+            // field so Regular/Clear both follow `appColors.dark`, not the platform.
+            edgeShadow(Color.Black.copy(alpha = if (dark) 0.32f else 0.14f))
+            contrast(if (dark) 0.08f else 0f)
+            whitePoint(if (dark) -0.22f else 0.55f)
+            chromaMultiplier(if (dark) 1.1f else 1.5f)
         }
-        .border(1.dp, rim, shape)
+        if (tint != null) {
+            val glassTint = tint
+            result = result.then { this.tint(glassTint) }
+        }
+        result
+    }
+
+    // Haze's edge shadow already darkens the rim; a 10dp ambient lift keeps the capsule
+    // floating without stacking a second hard outline on top of it.
+    val raised = this.shadow(
+        elevation = 10.dp,
+        shape = shape,
+        clip = false,
+        ambientColor = colors.ink.copy(alpha = if (dark) 0.30f else 0.10f),
+        spotColor = colors.ink.copy(alpha = if (dark) 0.38f else 0.14f),
+    )
+
+    return if (state != null) {
+        raised.hazeGlass(input = HazeInput.Sources(state), style = resolved)
+    } else {
+        raised
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        colors.paper.copy(alpha = if (dark) 0.72f else 0.62f),
+                        // The lower stop is a touch warmer/darker than the page, so the
+                        // capsule keeps an edge on paper without an opaque rim border.
+                        (if (dark) colors.canvas else colors.surface1)
+                            .copy(alpha = if (dark) 0.56f else 0.50f),
+                    )
+                )
+            )
+    }
 }
 
 /**
@@ -132,11 +149,12 @@ fun GlassIconButton(
     tint: Color = MaterialTheme.appColors.graphite,
 ) {
     val haptic = LocalHapticFeedback.current
+    val glassTint = MaterialTheme.appColors.paper.copy(alpha = 0.16f)
     Box(
         modifier
             .size(size)
             .pressFeedback(shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape)
+            .glass(frostedState, CircleShape, tint = glassTint)
             .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
@@ -153,15 +171,15 @@ fun GlassIconButton(
 }
 
 /**
- * Full-window scrim that blurs the settings content behind an in-window modal.
+ * Full-window scrim that blurs the page behind an in-window modal.
  *
- * Haze can only sample nodes from the same window, which is why the model picker no
- * longer uses ModalBottomSheet/Dialog. The scrim also owns the tap-to-dismiss
- * gesture; being the topmost hit-testable node, it keeps drags away from the
- * scrollable page underneath. The dim wash sits *above* the blur so the card keeps
- * its contrast in both themes; on Android 11 and older Haze falls back to the
- * opaque-ish tint and the scrim still reads as a modal backdrop.
+ * This uses Blur rather than Glass on purpose: a full-screen glass effect would pay for
+ * refraction it cannot show and would warp the whole page. The scrim tint is a color
+ * effect on the blurred input (not a solid background behind it), so the card on top
+ * still has a predictable contrast base in both themes. On a screen without a source
+ * the fallback is a translucent canvas wash, not the old near-opaque 0.94 fill.
  */
+@OptIn(ExperimentalHazeApi::class)
 @Composable
 fun GlassScrim(
     frostedState: HazeState?,
@@ -172,16 +190,20 @@ fun GlassScrim(
     dimAlpha: Float = 0.14f,
 ) {
     val colors = MaterialTheme.appColors
+    val style = remember(blurRadius, tintAlpha, colors.canvas) {
+        HazeBlurStyle {
+            blurRadius(blurRadius)
+            noiseFactor(0.06f)
+            colorEffects(listOf(HazeColorEffect.tint(colors.canvas.copy(alpha = tintAlpha))))
+            // Blur is unavailable on some older devices; keep the backdrop
+            // readable there instead of dropping the scrim to plain content.
+            fallbackColorEffect(HazeColorEffect.tint(colors.canvas.copy(alpha = 0.62f)))
+        }
+    }
     val blur = if (frostedState != null) {
-        Modifier.frosted(
-            state = frostedState,
-            surface = colors.canvas,
-            blurRadius = blurRadius,
-            tintAlpha = tintAlpha,
-            fallbackAlpha = 0.94f,
-        )
+        Modifier.hazeBlur(HazeInput.Sources(frostedState), style)
     } else {
-        Modifier.background(colors.canvas.copy(alpha = 0.94f))
+        Modifier.background(colors.canvas.copy(alpha = 0.62f))
     }
     val dim = if (colors.dark) {
         // `ink` is near-white in the dark palette; dimming with it would lift the

@@ -2,6 +2,7 @@ package app.claudroid.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,7 +45,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -215,11 +215,13 @@ private fun ModelMenuItem(
  * mappings. Blank writes are meaningful for tiers (official default) and small model.
  *
  * This is a tall in-window panel (88% of the viewport) rather than a ModalBottomSheet:
- * Haze can only sample nodes in the same window, and the point of the card is to blur
+ * Haze can only sample nodes in the same window, and the point of the panel is to blur
  * the settings page behind it. The scrim, the panel and the page share one HazeState.
- * The header carries the H1, count and a 46dp close capsule; the list owns the weight,
- * and the manual-input block stays pinned above the navigation bar. [frostedState] may
- * be null for previews, in which case the scrim falls back to a translucent canvas.
+ * The panel is liquid glass with a low paper tint so the page still shows through the
+ * refraction; it enters on a spring and slides up from the bottom. The header carries
+ * the H1, count and a 46dp close capsule; the list owns the weight, and the manual-input
+ * block stays pinned above the navigation bar. [frostedState] may be null for previews,
+ * in which case the panel and scrim fall back to translucent paper/canvas.
  */
 @Composable
 fun ModelListSheet(
@@ -256,7 +258,9 @@ fun ModelListSheet(
 
     LaunchedEffect(Unit) {
         if (reduceMotion) progress.snapTo(1f)
-        else progress.animateTo(1f, tween(Motion.SLOW, easing = Motion.EaseOut))
+        // Slightly under-damped so the tall panel settles with a soft overshoot instead
+        // of arriving like a rigid drawer.
+        else progress.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 380f))
     }
     BackHandler { close() }
 
@@ -268,7 +272,7 @@ fun ModelListSheet(
             onTap = { close() },
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = progress.value },
+                .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) },
             blurRadius = 26.dp,
             tintAlpha = 0.20f,
             dimAlpha = 0.10f,
@@ -279,19 +283,19 @@ fun ModelListSheet(
                 .fillMaxWidth()
                 .height(maxHeight * 0.88f)
                 .graphicsLayer {
-                    alpha = progress.value
-                    translationY = (1f - progress.value) * screenHeightPx
+                    alpha = progress.value.coerceIn(0f, 1f)
+                    // A spring can overshoot past 1. Clamping the slide at its rest line
+                    // keeps the square bottom edge on the navigation bar; letting the
+                    // overshoot through would lift the sheet and reveal a scrim strip.
+                    translationY = ((1f - progress.value) * screenHeightPx).coerceAtLeast(0f)
                 }
-                .shadow(
-                    elevation = 20.dp,
+                // The glass material owns the lift shadow; the old paper panel's extra
+                // 20dp shadow would stack a second halo on top of it.
+                .glass(
+                    state = frostedState,
                     shape = cardShape,
-                    clip = false,
-                    ambientColor = colors.ink.copy(alpha = if (colors.dark) 0.5f else 0.14f),
-                    spotColor = colors.ink.copy(alpha = if (colors.dark) 0.55f else 0.18f),
+                    tint = colors.paper.copy(alpha = 0.10f),
                 )
-                .clip(cardShape)
-                .background(colors.paper)
-                .border(1.dp, colors.sand.copy(alpha = 0.9f), cardShape)
                 .navigationBarsPadding()
                 .pointerInput(Unit) { detectTapGestures { } }
         ) {
@@ -328,9 +332,8 @@ fun ModelListSheet(
                     )
                 }
                 Spacer(Modifier.width(10.dp))
-                // The panel is opaque paper, so the close button uses the shared glass
-                // silhouette with its translucent-paper fallback: sampling the page
-                // behind the card would punch a blurry window through the panel.
+                // The panel is glass; sampling it would punch a blurry window through the
+                // material, so the close button uses the translucent-paper fallback.
                 GlassIconButton(
                     icon = AppIcons.Close,
                     label = "关闭",

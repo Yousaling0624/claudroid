@@ -49,7 +49,7 @@ jobs:
           fi
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          "$SDKMANAGER" "platforms;android-37.0" "build-tools;36.0.0" >/dev/null
         shell: bash
 
       # v6 moves caching into a proprietary component; v5 is Node 24 and still MIT.

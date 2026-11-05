@@ -1,8 +1,8 @@
 import java.io.File
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
@@ -99,7 +99,10 @@ val hasEnvKeystore = envKeystore != null && File(envKeystore).isFile
 
 android {
     namespace = "app.claudroid"
-    compileSdk = 35
+    // AGP 9 splits the platform minor version out of compileSdk; the installed
+    // package is "platforms;android-37.0", so the default (android-37) would miss.
+    compileSdk = 37
+    compileSdkMinor = 0
 
     defaultConfig {
         applicationId = "app.claudroid"
@@ -110,10 +113,14 @@ android {
         targetSdk = 28
         versionCode = appVersionCode
         versionName = appVersionName
-        resourceConfigurations += listOf("zh", "en")
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
+    }
+
+    androidResources {
+        // AGP 9 replaces defaultConfig.resourceConfigurations with locale filters.
+        localeFilters.addAll(listOf("zh", "en"))
     }
 
     signingConfigs {
@@ -138,10 +145,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     buildFeatures {
@@ -170,6 +173,14 @@ android {
     }
 }
 
+// AGP 9's built-in Kotlin exposes the standard `kotlin` extension; the old
+// android.kotlinOptions block no longer exists.
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Proot runtime (Termux proot + loader + libtalloc + libandroid-shmem)
 //
@@ -177,7 +188,7 @@ android {
 // binaries, and .gitignore keeps them out of the tree. The script is idempotent;
 // pass -PskipProot to build a root/chroot-only APK offline.
 // ---------------------------------------------------------------------------
-val fetchProot by tasks.registering(Exec::class) {
+val fetchProot = tasks.register<Exec>("fetchProot") {
     group = "build"
     description = "Fetch Termux proot runtime binaries into app/src/main/jniLibs"
     onlyIf { !project.hasProperty("skipProot") }
@@ -197,7 +208,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.compose.ui:ui")
@@ -211,9 +222,11 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     // Frosted top bars / sheets: a real blur pass instead of a flat translucent fill.
-    // Pinned to 1.0.1: later lines move to Kotlin 2.1 / Compose 1.12 and cannot compile
-    // against this project's Kotlin 2.0.21 + Compose 1.7.0.
-    implementation("dev.chrisbanes.haze:haze:1.0.1")
+    // 2.1.0 glass is the reason this project runs AGP 9 / compileSdk 37 / Compose 1.12;
+    // do not downgrade without also downgrading the UI to the Haze 1.x API.
+    implementation("dev.chrisbanes.haze:haze:2.1.0")
+    implementation("dev.chrisbanes.haze:haze-blur:2.1.0")
+    implementation("dev.chrisbanes.haze:haze-glass:2.1.0")
 
     // Organic corner morphs for the loading/brand moment; 1.1.0 is built on Kotlin 2.0.21.
     implementation("androidx.graphics:graphics-shapes:1.1.0")
