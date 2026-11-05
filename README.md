@@ -276,3 +276,8 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 - 没有「逐条批准工具调用」的图形界面；headless 下由 CLI 的权限模式决定。
 - 一个 turn 一个进程（+ `--resume`），换来稳定；代价是每轮约 100 ms 启动开销。
 - 截图为原型渲染，真机 UI 以 Compose 实现为准（布局一致）。
+
+## 许可证
+
+GNU General Public License v3.0，见 [`LICENSE`](LICENSE) 与
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

@@ -1,10 +1,11 @@
 package app.claudroid.ui.components
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,17 +19,22 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
@@ -44,14 +50,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.ui.theme.AppIcons
@@ -60,7 +88,12 @@ import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
 import dev.chrisbanes.haze.HazeState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Settings-only chrome. These components deliberately sit apart from the generic
@@ -338,17 +371,20 @@ fun SettingsGlassDialog(
 }
 
 /**
- * The settings picker: a floating liquid-glass list over the blurred page.
+ * The settings picker: an anchored liquid-glass list that grows out of the row that
+ * opened it.
  *
  * It must stay in the settings window — a Dialog/Popup/ModalBottomSheet would render in
  * its own window, where Haze cannot sample the page behind it. The screen root owns the
  * single instance and opens it through [LocalGlassPicker], so pages do not thread a
  * sheet parameter through every level.
  *
- * Entry is deliberately under-damped: the panel overshoots a hair past 1.0 in scale and
- * lands back, which is the "q" of the material. Exit is a short tween — a spring on the
- * way out would feel like the list is resisting the tap. The panel hugs its content up
- * to 60% of the viewport; longer lists scroll inside.
+ * The panel is laid out once at its final width and capped height; the opening morph is
+ * pure graphicsLayer work. A round bubble forms at the tapped row, stretches toward the
+ * panel while a row-sized droplet splits away and flows into it, and a second spring
+ * squares off the corners once the bubble has left the row. The LazyColumn is never
+ * re-laid out per frame, and closing runs the geometry back into the row without a
+ * wobble.
  */
 @Composable
 fun GlassOptionSheet(
@@ -361,113 +397,423 @@ fun GlassOptionSheet(
     val reduceMotion = LocalReduceMotion.current
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
-    val progress = remember { Animatable(0f) }
+    val density = LocalDensity.current
+
+    val morph = remember { Animatable(0f) }
+    val corners = remember { Animatable(0f) }
+    val contentOut = remember { Animatable(1f) }
+    var rootBounds by remember { mutableStateOf<Rect?>(null) }
+    var panelSize by remember { mutableStateOf(IntSize.Zero) }
+    var started by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
+    var openingJob by remember { mutableStateOf<Job?>(null) }
+    val selectedIndex = remember(request) {
+        request.options.indexOfFirst { it.selected }.coerceAtLeast(0)
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+
+    fun open() {
+        if (started || closing) return
+        started = true
+        // The panel is first measured before the anchored cap is known, sometimes with a
+        // viewport tall enough to fit everything below the selected row. LazyColumn then
+        // clamps the initial index to the end of the content, and that offset survives
+        // the shorter final viewport as a sliver of the previous row above the selection.
+        // Pin the selected row once the panel has its final height; `open` only runs on
+        // that settled measurement and exactly once, so user scrolling is left alone.
+        scope.launch { listState.scrollToItem(selectedIndex) }
+        if (reduceMotion) {
+            openingJob = scope.launch {
+                morph.snapTo(1f)
+                corners.snapTo(1f)
+                contentOut.snapTo(1f)
+            }
+        } else {
+            // Launch on the composition scope, never inside the trigger effect: the
+            // panel often measures twice (fallback width/height, then the anchored
+            // cap), which restarts that effect. Animations owned by the effect would
+            // be cancelled while `started` stays true, leaving the picker invisible.
+            // The job is held so a close can cancel the delayed corner spring cleanly.
+            openingJob = scope.launch {
+                coroutineScope {
+                    launch { morph.animateTo(1f, Motion.PickerMorph) }
+                    launch {
+                        delay(Motion.PICKER_CORNERS_DELAY)
+                        corners.animateTo(1f, Motion.PickerCorners)
+                    }
+                }
+            }
+        }
+    }
 
     fun close() {
         if (closing) return
         closing = true
+        openingJob?.cancel()
+        openingJob = null
         scope.launch {
-            if (reduceMotion) progress.snapTo(0f)
-            else progress.animateTo(0f, tween(160, easing = Motion.EaseChrome))
+            if (reduceMotion || !started) {
+                morph.snapTo(0f)
+                corners.snapTo(0f)
+                contentOut.snapTo(0f)
+            } else {
+                // The list leaves before the drop starts moving; otherwise the text
+                // would still be legible while it is squeezed back into the row.
+                contentOut.animateTo(0f, tween(Motion.PICKER_CONTENT_OUT, easing = Motion.EaseChrome))
+                coroutineScope {
+                    launch { morph.animateTo(0f, Motion.PickerRetract) }
+                    launch { corners.animateTo(0f, Motion.PickerRetract) }
+                }
+            }
             onDismiss()
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (reduceMotion) progress.snapTo(1f)
-        else progress.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = 420f))
-    }
     BackHandler { close() }
 
-    BoxWithConstraints(modifier.fillMaxSize()) {
-        val panelMaxHeight = maxHeight * 0.60f
-        GlassScrim(
-            frostedState = frostedState,
-            onTap = { close() },
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) },
-            blurRadius = 26.dp,
-            tintAlpha = 0.20f,
-            dimAlpha = 0.12f,
+    BoxWithConstraints(
+        modifier
+            .fillMaxSize()
+            .onGloballyPositioned { rootBounds = it.boundsInWindow() },
+    ) {
+        val viewportWidth = constraints.maxWidth.toFloat()
+        val viewportHeight = constraints.maxHeight.toFloat()
+        val gapPx = with(density) { 6.dp.toPx() }
+        val marginPx = with(density) { 12.dp.toPx() }
+        val edgeInsets = WindowInsets.safeDrawing.asPaddingValues()
+        val topInsetPx = with(density) { edgeInsets.calculateTopPadding().toPx() } +
+            with(density) { 8.dp.toPx() }
+        val bottomInsetPx = with(density) { edgeInsets.calculateBottomPadding().toPx() } +
+            with(density) { 8.dp.toPx() }
+        val effectiveHeight = (viewportHeight - topInsetPx - bottomInsetPx).coerceAtLeast(0f)
+        val maxWidthPx = with(density) { 420.dp.toPx() }
+
+        // Both rects are in window coordinates, so the overlay's own origin removes any
+        // status-bar/window offset; the safe-area inset is subtracted separately so the
+        // placement math can treat the usable viewport as a plain rectangle.
+        val root = rootBounds
+        val anchor = request.anchor
+        val anchorRect = if (root != null && anchor != null) {
+            Rect(
+                left = anchor.left - root.left,
+                top = anchor.top - root.top - topInsetPx,
+                right = anchor.right - root.left,
+                bottom = anchor.bottom - root.top - topInsetPx,
+            )
+        } else {
+            null
+        }
+
+        val panelWidthPx = minOf(
+            anchorRect?.width ?: maxWidthPx,
+            maxWidthPx,
+            (viewportWidth - marginPx * 2f).coerceAtLeast(0f),
         )
-        Column(
+
+        // The side space is known before the content is measured. Capping the panel at
+        // the roomier side means the chosen direction always fits the measured height,
+        // so the list needs one layout pass rather than shrinking after the fact.
+        val maxSidePx = if (anchorRect != null) {
+            val below = effectiveHeight - marginPx - (anchorRect.bottom + gapPx)
+            val above = anchorRect.top - gapPx - marginPx
+            maxOf(below, above).coerceAtLeast(0f)
+        } else {
+            effectiveHeight
+        }
+        val maxPanelHeightPx = minOf(effectiveHeight * 0.6f, maxSidePx).coerceAtLeast(0f)
+
+        val placement = when {
+            panelSize.height <= 0 -> null
+            anchorRect != null -> placePicker(
+                anchor = PickerRect(
+                    left = anchorRect.left,
+                    top = anchorRect.top,
+                    width = anchorRect.width,
+                    height = anchorRect.height,
+                ),
+                viewportWidth = viewportWidth,
+                viewportHeight = effectiveHeight,
+                contentHeight = panelSize.height.toFloat(),
+                gap = gapPx,
+                margin = marginPx,
+                maxWidth = maxWidthPx,
+                maxHeightFraction = 0.6f,
+            )
+            // Previews or a host without a row: keep the picker usable with a plain
+            // centred fade, but never grow it out of a fake rect.
+            else -> PickerPlacement(
+                left = (viewportWidth - panelWidthPx) / 2f,
+                top = (effectiveHeight - panelSize.height) / 2f,
+                width = panelWidthPx,
+                height = panelSize.height.toFloat(),
+                expandsUp = false,
+            )
+        }
+
+        // Until the panel is measured it still has to be in the tree, so park it at the
+        // anchor while fully transparent. finalTop is in overlay coordinates.
+        val finalLeft = placement?.left ?: anchorRect?.left ?: ((viewportWidth - panelWidthPx) / 2f)
+        val finalTop = placement?.let { it.top + topInsetPx }
+            ?: anchorRect?.let { it.top + topInsetPx }
+            ?: ((viewportHeight - maxPanelHeightPx) / 2f)
+
+        // Placement works in the safe-area viewport; the morph draws in overlay
+        // coordinates, so the anchor and card need the top inset added back once.
+        val anchorOverlay = anchorRect?.let {
+            PickerRect(it.left, it.top + topInsetPx, it.width, it.height)
+        }
+        val cardRadiusPx = with(density) { Radii.menu.toPx() }
+        val blendPx = with(density) { 28.dp.toPx() }
+        val rimDepthPx = with(density) { 8.dp.toPx() }
+        val contentBlurPx = with(density) { Motion.PICKER_CONTENT_BLUR.dp.toPx() }
+        val dropletFill = colors.paper.copy(alpha = 0.92f)
+        val dropletRim = if (colors.dark) {
+            colors.ink.copy(alpha = 0.18f)
+        } else {
+            colors.sand.copy(alpha = 0.70f)
+        }
+
+        // Trigger only; the animations run on the composition scope, so the second
+        // measurement pass can restart this effect without cancelling them.
+        LaunchedEffect(panelSize, placement, rootBounds, reduceMotion) {
+            if (rootBounds == null || placement == null) return@LaunchedEffect
+            if (abs(panelSize.width - panelWidthPx) > 1f) return@LaunchedEffect
+            if (panelSize.height > placement.height + 1f) return@LaunchedEffect
+            open()
+        }
+
+        // Dim only, no blur: the page should stay legible behind the list so the panel
+        // reads as lying on top of it, not as a separate page. Dark mode uses canvas
+        // rather than ink (which is near-white there) for the same reason as GlassScrim.
+        Box(
             Modifier
-                .align(Alignment.Center)
-                .fillMaxWidth()
-                .widthIn(max = 420.dp)
-                .padding(horizontal = 24.dp)
-                .heightIn(max = panelMaxHeight)
+                .fillMaxSize()
+                .graphicsLayer { alpha = morph.value.coerceIn(0f, 1f) }
+                .background(
+                    if (colors.dark) colors.canvas.copy(alpha = 0.30f)
+                    else colors.ink.copy(alpha = 0.10f)
+                )
+                .pointerInput(Unit) { detectTapGestures { close() } },
+        )
+
+        // The droplet and bridge are paper silhouettes behind the glass: Haze cannot
+        // refract an arbitrary path, so the panel stays a rounded rect and this layer
+        // supplies the liquid outline while the two silhouettes are still joined.
+        if (started) {
+            Canvas(Modifier.fillMaxSize()) {
+                val anchor = anchorOverlay ?: return@Canvas
+                val height = panelSize.height.toFloat()
+                if (height <= 0f) return@Canvas
+                val card = PickerRect(
+                    finalLeft,
+                    finalTop,
+                    panelSize.width.toFloat().coerceAtLeast(1f),
+                    height,
+                )
+                val platter = platterMorph(anchor, card, morph.value, cardRadiusPx, corners.value)
+                val droplet = dropletMorph(anchor, card, morph.value, blendPx, rimDepthPx)
+                // Like the reference's source-colour fill: the paper silhouette sits
+                // behind the glass and fades out as the platter settles, so the bubble
+                // starts as paper and ends as glass. At the very start the glass layer
+                // is still transparent, hence the full paper fill rather than a ring.
+                val settle = morph.value.coerceIn(0f, 1f)
+                val fillAlpha = 1f - settle
+                if (fillAlpha <= 0.01f) return@Canvas
+                val platterPath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            platter.left,
+                            platter.top,
+                            platter.right,
+                            platter.bottom,
+                            CornerRadius(platter.cornerRadius),
+                        )
+                    )
+                }
+                val dropletPath = Path().apply {
+                    addRoundRect(
+                        RoundRect(
+                            droplet.left,
+                            droplet.top,
+                            droplet.right,
+                            droplet.bottom,
+                            CornerRadius(droplet.cornerRadius),
+                        )
+                    )
+                }
+                // The goo silhouette is the union of the platter, the droplet and the
+                // prism_ui bridge fan. The platter is the glass panel itself, so the fill
+                // under it reads through the tint and fades with [settle].
+                val union = Path()
+                if (!union.op(dropletPath, platterPath, PathOperation.Union)) {
+                    union.reset()
+                    union.addPath(dropletPath)
+                }
+                val bridge = gooBridge(
+                    PickerRect(platter.left, platter.top, platter.width, platter.height),
+                    platter.cornerRadius,
+                    PickerRect(droplet.left, droplet.top, droplet.width, droplet.height),
+                    blendPx,
+                )
+                if (bridge != null) {
+                    val fan = Path()
+                    for (polygon in bridge) {
+                        if (polygon.size < 3) continue
+                        fan.moveTo(polygon[0].x, polygon[0].y)
+                        for (index in 1 until polygon.size) {
+                            fan.lineTo(polygon[index].x, polygon[index].y)
+                        }
+                        fan.close()
+                    }
+                    val merged = Path()
+                    if (merged.op(union, fan, PathOperation.Union)) {
+                        union.reset()
+                        union.addPath(merged)
+                    }
+                }
+                drawPath(union, dropletFill.copy(alpha = dropletFill.alpha * fillAlpha))
+                drawPath(
+                    union,
+                    dropletRim.copy(alpha = dropletRim.alpha * fillAlpha),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
+        }
+
+        Box(
+            Modifier
+                .offset { IntOffset(finalLeft.roundToInt(), finalTop.roundToInt()) }
+                .width(with(density) { panelWidthPx.toDp() })
+                .heightIn(max = with(density) { maxPanelHeightPx.toDp() })
+                .onSizeChanged { panelSize = it }
                 .graphicsLayer {
-                    val p = progress.value
-                    alpha = p.coerceIn(0f, 1f)
-                    val scale = 0.90f + 0.10f * p
-                    scaleX = scale
-                    scaleY = scale
-                    translationY = (1f - p) * 16.dp.toPx()
+                    val height = panelSize.height.toFloat()
+                    val anchor = anchorOverlay
+                    if (!started || height <= 0f) {
+                        alpha = 0f
+                        return@graphicsLayer
+                    }
+                    // A host without a row has no bubble to grow from; show the panel
+                    // directly instead of inventing an anchor.
+                    if (anchor == null) {
+                        alpha = 1f
+                        return@graphicsLayer
+                    }
+                    val width = panelSize.width.toFloat().coerceAtLeast(1f)
+                    val card = PickerRect(finalLeft, finalTop, width, height)
+                    val frame = platterMorph(anchor, card, morph.value, cardRadiusPx, corners.value)
+                    val sx = (frame.width / width).coerceAtLeast(0.001f)
+                    val sy = (frame.height / height).coerceAtLeast(0.001f)
+
+                    transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    scaleX = sx
+                    scaleY = sy
+                    translationX = frame.centerX - (finalLeft + width / 2f)
+                    translationY = frame.centerY - (finalTop + height / 2f)
+                    // The layer shape lives in local pixels and is then scaled, so the
+                    // radius is divided back out to keep the drawn corner round.
+                    shape = MorphShape(
+                        radiusX = (frame.cornerRadius / sx).coerceAtLeast(0f),
+                        radiusY = (frame.cornerRadius / sy).coerceAtLeast(0f),
+                    )
+                    clip = true
+                    // The first bubble is the paper droplet; the glass material fades
+                    // in as the platter outgrows it. Otherwise the tiny glass platter
+                    // reads as a bright core inside the larger paper capsule.
+                    alpha = ((morph.value - Motion.PICKER_GLASS_IN) /
+                        (Motion.PICKER_GLASS_FULL - Motion.PICKER_GLASS_IN)).coerceIn(0f, 1f)
                 }
                 // The shared glass material already owns the lift shadow; adding a
                 // second one here would stack two dark halos around the panel.
                 .glass(
                     state = frostedState,
-                    shape = Radii.xlShape,
+                    shape = Radii.menuShape,
                     tint = colors.paper.copy(alpha = 0.10f),
                 )
-                .pointerInput(Unit) { detectTapGestures { } },
+                // The panel is glass itself; taps inside must not fall through to the
+                // dim layer and close it while the user is choosing.
+                .pointerInput(Unit) { detectTapGestures { } }
+                // The page header is gone, so the title still needs a home for TalkBack.
+                .semantics { paneTitle = request.title },
         ) {
-            Row(
+            Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 12.dp, top = 12.dp),
-                verticalAlignment = Alignment.Top,
+                    .graphicsLayer {
+                        // On close the content leaves first, while the glass is still
+                        // at its final size; on open it rides the bubble's progress so
+                        // the options only become legible once the platter has formed.
+                        val reveal = if (closing) contentOut.value else morph.value.coerceIn(0f, 1f)
+                        alpha = reveal
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val blur = contentBlurPx * (1f - reveal)
+                            renderEffect = if (blur > 0.1f) {
+                                BlurEffect(
+                                    radiusX = blur,
+                                    radiusY = blur,
+                                    edgeTreatment = TileMode.Clamp,
+                                )
+                            } else {
+                                null
+                            }
+                        }
+                    },
             ) {
-                Column(Modifier.weight(1f).padding(top = 8.dp)) {
+                if (request.description != null) {
                     Text(
-                        request.title,
-                        style = SettingsType.h2,
-                        color = colors.ink,
+                        request.description,
+                        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
+                        color = colors.stone,
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (request.description != null) {
-                        Text(
-                            request.description,
-                            style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                            color = colors.stone,
-                            modifier = Modifier.padding(top = 4.dp),
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                // The panel is glass itself; sampling it would punch a blurry window
-                // through the material, so the close button uses the paper fallback.
-                GlassIconButton(
-                    icon = AppIcons.Close,
-                    label = "关闭",
-                    onClick = { close() },
-                    frostedState = null,
-                    iconSize = 18.dp,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            LazyColumn(
-                Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                items(request.options) { option ->
-                    GlassOptionRow(option) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        option.onSelect()
-                        close()
+                LazyColumn(
+                    Modifier.fillMaxWidth(),
+                    state = listState,
+                    contentPadding = PaddingValues(
+                        start = 10.dp,
+                        end = 10.dp,
+                        top = if (request.description == null) 8.dp else 4.dp,
+                        bottom = 8.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(request.options) { option ->
+                        GlassOptionRow(option) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            // Commit before the retract starts, so the new value is
+                            // already visible on the page behind the moving glass.
+                            option.onSelect()
+                            close()
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * A rounded rect with independent x/y radii. The morph layer is scaled unevenly, and
+ * [androidx.compose.foundation.shape.RoundedCornerShape] only carries one radius per
+ * corner, which would draw an ellipse; this keeps the on-screen corner circular.
+ */
+private data class MorphShape(val radiusX: Float, val radiusY: Float) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline = Outline.Rounded(
+        RoundRect(
+            left = 0f,
+            top = 0f,
+            right = size.width,
+            bottom = size.height,
+            cornerRadius = CornerRadius(radiusX, radiusY),
+        )
+    )
 }
 
 /** 52dp radio row; selected state is carried by the ink check, not a terracotta wash. */

@@ -62,6 +62,32 @@ object Motion {
 
     /** Dp variant of [Release] for size/layout animations (switch thumb, code fold). */
     val ReleaseDp = spring<Dp>(dampingRatio = 0.72f, stiffness = 340f)
+
+    /**
+     * Bubble-split picker morph. The platter opens on a lightly under-damped spring
+     * (the source of the small overshoot as the drop stretches into the list); its
+     * corners are squared off by a second, softer spring that starts 70ms later. Closing
+     * uses a critically damped curve so the drop retracts without wobbling.
+     */
+    val PickerMorph = spring<Float>(dampingRatio = 0.754f, stiffness = 400f)
+    val PickerCorners = spring<Float>(dampingRatio = 0.75f, stiffness = 324f)
+    val PickerRetract = spring<Float>(dampingRatio = 1f, stiffness = 340f)
+
+    /** Corner spring delay and the short content fade that leads the retract. */
+    const val PICKER_CORNERS_DELAY = 70L
+    const val PICKER_CONTENT_OUT = 36
+
+    /**
+     * The picker's first bubble is the paper droplet; the glass panel fades in between
+     * these two points of the morph, once the platter has outgrown the droplet and covers
+     * it. Without the delay the tiny glass platter reads as a bright (or, in dark mode,
+     * darker) core inside the capsule.
+     */
+    const val PICKER_GLASS_IN = 0.12f
+    const val PICKER_GLASS_FULL = 0.26f
+
+    /** Content blur at the start of the morph, in dp; skipped below API 31. */
+    const val PICKER_CONTENT_BLUR = 4f
 }
 
 /**

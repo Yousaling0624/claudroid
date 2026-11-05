@@ -277,10 +277,20 @@ Android 12 以下由 Haze 的有限渲染器近似，文字必须仍然可读。
   `Modifier.glassSource(state)`，胶囊用同一个 state；首页没有滚动源，走低透明度 fallback。
   顶栏总高 **62dp（不含状态栏）**，`LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`。
 - **设置悬浮返回键**：46dp 正圆，复用 `GlassIconButton`（新材质 / dragMorph / 长按触感）。
-- **液态玻璃选择列表**（`GlassSelect.kt` + `SettingsChrome.kt`）：服务商预设、接口协议、
-  Key 传递方式、当前档位、引擎模式、Effort、主题等多选项统一为一行“当前值 + chevron”；
-  点击由设置根层弹出 `GlassOptionSheet`，同窗口采样、低 tint 玻璃面板、spring 入场（q 弹），
-  退场 160ms tween。选项行 52dp，radio 语义；列表最高 60% 屏高，内部滚动。
+- **液态玻璃选择列表**（`GlassSelect.kt` + `SettingsChrome.kt` + `PickerMorph.kt`）：服务商预设、
+  接口协议、Key 传递方式、当前档位、引擎模式、Effort、主题等多选项统一为一行“当前值 + chevron”；
+  点击由设置根层弹出 `GlassOptionSheet`，同窗口采样，不跨 window。几何用纯函数 `placePicker`
+  锚定到被点的行：优先向下，放不下向上翻转，宽度跟随行并夹在安全区内；选项行 52dp，radio 语义，
+  列表最高 60% 屏高，内部滚动。
+  - **泡泡分裂形变**：面板按最终尺寸布局一次，动画只走 `graphicsLayer`，不逐帧重排 LazyColumn。
+    开场由 400/0.754 弹簧驱动 `platter` 从行中心一颗 41% 行短边的圆泡出发，宽度/高度/中心分别插值
+    到最终卡片；第二根 324/0.75 弹簧延迟 70ms 把胶囊圆角压成 22dp。行里另有一颗水滴（行高为高、
+    宽度上限 2×行高）缩小到 25% 并向面板内落点移动，用 smooth-min 场与 platter 做 metaball 粘连，
+    被吞没后淡出。内容随 platter 缩放，alpha 跟 progress，API 31+ 从 4dp 模糊渐清。关闭时内容先
+    36ms 淡出，几何按 340ms 无回弹弹簧缩回行里。`LocalReduceMotion` 时直接吸附到终态。
+  - Haze 2.1 的 `GlassStyle.shape` 只接受 `RoundedCornerShape`，无法直接给 metaball 路径做折射；
+    面板玻璃仍是圆角矩形，水滴/颈部用 paper 半透明轮廓补在玻璃层上。形变几何移植自
+    `chen08209/prism_ui`（GPL-3.0），出处见 `THIRD_PARTY_NOTICES.md`。
 - **模型面板**（`ModelListSheet`）：同窗口浮层。全屏 `GlassScrim` 用 26dp 模糊 +
   低透明 canvas tint 与压暗；面板改为玻璃 + 低 paper tint，入场 spring 滑入，高度约 88%。
   关闭键用 `GlassIconButton(frostedState = null)`，避免在玻璃面板上再开一个采样窗。
@@ -320,6 +330,6 @@ Android 12 以下由 Haze 的有限渲染器近似，文字必须仍然可读。
   `Morph(circle → 圆角五角星)` 用 `asCubics(progress)` 生成真实曲线，慢速呼吸 + 42s 自转，
   放在 `ClaudeMark` 后面的低透明度陶土色圆斑里。只在首页问候与空对话页出现，替掉静态装饰；
   `LocalReduceMotion` 为 true 时停在固定形态。
-- 依赖版本锁定 `dev.chrisbanes.haze:haze:1.0.1` 与 `androidx.graphics:graphics-shapes:1.1.0`：
-  两者都兼容 Kotlin 2.0.21 / Compose 1.7.0；不要顺手升级（新版本分别要求 Kotlin 2.1+
-  与 Compose 1.12+）。
+- 依赖版本锁定 `dev.chrisbanes.haze:haze:2.1.0`（含 `haze-blur` / `haze-glass`）与
+  `androidx.graphics:graphics-shapes:1.1.0`。Haze 2.1 要求 AGP 9 / compileSdk 37，当前工程已满足；
+  不要顺手升降级，升级前先跑 `./gradlew testDebugUnitTest assembleDebug`。
