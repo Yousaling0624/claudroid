@@ -14,7 +14,7 @@ import java.io.File
  * in jniLibs, so the package manager extracts them into nativeLibraryDir.
  * `tools/fetch-proot.py` stages them at build time.
  *
- * The guest rootfs (musl loader + busybox + bash + the official CLI) stays in
+ * The guest rootfs (Debian bookworm/trixie userland + the official glibc CLI) stays in
  * filesDir. targetSdk 28 in app/build.gradle.kts keeps exec() allowed there —
  * the same trade-off Termux and the DSH-style Android harnesses make.
  */
@@ -55,11 +55,11 @@ class ProotRunner(private val ctx: Context) {
         val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
         val binds = hostBinds(workspace, home)
         val guestScript = pidFile?.let { guestPid ->
-            // The jail's /tmp already exists and is writable by the app. The workspace
-            // bind is visible in the UI (and to the agent), so do not put control files
-            // there.
-            val host = File(installation.jail(), "tmp/$TURN_SCRIPT_NAME")
-            host.parentFile?.mkdirs()
+            // Write into the home bind (/root) instead of the jail's /tmp: in root mode
+            // the jail lives under /data/adb and is owned by root, so the app cannot
+            // write there. The workspace bind is user-visible, so control files must
+            // not go there either.
+            val host = File(home, TURN_SCRIPT_NAME)
             host.writeText(wrapperScript(installation.version, guestPid))
             GUEST_TURN_SCRIPT
         }
@@ -76,6 +76,38 @@ class ProotRunner(private val ctx: Context) {
             binds = binds,
             tmpDir = tmp,
             turnScript = guestScript,
+        )
+    }
+
+    /**
+     * One-shot command for provisioning (apt, self-test): no turn wrapper, no pid file.
+     * Runs through the same jail and binds as a turn, so what we verify is what the CLI
+     * gets later.
+     */
+    fun runSpec(
+        installation: Installation,
+        entry: List<String>,
+        baseEnv: Map<String, String>,
+        workDir: String = "/root",
+    ): Spec {
+        val bundle = requireBundle()
+        val workspace = Paths.workspace(ctx)
+        val home = Paths.home(ctx)
+        val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
+        return build(
+            proot = bundle.proot,
+            loader = bundle.loader,
+            jail = File(installation.jailPath),
+            workspace = workspace,
+            home = home,
+            version = installation.version,
+            hasBash = installation.hasBash,
+            args = emptyList(),
+            baseEnv = baseEnv,
+            binds = hostBinds(workspace, home),
+            tmpDir = tmp,
+            workDir = workDir,
+            entry = entry,
         )
     }
 
@@ -123,7 +155,8 @@ class ProotRunner(private val ctx: Context) {
     companion object {
 
         const val TURN_SCRIPT_NAME = ".claudroid-turn.sh"
-        const val GUEST_TURN_SCRIPT = "/tmp/$TURN_SCRIPT_NAME"
+        /** Guest path of the wrapper: `home` is bound to `/root` in every PRoot spec. */
+        const val GUEST_TURN_SCRIPT = "/root/$TURN_SCRIPT_NAME"
 
         /**
          * Wrapper run inside the guest: record the pid (kept by `exec` below) and forward

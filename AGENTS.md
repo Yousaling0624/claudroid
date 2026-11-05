@@ -86,18 +86,31 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 
 ## 5. 引擎与运行环境（必须理解）
 
-- 官方 Claude Code 2.x 是 **musl 原生二进制**，不需要 Node。
+- 官方 Claude Code 2.x 的 Linux 包是 **glibc 原生二进制**，不需要 Node；容器的 glibc
+  直接满足它，不再需要 musl loader。
+- 运行时是一个 **Debian rootfs 容器**：安装时从 OCI registry 拉官方的
+  `debian:13-slim` layer（sha256 摘要钉死在 `Registry.kt`），解包成容器，再用 apt 装
+  bash / git / grep / coreutils / sed / awk / tar / gzip / xz / curl / ca-certificates /
+  less。CLI 放在 `/opt/claude/<version>/claude`。
+  - 官方 `registry-1.docker.io` 不可达时回退 DaoCloud 镜像；两者都按同一摘要校验，
+    镜像不能替换字节。
+  - 旧的 Alpine 安装没有 `rootfsVersion`，会被判定为不健康并自动重装。
 - Android 10+ 对 `targetSdk >= 29` 禁止 exec 应用数据目录里的文件（W^X）。本项目
   **故意保持 `targetSdk 28`**，和 Termux / dsh-Go 同一策略。不要随手升 targetSdk；
-  升之前必须先证明 PRoot、jail 内二进制仍能执行。
+  升之前必须先证明 PRoot、容器内二进制仍能执行。
 - 免 root：`ProotRunner` 用 jniLibs 里的 Termux PRoot + loader + libtalloc +
   libandroid-shmem，把 `filesDir/engine/jail` 当 rootfs 跑。
   `LD_LIBRARY_PATH` 必须指向 `nativeLibraryDir`，否则 `libproot.so` 找不到
   `libtalloc.so` / `libandroid-shmem.so`。
-- 有 root：`Toolchain` 用 `su` 把 jail 组装到 `/data/adb/claudroid`，`ClaudeEngine`
-  用 Magisk busybox `chroot` 启动；没有 `chroot(1)` 时降级为加载器直启。
-- jail 里必须有 Alpine musl loader、busybox、GNU bash（bash + readline + ncursesw）。
-  缺少 bash 时 Claude Code 的 Bash 工具会退化甚至不可用。
+- 有 root：`Toolchain` 用 `su` 把容器组装到 `/data/adb/claudroid`，`ClaudeEngine`
+  用 Magisk busybox `chroot` 启动；没有 `chroot(1)` 时降级为 `su` 下跑 PRoot。
+  Root 模式会把宿主 `/dev`、`/proc`、`/sys`、`/system`、`/data`、`/sdcard` bind 进容器，
+  这是「Agent 能操作设备」的能力来源，不要为了省事删掉。
+- **删除容器目录前必须先卸载 bind 挂载**：chroot 包装脚本把宿主目录挂进 jail 后，挂载
+  在进程退出后仍然存在；此时 `rm -rf` 会穿过挂载点删掉宿主 `/dev`、`/data`（已在真机
+  上造成过一次数据清空事故）。所有删除 jail 的路径必须走 `RootExec.deleteJail()`：
+  白名单校验 → 从 `/proc/mounts` 收集 jail 下挂载并 `umount -l` → `rm -rf` → 断言目录
+  已消失。禁止直接 `rm -rf <jail>`。
 - 每个 turn 一个进程，靠 `--resume <session-id>` 续上下文。不要改成常驻 PTY。
 - PRoot 组件由 `tools/fetch-proot.py` 在构建期下载并改写 `libtalloc.so.2` 的
   DT_NEEDED；不要把它们提交进仓库。
@@ -132,7 +145,8 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 - 不记录用户 Key；日志里只出现模型名、版本号、退出码。
 - root + `完全放行` 等于把 root shell 交给模型。默认保持 `AUTO`，只在用户明确需要时
   使用 Root 模式；不要默认把 `/data` 暴露给不可信模型。
-- 下载的 npm / Alpine / Termux 产物必须做完整性校验（sha512 / APKINDEX 版本）。
+- 下载的 npm / Debian rootfs（OCI layer sha256）/ Termux 产物必须做完整性校验
+  （sha512 / sha256 摘要）。
 - 外部响应视为不可信输入；解析前判空、限长。
 
 ## 9. 测试

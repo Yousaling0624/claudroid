@@ -83,7 +83,7 @@ class ProotRunnerTest {
         ).argv
         // The CLI is exec'd by the wrapper, so the wrapper (not the CLI) is the entry.
         assertEquals(
-            listOf("/bin/sh", "/tmp/.claudroid-turn.sh", "-p", "hello"),
+            listOf("/bin/sh", "/root/.claudroid-turn.sh", "-p", "hello"),
             argv.takeLast(4),
         )
         assertFalse(argv.contains("/opt/claude/2.1.0/claude"))

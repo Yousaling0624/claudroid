@@ -10,34 +10,38 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.TimeUnit
 
 /**
  * Provisioning of the embedded backend.
  *
- * The CLI published on npm since 2.x is a self-contained native binary per platform
- * (no Node.js runtime involved), linked against the musl loader. We ship four things
- * into the jail:
+ * The engine is no longer a hand-built Alpine mini-jail. We install a real Debian
+ * rootfs (the official `debian:13-slim` OCI layer, pinned by digest) and run the
+ * official Claude Code glibc build inside it under PRoot (no root) or chroot (root):
  *
- *   1. the CLI binary            -> opt/claude/<version>/claude
- *   2. the musl dynamic loader   -> lib/ld-musl-<arch>.so.1   (Alpine `musl` package)
- *   3. a minimal userland        -> bin/busybox               (Alpine `busybox` package)
- *   4. jail config               -> etc/resolv.conf, etc/hosts, CA bundle
+ *   1. rootfs layer             -> filesDir/engine/jail (or /data/adb/claudroid)
+ *   2. basic userland           -> apt-get install bash git grep coreutils sed awk
+ *                                  tar gzip xz-utils curl ca-certificates less
+ *   3. the CLI binary           -> opt/claude/<version>/claude
+ *   4. jail config              -> etc/resolv.conf, etc/hosts, apt sources/retries
+ *
+ * The rootfs is downloaded at install time, never shipped in the APK. Both the OCI
+ * layer digest (SHA-256 of the compressed blob) and the npm `sha512` integrity are
+ * verified before anything is unpacked; a cached file is reused only when it re-hashes
+ * to the same value. A truncated 30 MB layer or 300 MB ELF otherwise fails much later
+ * with an opaque "Bus error".
  *
  * With root the jail is assembled by a root shell under /data/adb/claudroid, because
- * Android 10+ forbids exec() of files inside the app's own data directory. Without root
- * we still assemble it locally (only useful for diagnosis).
- *
- * Caching rule (learned the hard way): a cached download is only reused when its sha512
- * still matches the registry value. A size check is not enough — an interrupted transfer
- * leaves a plausible-looking but truncated file, and a truncated ELF fails at runtime
- * with SIGBUS ("Bus error") instead of a clear error.
+ * Android 10+ forbids exec() of files inside the app's own data directory.
  */
 class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
 
     data class Progress(val stage: String, val fraction: Float, val detail: String = "")
 
-    /** GNU bash + the Alpine libraries it links against, staged for the jail. */
-    data class BashBundle(val bash: File, val libs: List<File>)
+    private data class Exec(val code: Int, val out: String, val err: String) {
+        val combined: String get() = (out + if (err.isBlank()) "" else "\n$err").trim()
+        val ok: Boolean get() = code == 0
+    }
 
     suspend fun ensure(
         force: Boolean = false,
@@ -46,78 +50,106 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     ): Installation = withContext(Dispatchers.IO) {
         val target = Registry.target()
             ?: error("当前 CPU 架构不受支持：Claude Code 官方只发布 arm64 / x86_64 版本")
+        val spec = Registry.rootfsFor(target)
 
         onProgress(Progress("查询官方版本", 0.02f, target.npmPackage))
         val latest = Registry.latestCliVersion()
         val existing = Paths.installation(ctx)
-        Logx.i("CLI 已安装=${existing?.version} 官方最新=$latest root=$useRoot", ctx)
+        Logx.i(
+            "CLI 已安装=${existing?.version} 官方最新=$latest root=$useRoot " +
+                "rootfs=${existing?.rootfsVersion ?: "旧版"}",
+            ctx,
+        )
 
-        if (!force && existing != null && existing.version == latest && existing.rootMode == useRoot && verify(existing)) {
+        if (!force && existing != null && existing.version == latest &&
+            existing.rootMode == useRoot && existing.rootfsSha256 == spec.digest &&
+            verify(existing, useRoot)
+        ) {
             onProgress(Progress("已是最新", 1f, latest))
             return@withContext existing
         }
 
-        requireFreeSpace(1200)
+        // A Debian rootfs with the pinned digest and working tools only needs the CLI
+        // replaced. Anything else (Alpine-era install, changed rootfs, broken tools) is
+        // rebuilt from scratch, which is also the migration path.
+        val canUpgrade = !force && existing != null && existing.rootMode == useRoot &&
+            existing.rootfsVersion == spec.version && existing.rootfsSha256 == spec.digest &&
+            verify(existing, useRoot)
+        // Peak: 30 MB layer -> ~115 MB tree, ~300 MB CLI binary, a second copy in the
+        // jail, plus apt downloads. Upgrading only adds a new CLI on top of an existing
+        // jail, hence the much smaller number.
+        requireFreeSpace(if (canUpgrade) 700 else 1200)
 
         val staging = Paths.staging(ctx)
         onProgress(Progress("下载 CLI $latest", 0.05f, target.abi))
         val claude = stageClaude(target, latest, staging, onProgress)
-        val loader = ensureLoader(target, staging, onProgress)
-        val alpineIndex = ensureAlpineIndex(target, staging)
-        val busybox = ensureBusybox(target, staging, alpineIndex, onProgress)
-        val bash = ensureBash(target, staging, alpineIndex, onProgress)
-        alpineIndex.delete()
-        val ca = ensureCaBundle(staging)
 
-        onProgress(Progress("组装运行环境", 0.94f, if (useRoot) "root jail" else "应用私有目录"))
-        val jailPath = if (useRoot) {
-            val dir = pickRootJail()
-            assembleAsRoot(dir, latest, target.muslArch, claude, loader, busybox, bash, ca)
-            dir
-        } else {
-            val dir = File(Paths.engine(ctx), "jail")
-            assembleAsApp(dir, latest, target.muslArch, claude, loader, busybox, bash, ca)
-            dir.absolutePath
+        if (canUpgrade) {
+            onProgress(Progress("更新 CLI", 0.84f, latest))
+            val updated = upgradeInPlace(existing, claude, latest, onProgress)
+            cleanupStaging(claude)
+            onProgress(Progress("就绪", 1f, latest))
+            Logx.i("CLI $latest 已更新（jail=${updated.jailPath}, root=$useRoot）", ctx)
+            return@withContext updated
         }
 
-        val installation = Installation(
-            version = latest,
-            jailPath = jailPath,
-            arch = target.muslArch,
-            rootMode = useRoot,
-            hasBash = bash != null,
-        )
-        Paths.saveInstallation(ctx, installation)
+        onProgress(Progress("下载 Debian rootfs", 0.46f, spec.image))
+        val archive = stageRootfs(spec, staging, onProgress)
 
-        // The 300 MB staging copy is no longer needed once the jail has it.
-        runCatching { claude.delete() }
+        onProgress(Progress("组装 Debian 容器", 0.86f, if (useRoot) "root jail" else "应用私有目录"))
+        val installation = fullInstall(target, spec, latest, claude, archive, useRoot, onProgress)
+
+        // Everything below runs against the `.new` tree. Until it verifies, install.json
+        // and the current jail are untouched; any failure just drops `.new`.
+        val activated = try {
+            onProgress(Progress("安装容器工具（apt）", 0.92f, "bash git grep …"))
+            val tools = runGuest(installation, toolsScript(latest), 900_000)
+            if (!tools.ok || !tools.combined.contains("TOOLS_OK") || !tools.combined.contains("CLAUDE_OK")) {
+                throw IllegalStateException(toolsFailure(tools))
+            }
+            if (!verify(installation, useRoot)) {
+                throw IllegalStateException("安装后自检失败：Debian 标记、bash、git 或 CLI 缺失。请在「终端」里检查，或重试安装。")
+            }
+            activate(installation, latest)
+        } catch (t: Throwable) {
+            discardTree(installation.jailPath, useRoot)
+            if (useRoot) runCatching { File(staging, "rootfs-stage").deleteRecursively() }
+            throw t
+        }
+
+        Paths.saveInstallation(ctx, activated)
+        cleanupStaging(claude)
         onProgress(Progress("就绪", 1f, latest))
-        Logx.i("CLI $latest 已激活（jail=$jailPath, root=$useRoot）", ctx)
-        installation
+        Logx.i("Debian ${spec.version} + CLI $latest 已激活（jail=${activated.jailPath}, root=$useRoot）", ctx)
+        activated
     }
 
     /**
-     * An installation only counts as healthy when the binary is executable *and* has a
-     * plausible size. A truncated 306 MB binary still passes `test -x` and then dies with
-     * SIGBUS, which is very hard to diagnose from the UI.
+     * An installation counts as healthy only when the Debian marker, bash, git and a
+     * plausible CLI are all there. `test -x` alone passes for a truncated binary, which
+     * then dies with SIGBUS, so the size check stays.
+     *
+     * `internal` so [EngineManager] uses the exact same definition instead of drifting.
      */
-    private fun verify(installation: Installation): Boolean {
-        val q = rootExec::q
-        val checks = listOf(
-            installation.binary() to MIN_BINARY_BYTES,
-            installation.loader() to MIN_LOADER_BYTES,
-            installation.busybox() to MIN_LOADER_BYTES,
-        )
-        return if (!installation.rootMode) {
-            checks.all { (file, min) -> file.isFile && file.length() > min }
-        } else {
-            checks.all { (file, min) ->
-                val out = rootExec.run(
-                    "test -x ${q(file.absolutePath)} && stat -c %s ${q(file.absolutePath)} 2>/dev/null || echo 0"
-                ).out.trim().substringBefore('\n')
-                (out.toLongOrNull() ?: 0L) > min
-            }
+    internal fun verify(installation: Installation, useRoot: Boolean): Boolean {
+        val binary = installation.binary()
+        if (!useRoot) {
+            return installation.isDebian() &&
+                binary.isFile && binary.length() > MIN_BINARY_BYTES &&
+                installation.bash().isFile &&
+                File(installation.jail(), "usr/bin/git").isFile
         }
+        val q = rootExec::q
+        val jail = q(installation.jailPath)
+        val out = rootExec.run(
+            "test -f $jail/etc/debian_version && " +
+                "test -x $jail/bin/bash && " +
+                "test -x $jail/usr/bin/git && " +
+                "S=\$(stat -c %s ${q(binary.absolutePath)} 2>/dev/null || echo 0) && " +
+                "[ \"\$S\" -gt $MIN_BINARY_BYTES ] && echo OK",
+            30_000,
+        ).out
+        return out.contains("OK")
     }
 
     // ---------------------------------------------------------------- staging
@@ -128,12 +160,19 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         staging: File,
         onProgress: (Progress) -> Unit,
     ): File {
-        val info = Registry.platformPackage(target.npmPackage, version)
+        val info = runCatching { Registry.platformPackage(target.npmPackage, version) }
+            .getOrElse {
+                throw IllegalStateException(
+                    "官方未发布对应的 Linux glibc 安装包（${target.npmPackage} $version）。" +
+                        "请检查网络后重试；如果持续失败，稍后再升级。",
+                    it,
+                )
+            }
         val tgz = File(staging, "claude-$version.tgz")
         val out = File(staging, "claude")
         val marker = File(staging, "claude-$version.ok")
 
-        // Each upgrade leaves the previous 150 MB archive behind; keep only this version.
+        // Each upgrade leaves the previous ~150 MB archive behind; keep only this version.
         staging.listFiles { f -> f.isFile && f.name.startsWith("claude-") && f.name.endsWith(".tgz") }
             ?.filter { it.absolutePath != tgz.absolutePath }
             ?.forEach { it.delete() }
@@ -142,7 +181,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         if (out.isFile && marker.isFile && marker.readText().trim() == info.integrity &&
             out.length() > MIN_BINARY_BYTES
         ) {
-            onProgress(Progress("复用已校验的安装包", 0.80f, humanBytes(out.length())))
+            onProgress(Progress("复用已校验的安装包", 0.42f, humanBytes(out.length())))
             return out
         }
         marker.delete()
@@ -160,7 +199,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         if (!cachedOk) {
             val digest = HttpUtil.download(info.tarball, tgz) { read, total ->
                 val frac = if (total > 0) read.toFloat() / total else 0f
-                onProgress(Progress("下载 CLI $version", 0.05f + 0.70f * frac, humanBytes(read)))
+                onProgress(Progress("下载 CLI $version", 0.05f + 0.30f * frac, humanBytes(read)))
             }
             if (!HttpUtil.matchesIntegrity(digest, info.integrity)) {
                 tgz.delete()
@@ -169,7 +208,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             Logx.i("CLI 下载完成并通过 sha512 校验：${humanBytes(tgz.length())}", ctx)
         }
 
-        onProgress(Progress("解包 CLI", 0.80f))
+        onProgress(Progress("解包 CLI", 0.38f))
         val ok = TarGz.extractEntry(tgz, "package/claude", out)
         if (!ok) {
             out.delete()
@@ -184,147 +223,375 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         }
         out.setExecutable(true, false)
         marker.writeText(info.integrity ?: "none")
-        // Keep the verified archive: switching between root/chroot and proot rebuilds the
-        // jail from it without another 150 MB download.
+        // Keep the verified archive: rebuilding the jail (root <-> proot) must not
+        // download another 150 MB.
         return out
     }
 
-    private suspend fun ensureLoader(target: PlatformTarget, staging: File, onProgress: (Progress) -> Unit): File {
-        val out = File(staging, "ld-musl-${target.muslArch}.so.1")
-        if (out.isFile && out.length() > 100_000) return out
-        onProgress(Progress("下载 musl 加载器", 0.86f))
-        val url = Registry.muslLoaderUrl(target.alpineArch)
-        Logx.i("musl 加载器: $url", ctx)
-        val apk = File(staging, "musl.apk")
-        HttpUtil.download(url, apk)
-        val entry = "lib/ld-musl-${target.muslArch}.so.1"
-        out.delete()
-        if (!TarGz.extractEntry(apk, entry, out) || out.length() < 100_000) {
-            out.delete()
-            error("musl 包缺少 $entry")
-        }
-        out.setExecutable(true, false)
-        apk.delete()
-        return out
-    }
-
-    private fun ensureAlpineIndex(target: PlatformTarget, staging: File): File {
-        val indexApk = File(staging, "APKINDEX.tar.gz")
-        if (indexApk.isFile && indexApk.length() > 100_000) return indexApk
-        val repo = alpineRepo(target)
-        HttpUtil.download("$repo/APKINDEX.tar.gz", indexApk)
-        return indexApk
-    }
-
-    private fun alpineRecord(indexApk: File, pkg: String): String {
-        val index = TarGz.readTextEntry(indexApk, "APKINDEX") ?: error("APKINDEX 读取失败")
-        return index.split("\n\n").firstOrNull { block ->
-            block.lineSequence().any { it == "P:$pkg" }
-        } ?: error("未在 APKINDEX 中找到 $pkg")
-    }
-
-    private fun alpineVersion(record: String): String =
-        record.lineSequence().first { it.startsWith("V:") }.removePrefix("V:")
-
-    private fun alpineRepo(target: PlatformTarget): String =
-        "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/${target.alpineArch}"
-
-    private suspend fun ensureBusybox(
-        target: PlatformTarget,
+    /** Downloads (or revalidates) the pinned Debian layer and returns the local archive. */
+    private fun stageRootfs(
+        spec: RootfsSpec,
         staging: File,
-        indexApk: File,
         onProgress: (Progress) -> Unit,
     ): File {
-        val out = File(staging, "busybox")
-        if (out.isFile && out.length() > 100_000) return out
-        onProgress(Progress("准备 root 用户态", 0.90f))
-        val repo = alpineRepo(target)
-        val ver = alpineVersion(alpineRecord(indexApk, "busybox"))
-        val apk = File(staging, "busybox.apk")
-        HttpUtil.download("$repo/busybox-$ver.apk", apk)
-        out.delete()
-        if (!TarGz.extractEntry(apk, "bin/busybox", out) || out.length() < 100_000) {
-            out.delete()
-            error("busybox 包结构异常")
-        }
-        out.setExecutable(true, false)
-        apk.delete()
-        Logx.i("busybox $ver 已就绪", ctx)
-        return out
-    }
+        val expected = HttpUtil.digestHex(spec.digest)
+        if (expected.isEmpty()) error("内置 rootfs 摘要无效，请更新应用")
+        val name = "debian-${spec.version}-${expected.take(12)}.tar.gz"
+        val dest = File(staging, name)
 
-    /**
-     * GNU bash + readline + ncursesw. The CLI's Bash tool expects bash; busybox only
-     * ships ash. Optional: a failed download leaves the jail on /bin/sh.
-     */
-    private suspend fun ensureBash(
-        target: PlatformTarget,
-        staging: File,
-        indexApk: File,
-        onProgress: (Progress) -> Unit,
-    ): BashBundle? = runCatching {
-        val dir = File(staging, "bash-bundle")
-        val bash = File(dir, "bin/bash")
-        val libs = File(dir, "lib").listFiles()?.filter { it.isFile && it.length() > 10_000 } ?: emptyList()
-        if (bash.isFile && bash.length() > 500_000 &&
-            libs.any { it.name.startsWith("libreadline") } &&
-            libs.any { it.name.startsWith("libncursesw") }
-        ) {
-            return BashBundle(bash, libs)
-        }
+        // A bump of the pinned digest leaves the old layer behind; it is never used again.
+        staging.listFiles { f ->
+            f.isFile && f.name.startsWith("debian-") && f.name.endsWith(".tar.gz") &&
+                f.name != dest.name
+        }?.forEach { runCatching { it.delete() } }
 
-        onProgress(Progress("准备 bash", 0.92f))
-        val repo = alpineRepo(target)
-        fun apk(name: String): File {
-            val version = alpineVersion(alpineRecord(indexApk, name))
-            val file = File(staging, "$name.apk")
-            if (!file.isFile || file.length() < 1_000) {
-                HttpUtil.download("$repo/$name-$version.apk", file)
+        if (dest.isFile) {
+            onProgress(Progress("校验 rootfs 缓存", 0.46f, humanBytes(dest.length())))
+            if (dest.length() == spec.sizeBytes && HttpUtil.sha256Hex(dest) == expected) {
+                return dest
             }
-            return file
+            Logx.e("rootfs 缓存损坏（sha256/尺寸不匹配），重新下载", ctx)
+            dest.delete()
         }
+        // A previous attempt may have died between download and delete, leaving a
+        // partial layer under the same name; the retry must not append to it.
+        if (dest.exists()) dest.delete()
 
-        dir.deleteRecursively()
-        val bashApk = apk("bash")
-        val readlineApk = apk("readline")
-        val ncursesApk = apk("libncursesw")
-
-        TarGz.extractMatching(bashApk, dir) { entry ->
-            if (entry.name == "bin/bash") "bin/bash" else null
-        }
-        TarGz.extractMatching(readlineApk, dir) { entry ->
-            when {
-                entry.name.startsWith("usr/lib/libreadline.so.") -> "lib/libreadline.so.8"
-                entry.name.startsWith("usr/lib/libhistory.so.") -> "lib/libhistory.so.8"
-                else -> null
+        val got = try {
+            // Official registry first, then the DaoCloud mirror. Each is tried once with
+            // a short connect timeout, so a poisoned auth.docker.io cannot stall the
+            // install; every source is verified against the same pinned digest below.
+            HttpUtil.downloadOciBlob(Registry.ROOTFS_REPOSITORY, spec.digest, dest) { read, total ->
+                val frac = if (total > 0) read.toFloat() / total else 0f
+                onProgress(Progress("下载 Debian rootfs", 0.46f + 0.34f * frac, humanBytes(read)))
             }
+        } catch (t: Throwable) {
+            // Never leave a partial layer behind: the cache is only reused after a
+            // full re-hash, and deleting here also frees the space for the retry.
+            runCatching { dest.delete() }
+            throw IllegalStateException(
+                "Debian rootfs 下载失败（官方源与镜像均不可达或校验不通过）。" +
+                    "请检查网络后重试；错误：${t.message}",
+                t,
+            )
         }
-        TarGz.extractMatching(ncursesApk, dir) { entry ->
-            if (entry.name.startsWith("usr/lib/libncursesw.so.")) "lib/libncursesw.so.6" else null
+        if (got.sha256 != expected || (spec.sizeBytes > 0 && dest.length() != spec.sizeBytes)) {
+            dest.delete()
+            error("Debian rootfs 校验失败（sha256 与内置摘要不符），已删除损坏文件，请重试")
         }
-
-        val stagedBash = File(dir, "bin/bash")
-        check(stagedBash.isFile && stagedBash.length() > 500_000) { "bash 解包结果异常" }
-        stagedBash.setExecutable(true, false)
-        val stagedLibs = File(dir, "lib").listFiles()?.filter { it.isFile && it.length() > 10_000 } ?: emptyList()
-        check(stagedLibs.any { it.name.startsWith("libreadline") }) { "缺少 libreadline" }
-        check(stagedLibs.any { it.name.startsWith("libncursesw") }) { "缺少 libncursesw" }
-        Logx.i("bash 已就绪：${humanBytes(stagedBash.length())} + ${stagedLibs.size} 个库", ctx)
-        BashBundle(stagedBash, stagedLibs)
-    }.onFailure {
-        Logx.e("bash 安装失败（将退回 /bin/sh）：${it.message}", ctx)
-    }.getOrNull()
-
-    private suspend fun ensureCaBundle(staging: File): File? {
-        val out = File(staging, "ca-certificates.crt")
-        if (out.isFile && out.length() > 50_000) return out
-        return runCatching {
-            HttpUtil.download("https://curl.se/ca/cacert.pem", out)
-            out.takeIf { it.length() > 50_000 }
-        }.onFailure { Logx.e("CA 根证书下载失败（可忽略）：${it.message}", ctx) }.getOrNull()
+        Logx.i(
+            "Debian ${spec.image} 已从 ${got.source} 下载并通过 sha256 校验：" +
+                "${humanBytes(got.bytes)}",
+            ctx,
+        )
+        return dest
     }
 
     // ---------------------------------------------------------------- assembly
+
+    /**
+     * Builds a complete Debian tree under the *temporary* name (`jail.new`), leaving the
+     * current jail alone. The caller runs apt and verify against this tree and only then
+     * calls [activate]; a failure anywhere before the swap simply removes `.new`, so a
+     * reinstall can no longer destroy a working install first (the old code `rm -rf`'d
+     * the jail up front).
+     */
+    private fun fullInstall(
+        target: PlatformTarget,
+        spec: RootfsSpec,
+        version: String,
+        claude: File,
+        archive: File,
+        useRoot: Boolean,
+        onProgress: (Progress) -> Unit,
+    ): Installation {
+        val staging = Paths.staging(ctx)
+        val newJail = if (useRoot) {
+            pickRootJail() + NEW_SUFFIX
+        } else {
+            File(Paths.engine(ctx), "jail$NEW_SUFFIX").absolutePath
+        }
+        val extraction = if (useRoot) {
+            // Root copies from app-private storage into /data/adb; keep the unpacked tree
+            // outside the jail name so a root-side failure has nothing to roll back.
+            File(staging, "rootfs-stage").apply { deleteRecursively(); mkdirs() }
+        } else {
+            // `jail.new` can be left behind by an interrupted attempt, and a chroot-era
+            // mount may still hang below it: sweep mounts before removing the tree.
+            File(newJail).apply { discardTree(absolutePath, useRoot = false); mkdirs() }
+        }
+
+        try {
+            onProgress(Progress("解包 Debian rootfs", 0.88f, humanBytes(archive.length())))
+            val entries = TarGz.extractAll(archive, extraction) { read, _ ->
+                val frac = (read.toFloat() / (archive.length() * 5)).coerceIn(0f, 1f)
+                onProgress(Progress("解包 Debian rootfs", 0.88f + 0.04f * frac, humanBytes(read)))
+            }
+            Logx.i("rootfs 解包完成：$entries 个条目 -> ${extraction.absolutePath}", ctx)
+
+            configureJail(extraction, version, spec)
+            installCli(extraction, claude, version)
+            if (useRoot) {
+                assembleAsRoot(newJail, extraction, version)
+                runCatching { extraction.deleteRecursively() }
+            }
+
+            val installation = Installation(
+                version = version,
+                jailPath = newJail,
+                arch = target.arch,
+                rootMode = useRoot,
+                hasBash = true,
+                rootfs = spec.image,
+                rootfsVersion = spec.version,
+                rootfsSha256 = spec.digest,
+            )
+            pruneVersions(installation, version)
+            return installation
+        } catch (t: Throwable) {
+            // install.json still points at the old jail; never leave a half tree behind
+            // (it would also make the next attempt reuse stale files).
+            discardTree(newJail, useRoot)
+            if (useRoot) runCatching { extraction.deleteRecursively() }
+            throw t
+        }
+    }
+
+    /**
+     * Swaps the verified `.new` tree into the official path and drops the old one.
+     *
+     * Both names are siblings, so the rename is atomic; the old tree is only deleted
+     * after the new one is visible. `install.json` is written by the caller afterwards,
+     * which keeps a failed swap pointing at a still-existing install.
+     */
+    private fun activate(installation: Installation, version: String): Installation {
+        val newPath = installation.jailPath
+        require(newPath.endsWith(NEW_SUFFIX)) { "不是临时 jail：$newPath" }
+        val basePath = newPath.removeSuffix(NEW_SUFFIX)
+
+        if (installation.rootMode) {
+            swapAsRoot(basePath, newPath, version)
+        } else {
+            swapLocal(basePath, newPath)
+        }
+
+        // Only now may the previous location be reclaimed: a PRoot-era tree under app
+        // data (unreachable in root mode) or a root-era tree (unreadable without root).
+        // Doing it after the swap means a failed reinstall can still fall back to it.
+        if (installation.rootMode) {
+            discardTree(File(Paths.engine(ctx), "jail").absolutePath, useRoot = false)
+            // The other root candidate may hold an install from a previous run (e.g.
+            // /data/local/tmp before /data/adb became writable).
+            listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
+                .filter { it != basePath }
+                .forEach { discardTree(it, useRoot = true) }
+        } else if (rootExec.isGranted()) {
+            // Switching root -> PRoot: the root jail is no longer used. deleteJail re-reads
+            // the live mount table first; a leftover chroot mount must never be walked
+            // into by `rm -rf` (that is what deleted /data on a real device).
+            listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
+                .forEach { discardTree(it, useRoot = true) }
+        }
+        return installation.copy(jailPath = basePath)
+    }
+
+    private fun swapLocal(basePath: String, newPath: String) {
+        val base = File(basePath)
+        val old = File(basePath + OLD_SUFFIX)
+        // A leftover sibling can still carry a chroot-era mount; sweep before deleting.
+        if (old.exists()) discardTree(old.absolutePath, useRoot = false)
+        if (base.exists() && !base.renameTo(old)) {
+            error("无法交接旧 jail（${base.absolutePath} → ${old.absolutePath}），旧安装保持不变")
+        }
+        if (!File(newPath).renameTo(base)) {
+            // Put the old tree back under its official name; the install.json pointer
+            // never changed, so the app keeps working.
+            runCatching { if (old.exists() && !base.exists()) old.renameTo(base) }
+            error("无法启用新 jail（$newPath → $basePath），已回滚，旧安装仍可用")
+        }
+        discardTree(old.absolutePath, useRoot = false)
+        Logx.i("新 jail 已启用：$basePath", ctx)
+    }
+
+    /** Root variant of [swapLocal]; the checks run on `.new` before the old tree moves. */
+    private fun swapAsRoot(basePath: String, newPath: String, version: String) {
+        val q = rootExec::q
+        // A `.old` left by an interrupted swap must be gone before `mv "$J" "$O"`, or the
+        // move would nest the live jail inside it. Its own mounts are swept first.
+        discardTree(basePath + OLD_SUFFIX, useRoot = true)
+        val script = buildString {
+            appendLine("set -e")
+            appendLine("J=${q(basePath)}")
+            appendLine("N=${q(newPath)}")
+            appendLine("O=${q(basePath + OLD_SUFFIX)}")
+            appendLine("test -f \"\$N/etc/debian_version\"")
+            appendLine("test -x \"\$N/bin/bash\"")
+            appendLine("test -x \"\$N/opt/claude/$version/claude\"")
+            appendLine("if [ -e \"\$J\" ]; then mv \"\$J\" \"\$O\"; fi")
+            appendLine("if ! mv \"\$N\" \"\$J\"; then")
+            appendLine("  if [ -e \"\$O\" ] && [ ! -e \"\$J\" ]; then mv \"\$O\" \"\$J\" || true; fi")
+            appendLine("  echo SWAP_FAILED")
+            appendLine("  exit 1")
+            appendLine("fi")
+            appendLine("echo SWAP_OK")
+        }
+        val result = rootExec.run(script, 300_000)
+        if (!result.ok || !result.out.contains("SWAP_OK")) {
+            error("启用新 jail 失败（exit=${result.code}）：${result.combined.takeLast(400)}")
+        }
+        discardTree(basePath + OLD_SUFFIX, useRoot = true)
+        Logx.i("新 jail 已启用：$basePath", ctx)
+    }
+
+    /**
+     * Deletes a tree under construction or a superseded install.
+     *
+     * Every jail tree removal goes through [RootExec.deleteJail] (root trees) or
+     * [RootExec.deleteTree] (app-private trees): both unmount the binds a chroot session
+     * left below the tree before deleting. Deleting a mountpoint directly descends into
+     * the host directory behind it (that wiped `/data` on a real device), so this is not
+     * a place for a plain `deleteRecursively`.
+     */
+    private fun discardTree(path: String, useRoot: Boolean) {
+        if (useRoot) {
+            val result = runCatching { rootExec.deleteJail(path) }
+                .onFailure { Logx.e("删除 jail 失败：$path（${it.message}）", ctx) }
+                .getOrNull()
+            if (result != null && !result.ok) {
+                Logx.e("删除 jail 失败：$path（${result.combined.takeLast(200)}）", ctx)
+            }
+        } else {
+            // App-private trees (PRoot mode) can still carry mounts from a chroot install
+            // performed while root was available, so the app-side delete is guarded too.
+            if (!rootExec.deleteTree(path)) {
+                Logx.e("删除 jail 失败：$path（目录仍在）", ctx)
+            }
+        }
+    }
+
+    /**
+     * Everything Debian needs to work on Android: DNS, hosts, hostname, mount points and
+     * a deterministic apt configuration. Written into the staged tree before it is
+     * copied into place.
+     */
+    private fun configureJail(root: File, version: String, spec: RootfsSpec) {
+        listOf(
+            "work", "root", "tmp", "dev", "proc", "sys", "system", "data", "sdcard",
+            "apex", "vendor", "odm", "product", "opt/claude/$version",
+            "etc/ssl/certs", "etc/apt/apt.conf.d",
+            "var/lib/apt/lists/partial", "var/cache/apt/archives/partial",
+        ).forEach { File(root, it).mkdirs() }
+
+        File(root, "etc/resolv.conf").writeText(dnsConfig() + "\n")
+        File(root, "etc/hosts").writeText("127.0.0.1 localhost\n::1 localhost\n")
+        File(root, "etc/hostname").writeText("claudroid\n")
+        File(root, "etc/claudroid-rootfs").writeText(
+            "${spec.image} ${spec.digest} sha256-verified ${spec.sizeBytes} bytes\n"
+        )
+
+        // Debian 13 ships deb822 sources pointing at the same mirror; rewrite them so the
+        // suite names are explicit and support can see exactly what we use. Plain http is
+        // intentional: ca-certificates is only installed afterwards.
+        File(root, "etc/apt/sources.list.d/debian.sources").writeText(
+            """
+            Types: deb
+            URIs: http://deb.debian.org/debian
+            Suites: trixie trixie-updates
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+            Types: deb
+            URIs: http://deb.debian.org/debian-security
+            Suites: trixie-security
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+            """.trimIndent() + "\n"
+        )
+
+        // PRoot presents the app uid as root; apt's _apt sandbox user then cannot open
+        // its own files, hence Sandbox::User. Retries/timeouts make flaky mobile
+        // networks much less fatal.
+        File(root, "etc/apt/apt.conf.d/99claudroid").writeText(
+            """
+            APT::Sandbox::User "root";
+            Acquire::Retries "3";
+            Acquire::http::Timeout "30";
+            Acquire::https::Timeout "30";
+            DPkg::Lock::Timeout "60";
+            """.trimIndent() + "\n"
+        )
+    }
+
+    /** Copy the CLI into opt/claude/<version> with a same-directory rename. */
+    private fun installCli(jail: File, claude: File, version: String) {
+        val dir = File(jail, "opt/claude/$version").apply { mkdirs() }
+        val dst = File(dir, "claude")
+        val tmp = File(dir, "claude.tmp")
+        Files.copy(claude.toPath(), tmp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        require(tmp.length() == claude.length()) {
+            "claude 复制不完整：${claude.length()} -> ${tmp.length()}"
+        }
+        tmp.setExecutable(true, false)
+        if (!tmp.renameTo(dst)) {
+            Files.move(tmp.toPath(), dst.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            dst.setExecutable(true, false)
+        }
+    }
+
+    private fun pruneVersions(installation: Installation, version: String) {
+        if (!installation.rootMode) {
+            File(installation.jail(), "opt/claude").listFiles()
+                ?.filter { it.isDirectory && it.name != version }
+                ?.forEach { runCatching { it.deleteRecursively() } }
+        } else {
+            val q = rootExec::q
+            rootExec.run(
+                "for d in ${q(installation.jailPath)}/opt/claude/*; do " +
+                    "[ \"\$d\" = ${q("${installation.jailPath}/opt/claude/$version")} ] || rm -rf \"\$d\"; done",
+                60_000,
+            )
+        }
+    }
+
+    /**
+     * Root variant of the final move: the app can read its staging tree but only root
+     * may write /data/adb. `cp -a` preserves modes and symlinks; the size/marker checks
+     * turn a full disk or interrupted copy into a clear failure instead of a jail that
+     * "looks installed".
+     */
+    private fun assembleAsRoot(jailPath: String, staged: File, version: String) {
+        val q = rootExec::q
+        val bb = rootExec.busybox()
+        val chown = if (bb != null) "$bb chown" else "chown"
+        // `cp -a` needs an empty target, and the previous tree must not be deleted by a
+        // plain `rm -rf`: a chroot session leaves host binds mounted below the jail, and
+        // removing a mountpoint descends into the host directory behind it.
+        val cleared = rootExec.deleteJail(jailPath)
+        if (!cleared.ok) {
+            error("清理旧 jail 失败（exit=${cleared.code}）：${cleared.combined.takeLast(300)}")
+        }
+        val script = buildString {
+            appendLine("set -e")
+            appendLine("J=${q(jailPath)}")
+            appendLine("SRC=${q(staged.absolutePath)}")
+            appendLine("mkdir -p \"\$J\"")
+            appendLine("if ! cp -a \"\$SRC/.\" \"\$J/\"; then cp -R -p \"\$SRC/.\" \"\$J/\"; fi")
+            // -h: never follow symlinks such as /etc/alternatives/awk -> /usr/bin/mawk
+            // (an absolute target would otherwise point outside the jail on the host).
+            appendLine("$chown -Rh 0:0 \"\$J\" 2>/dev/null || true")
+            appendLine("chmod 1777 \"\$J/tmp\" 2>/dev/null || true")
+            appendLine("chmod 0700 \"\$J/root\" 2>/dev/null || true")
+            appendLine("test -f \"\$J/etc/debian_version\"")
+            appendLine("test -x \"\$J/bin/bash\"")
+            appendLine("test -x \"\$J/opt/claude/$version/claude\"")
+            appendLine("echo ROOTFS_OK")
+        }
+        val result = rootExec.run(script, 600_000)
+        if (!result.ok || !result.out.contains("ROOTFS_OK")) {
+            error("Debian 容器复制失败（exit=${result.code}）：${result.combined.takeLast(400)}")
+        }
+        Logx.i("Debian 容器已复制到 $jailPath（chown root:root）", ctx)
+    }
 
     private fun pickRootJail(): String {
         val candidates = listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
@@ -338,130 +605,177 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         error("找不到可写的 jail 目录（/data/adb 与 /data/local/tmp 都不可写）")
     }
 
+    // ---------------------------------------------------------------- upgrade
+
     /**
-     * One script does the whole jail: mkdir, copy, chmod, symlinks, config files.
-     * `set -e` plus an explicit source/destination size comparison matters: without it a
-     * `cp` that runs out of space leaves a truncated binary and the script still exits 0.
+     * Same Debian rootfs, new CLI: copy the binary, run the tool check/apt pass, verify,
+     * and only then prune the old version. If apt fails the old CLI is still intact and
+     * install.json still points at it, so the app keeps working.
      */
-    private fun assembleAsRoot(
-        jailPath: String,
-        version: String,
-        arch: String,
+    private fun upgradeInPlace(
+        existing: Installation,
         claude: File,
-        loader: File,
-        busybox: File,
-        bash: BashBundle?,
-        ca: File?,
-    ) {
-        val q = rootExec::q
-        val dirs = listOf(
-            "opt/claude/$version", "lib", "bin", "etc/ssl/certs", "root", "work", "tmp",
-            "dev", "proc", "sys", "system", "data", "sdcard", "usr/bin", "usr/lib",
-            "apex", "vendor", "odm", "product",
+        version: String,
+        onProgress: (Progress) -> Unit,
+    ): Installation {
+        val updated = existing.copy(
+            version = version,
+            hasBash = true,
+            installedAt = System.currentTimeMillis(),
         )
-        val script = buildString {
-            appendLine("set -e")
-            appendLine("J=${q(jailPath)}")
-            dirs.forEach { appendLine("mkdir -p \"\$J/$it\"") }
-            appendLine("SRC=${q(claude.absolutePath)}")
-            appendLine("DST=\"\$J/opt/claude/$version/claude\"")
-            appendLine("cp -f \"\$SRC\" \"\$DST\"")
-            appendLine("S1=\$(stat -c %s \"\$SRC\")")
-            appendLine("S2=\$(stat -c %s \"\$DST\")")
-            appendLine("[ \"\$S1\" = \"\$S2\" ] || { echo \"claude copy truncated: \$S1 -> \$S2\"; exit 11; }")
-            appendLine("chmod 0755 \"\$DST\"")
-            appendLine("cp -f ${q(loader.absolutePath)} \"\$J/lib/ld-musl-$arch.so.1\"")
-            appendLine("chmod 0755 \"\$J/lib/ld-musl-$arch.so.1\"")
-            appendLine("ln -sf ld-musl-$arch.so.1 \"\$J/lib/libc.musl-$arch.so.1\"")
-            appendLine("cp -f ${q(busybox.absolutePath)} \"\$J/bin/busybox\"")
-            appendLine("chmod 0755 \"\$J/bin/busybox\"")
-            appendLine("for a in ${APPLETS.joinToString(" ")}; do ln -sf busybox \"\$J/bin/\$a\"; done")
-            bash?.let { bundle ->
-                appendLine("cp -f ${q(bundle.bash.absolutePath)} \"\$J/bin/bash\"")
-                appendLine("chmod 0755 \"\$J/bin/bash\"")
-                bundle.libs.forEach { lib ->
-                    appendLine("cp -f ${q(lib.absolutePath)} \"\$J/usr/lib/${lib.name}\"")
-                    appendLine("chmod 0644 \"\$J/usr/lib/${lib.name}\"")
-                }
+        if (existing.rootMode) {
+            val q = rootExec::q
+            val dir = "${existing.jailPath}/opt/claude/$version"
+            val dst = "$dir/claude"
+            val result = rootExec.run(
+                "set -e; mkdir -p ${q(dir)}; cp -f ${q(claude.absolutePath)} ${q(dst)}; " +
+                    "chmod 0755 ${q(dst)}; " +
+                    "S1=\$(stat -c %s ${q(claude.absolutePath)}); S2=\$(stat -c %s ${q(dst)}); " +
+                    "[ \"\$S1\" = \"\$S2\" ]; echo COPY_OK",
+                300_000,
+            )
+            if (!result.ok || !result.out.contains("COPY_OK")) {
+                error("CLI 复制到 root jail 失败（exit=${result.code}）：${result.combined.takeLast(300)}")
             }
-            ca?.let {
-                appendLine("cp -f ${q(it.absolutePath)} \"\$J/etc/ssl/certs/ca-certificates.crt\"")
-            }
-            appendLine("printf '%s\\n' ${q(dnsConfig())} > \"\$J/etc/resolv.conf\"")
-            appendLine("printf '%s\\n' '127.0.0.1 localhost' '::1 localhost' > \"\$J/etc/hosts\"")
-            appendLine("printf '%s\\n' 'root:x:0:0:root:/root:/bin/sh' > \"\$J/etc/passwd\"")
-            appendLine("printf '%s\\n' 'root:x:0:' > \"\$J/etc/group\"")
-            // keep only the active version (each one is ~300 MB)
-            appendLine("for d in \"\$J\"/opt/claude/*; do")
-            appendLine("  [ \"\$d\" = \"\$J/opt/claude/$version\" ] || rm -rf \"\$d\"")
-            appendLine("done")
-            appendLine("test -x \"\$DST\"")
-            appendLine("echo JAIL_OK")
+        } else {
+            installCli(existing.jail(), claude, version)
         }
-        val result = rootExec.run(script, 240_000)
-        if (!result.ok || !result.out.contains("JAIL_OK")) {
-            error("jail 组装失败（exit=${result.code}）：${result.combined.takeLast(400)}")
+
+        val tools = runGuest(updated, toolsScript(version), 900_000)
+        if (!tools.ok || !tools.combined.contains("TOOLS_OK") || !tools.combined.contains("CLAUDE_OK")) {
+            throw IllegalStateException(toolsFailure(tools))
         }
-        Logx.i("jail 组装完成并校验尺寸：$jailPath", ctx)
+        if (!verify(updated, existing.rootMode)) {
+            throw IllegalStateException("更新后自检失败：CLI 不可执行或容器工具缺失，已保留旧版本。")
+        }
+        pruneVersions(updated, version)
+        Paths.saveInstallation(ctx, updated)
+        onProgress(Progress("CLI 已更新", 0.98f, version))
+        return updated
     }
 
-    /** Non-root variant: identical layout, written by the app itself. */
-    private fun assembleAsApp(
-        jail: File,
-        version: String,
-        arch: String,
-        claude: File,
-        loader: File,
-        busybox: File,
-        bash: BashBundle?,
-        ca: File?,
-    ) {
-        listOf(
-            "opt/claude/$version", "lib", "bin", "etc/ssl/certs", "root", "work", "tmp",
-            "dev", "proc", "sys", "system", "data", "sdcard", "usr/bin", "usr/lib",
-            "apex", "vendor", "odm", "product",
-        ).forEach { File(jail, it).mkdirs() }
+    // ---------------------------------------------------------------- guest execution
 
-        val dst = File(jail, "opt/claude/$version/claude")
-        Files.copy(claude.toPath(), dst.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        require(dst.length() == claude.length()) { "claude 复制不完整：${claude.length()} -> ${dst.length()}" }
-        Files.copy(loader.toPath(), File(jail, "lib/ld-musl-$arch.so.1").toPath(), StandardCopyOption.REPLACE_EXISTING)
-        Files.copy(busybox.toPath(), File(jail, "bin/busybox").toPath(), StandardCopyOption.REPLACE_EXISTING)
-        ca?.let { Files.copy(it.toPath(), File(jail, "etc/ssl/certs/ca-certificates.crt").toPath(), StandardCopyOption.REPLACE_EXISTING) }
-
-        dst.setExecutable(true, false)
-        File(jail, "lib/ld-musl-$arch.so.1").setExecutable(true, false)
-        File(jail, "bin/busybox").setExecutable(true, false)
-
-        symlink(File(jail, "lib/libc.musl-$arch.so.1"), "ld-musl-$arch.so.1")
-        APPLETS.forEach { applet -> symlink(File(jail, "bin/$applet"), "busybox") }
-        bash?.let { bundle ->
-            val target = File(jail, "bin/bash")
-            Files.copy(bundle.bash.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            target.setExecutable(true, false)
-            bundle.libs.forEach { lib ->
-                val dstLib = File(jail, "usr/lib/${lib.name}")
-                Files.copy(lib.toPath(), dstLib.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
+    /** Runs a shell script inside the Debian container (PRoot or chroot). */
+    private fun runGuest(installation: Installation, script: String, timeoutMs: Long): Exec {
+        val env = guestEnv()
+        if (!installation.rootMode) {
+            val spec = ProotRunner(ctx).runSpec(
+                installation,
+                listOf("/bin/sh", "-c", script),
+                env,
+                workDir = "/root",
+            )
+            return runLocal(spec.argv, spec.env, spec.cwd, timeoutMs)
         }
 
-        File(jail, "etc/resolv.conf").writeText(dnsConfig() + "\n")
-        File(jail, "etc/hosts").writeText("127.0.0.1 localhost\n::1 localhost\n")
-        File(jail, "etc/passwd").writeText("root:x:0:0:root:/root:/bin/sh\n")
-        File(jail, "etc/group").writeText("root:x:0:\n")
+        val su = rootExec.suBinary()
+            ?: return Exec(127, "", "找不到 su，无法在 root 模式运行容器命令")
+        val engineDir = Paths.engine(ctx)
+        return if (rootExec.chrootReady(installation.jailPath)) {
+            val bb = rootExec.busybox()
+                ?: return Exec(127, "", "缺少 busybox chroot")
+            val wrapper = File(engineDir, "provision-chroot.sh")
+            wrapper.writeText(
+                TurnScripts.chrootShell(
+                    env = env,
+                    jail = installation.jailPath,
+                    workspace = Paths.workspace(ctx).absolutePath,
+                    home = Paths.home(ctx).absolutePath,
+                    chrootTool = bb,
+                    guestScript = script,
+                    pidFile = null,
+                )
+            )
+            val r = try {
+                rootExec.unmountJail(installation.jailPath)
+                rootExec.chrootBegin()
+                rootExec.execute(listOf(su, "-c", "sh ${wrapper.absolutePath}"), timeoutMs)
+            } finally {
+                // The provisioning chroot binds workspace/home into the jail; those mounts
+                // survive the process and must not be left for a later `rm -rf` to walk
+                // into (that is what wiped /data on a real device).
+                rootExec.chrootEnd()
+                rootExec.unmountJail(installation.jailPath)
+            }
+            Exec(r.code, r.out, r.err)
+        } else {
+            // Root but no usable chroot(1): run PRoot through su, exactly like the turn
+            // path will. Better than failing the install outright.
+            val spec = ProotRunner(ctx).runSpec(
+                installation,
+                listOf("/bin/sh", "-c", script),
+                env,
+                workDir = "/root",
+            )
+            val wrapper = File(engineDir, "provision-proot.sh")
+            wrapper.writeText(TurnScripts.rootExec(spec.env, spec.argv, pidFile = null))
+            val r = rootExec.execute(listOf(su, "-c", "sh ${wrapper.absolutePath}"), timeoutMs)
+            Exec(r.code, r.out, r.err)
+        }
+    }
 
-        File(jail, "opt/claude").listFiles()?.filter { it.isDirectory && it.name != version }
-            ?.forEach { runCatching { it.deleteRecursively() } }
+    private fun runLocal(
+        argv: List<String>,
+        env: Map<String, String>,
+        cwd: File,
+        timeoutMs: Long,
+    ): Exec {
+        val pb = ProcessBuilder(argv).directory(cwd).redirectErrorStream(true)
+        pb.environment().clear()
+        pb.environment().putAll(env)
+        val process = runCatching { pb.start() }
+            .getOrElse { return Exec(-2, "", it.message ?: "启动失败") }
+        val out = StringBuilder()
+        val reader = Thread {
+            process.inputStream.bufferedReader().use { input ->
+                val buf = CharArray(4096)
+                while (true) {
+                    val n = runCatching { input.read(buf) }.getOrDefault(-1)
+                    if (n <= 0) break
+                    synchronized(out) {
+                        val room = MAX_LOG_CHARS - out.length
+                        if (room > 0) out.append(buf, 0, minOf(n, room))
+                    }
+                }
+            }
+        }
+        reader.start()
+        val done = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!done) {
+            process.destroyForcibly()
+            process.waitFor(5, TimeUnit.SECONDS)
+        }
+        reader.join(3_000)
+        return Exec(
+            if (done) process.exitValue() else -1,
+            out.toString(),
+            if (done) "" else "命令超时（${timeoutMs / 1000}s）",
+        )
+    }
+
+    /** Actionable failure text; the UI shows this verbatim. */
+    private fun toolsFailure(r: Exec): String = toolsFailureText(r.code, r.combined)
+
+    private fun cleanupStaging(claude: File) {
+        // Keep the verified archives: switching root <-> proot re-extracts without a new
+        // 30 MB layer / ~100 MB CLI download. Drop the staged binary (a second ~300 MB
+        // copy that is already inside the jail) and the root staging tree.
+        runCatching { claude.delete() }
+        runCatching { File(Paths.staging(ctx), "rootfs-stage").deleteRecursively() }
     }
 
     // ---------------------------------------------------------------- helpers
 
-    /** 306 MB binary + 150 MB archive + headroom; failing early beats a truncated copy. */
+    /** Fresh install needs CLI + layer + two copies + apt; failing early beats ENOSPC. */
     private fun requireFreeSpace(needMb: Long) {
         val stat = android.os.StatFs(Paths.engine(ctx).absolutePath)
         val freeMb = stat.availableBytes / (1024 * 1024)
         if (freeMb < needMb) {
-            error("存储空间不足：安装需要约 ${needMb}MB，当前可用 ${freeMb}MB。请清理后重试。")
+            error(
+                "存储空间不足：安装 Debian 容器 + 工具需要约 ${needMb}MB，当前可用 ${freeMb}MB。" +
+                    "请清理空间后重试（容器和截图缓存是常见占用）。"
+            )
         }
         Logx.i("可用空间 ${freeMb}MB（需要约 ${needMb}MB）", ctx)
     }
@@ -494,14 +808,6 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         v.ifBlank { null }
     }.getOrNull()
 
-    private fun symlink(link: File, target: String) {
-        runCatching {
-            link.parentFile?.mkdirs()
-            if (link.exists()) link.delete()
-            Files.createSymbolicLink(link.toPath(), File(target).toPath())
-        }
-    }
-
     fun humanBytes(v: Long): String = when {
         v >= 1L shl 30 -> "%.1f GB".format(v.toDouble() / (1L shl 30))
         v >= 1L shl 20 -> "%.0f MB".format(v.toDouble() / (1L shl 20))
@@ -510,17 +816,119 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     }
 
     companion object {
-        /** Real binary is ~306 MB; anything under 100 MB is definitely truncated. */
+        /** Real binary is ~300 MB; anything under 100 MB is definitely truncated. */
         const val MIN_BINARY_BYTES = 100L * 1024 * 1024
-        const val MIN_LOADER_BYTES = 100_000L
 
-        val APPLETS = listOf(
-            "sh", "ash", "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "ln",
-            "chmod", "chown", "touch", "stat", "readlink", "realpath", "basename", "dirname",
-            "grep", "sed", "awk", "find", "xargs", "sort", "uniq", "head", "tail", "wc",
-            "echo", "printf", "env", "id", "ps", "kill", "sleep", "date", "tar", "gzip",
-            "gunzip", "unzip", "df", "du", "mount", "umount", "test", "tr", "cut", "tee",
-            "xxd", "od", "sha256sum", "md5sum", "wget", "which", "whoami", "pwd", "true", "false",
+        private const val MAX_LOG_CHARS = 200_000
+
+        /**
+         * The new tree is built under `<jail>.new` and only renamed after apt + verify,
+         * so a failed reinstall never touches the working jail. `.old` exists only for
+         * the duration of the rename.
+         */
+        private const val NEW_SUFFIX = ".new"
+        private const val OLD_SUFFIX = ".old"
+
+        /** Base tools the agent needs (git, grep, sed/awk …). */
+        val TOOLS = listOf(
+            "bash", "git", "grep", "sed", "awk", "tar", "gzip", "xz", "curl", "less",
         )
+
+        private val TOOL_PACKAGES = listOf(
+            "bash", "git", "grep", "coreutils", "sed", "mawk", "tar", "gzip",
+            "xz-utils", "curl", "ca-certificates", "less",
+        )
+
+        internal fun guestEnv(): Map<String, String> = linkedMapOf(
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME" to "/root",
+            "TMPDIR" to "/tmp",
+            "LANG" to "C.UTF-8",
+        )
+
+        /**
+         * The provisioning script. Unit-tested because it is the difference between
+         * "installed" and "installed but apt never ran".
+         *
+         * It is idempotent: a healthy container only prints the current versions, so an
+         * upgrade with an unchanged rootfs is cheap. Failures are marked with stable
+         * tokens (`APT_UPDATE_FAIL`, `TOOLS_MISSING`) that [toolsFailure] translates.
+         */
+        internal fun toolsScript(version: String): String = buildString {
+            appendLine("export DEBIAN_FRONTEND=noninteractive")
+            appendLine("export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+            appendLine("export LANG=C.UTF-8")
+            appendLine("mkdir -p /var/lib/apt/lists/partial /var/cache/apt/archives/partial 2>/dev/null || true")
+            appendLine("dpkg --configure -a >/dev/null 2>&1 || true")
+            appendLine("missing=''")
+            appendLine("for t in ${TOOLS.joinToString(" ")}; do")
+            appendLine("  command -v \"\$t\" >/dev/null 2>&1 || missing=\"\$missing \$t\"")
+            appendLine("done")
+            appendLine("if [ -n \"\$missing\" ]; then")
+            appendLine("  echo \"APT_NEED:\$missing\"")
+            appendLine("  ok=0")
+            appendLine("  for i in 1 2 3; do")
+            appendLine("    if apt-get -q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; then ok=1; break; fi")
+            appendLine("    echo \"APT_UPDATE_RETRY \$i\"; sleep \$((i * 3))")
+            appendLine("  done")
+            appendLine("  [ \"\$ok\" = 1 ] || { echo APT_UPDATE_FAIL; exit 21; }")
+            appendLine("  ok=0")
+            appendLine("  for i in 1 2 3; do")
+            appendLine(
+                "    if apt-get -y --no-install-recommends -o DPkg::Lock::Timeout=60 install " +
+                    TOOL_PACKAGES.joinToString(" ") + "; then ok=1; break; fi"
+            )
+            appendLine("    echo \"APT_INSTALL_RETRY \$i\"")
+            appendLine("    dpkg --configure -a >/dev/null 2>&1 || true")
+            appendLine("    sleep \$((i * 3))")
+            appendLine("  done")
+            appendLine("  [ \"\$ok\" = 1 ] || { echo APT_INSTALL_FAIL; exit 22; }")
+            appendLine("  rm -f /var/cache/apt/archives/*.deb 2>/dev/null || true")
+            appendLine("  rm -f /var/lib/apt/lists/*.lz4 2>/dev/null || true")
+            appendLine("fi")
+            appendLine("missing=''")
+            appendLine("for t in ${TOOLS.joinToString(" ")}; do")
+            appendLine("  command -v \"\$t\" >/dev/null 2>&1 || missing=\"\$missing \$t\"")
+            appendLine("done")
+            appendLine("[ -z \"\$missing\" ] || { echo \"TOOLS_MISSING:\$missing\"; exit 23; }")
+            appendLine("test -f /etc/debian_version || { echo NOT_DEBIAN; exit 24; }")
+            appendLine("test -x /opt/claude/$version/claude || { echo CLAUDE_MISSING; exit 25; }")
+            appendLine("/opt/claude/$version/claude --version 2>&1 | head -n 1")
+            appendLine("echo TOOLS_OK")
+            appendLine("echo CLAUDE_OK")
+        }
+
+        /**
+         * Translates the last ~400 chars of provisioning output into a message the user
+         * can act on. Kept pure so the token -> hint mapping is unit-tested.
+         */
+        internal fun toolsFailureText(code: Int, combined: String): String {
+            val text = combined
+            val detail = text.replace('\n', ' ').replace('\t', ' ').trim().takeLast(400)
+            // The script appends each tool with a leading space, so `TOOLS_MISSING: git xz`
+            // is the normal shape; allow (and trim) that whitespace or the hint loses the
+            // only actionable part of the message.
+            val missing = Regex("""TOOLS_MISSING:?[ \t]*([^\r\n]*)""")
+                .find(text)?.groupValues?.getOrNull(1)?.trim()?.take(200)
+            val hint = when {
+                text.contains("APT_UPDATE_FAIL") ->
+                    "容器无法连接 Debian 软件源。请检查网络或 DNS（例如关闭代理/换网络）后重试；" +
+                        "也可以在「终端」里手动执行 apt-get update。"
+                text.contains("APT_INSTALL_FAIL") ->
+                    "apt 安装基础工具失败，常见原因是磁盘空间不足或软件源不稳定。" +
+                        "请清理空间后重试；仍失败可在「终端」里手动执行 " +
+                        "apt-get install -y bash git grep coreutils sed mawk tar gzip xz-utils curl ca-certificates less。"
+                !missing.isNullOrBlank() ->
+                    "安装完成后仍缺少工具：$missing。请重试安装，或在「终端」里手动 apt-get install。"
+                text.contains("CLAUDE_MISSING") ->
+                    "Claude Code 可执行文件未放入容器，请重试安装。"
+                text.contains("NOT_DEBIAN") ->
+                    "容器不是有效的 Debian rootfs，请重试安装。"
+                code == -1 ->
+                    "容器工具安装超时（网络过慢或 apt 卡住）。请稍后重试；也可以在「终端」里手动执行 apt。"
+                else -> "Debian 容器初始化失败"
+            }
+            return "$hint（exit=$code）$detail"
+        }
     }
 }

@@ -1,12 +1,18 @@
 package app.claudroid.engine
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.GZIPInputStream
 
 /**
- * Just enough tar to pull one entry out of an npm tarball (ustar, no sparse files).
- * Avoiding a dependency here keeps the APK small and the behaviour predictable.
+ * Just enough tar to pull entries out of npm tarballs / Debian rootfs layers (ustar,
+ * including the PAX and GNU long-name extensions used by Docker images). Avoiding a
+ * dependency here keeps the APK small and the behaviour predictable.
  */
 object TarGz {
 
@@ -52,7 +58,7 @@ object TarGz {
 
     /**
      * Extracts every regular file for which [select] returns a relative destination.
-     * Used to pull bash + its Alpine shared libraries out of .apk packages.
+     * Used to pull a single file out of the official CLI npm tarball (`package/claude`).
      */
     fun extractMatching(archive: File, destRoot: File, select: (Entry) -> String?): List<File> {
         val written = mutableListOf<File>()
@@ -77,6 +83,223 @@ object TarGz {
             }
         }
         return written
+    }
+
+    /**
+     * Extracts a whole archive (the Debian rootfs) into [destRoot].
+     *
+     * Handles directories (mode applied last, so a 0555 parent cannot block its children),
+     * regular files, hardlinks (Deferred: the target may appear later in the stream) and
+     * symlinks. Absolute symlinks are kept verbatim — the rootfs relies on them, e.g.
+     * `/etc/alternatives/awk -> /usr/bin/mawk` and usrmerge's `/bin -> usr/bin`.
+     *
+     * Every destination is checked against the canonical extraction root, so a malicious
+     * archive cannot escape via `..` or a symlinked parent. Special bits (setuid) are
+     * applied with `chmod` afterwards because java.nio cannot express them.
+     *
+     * Returns the number of entries written.
+     */
+    fun extractAll(
+        archive: File,
+        destRoot: File,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): Int {
+        destRoot.mkdirs()
+        val root = destRoot.canonicalFile
+        val rootPrefix = root.path + File.separator
+        val dirModes = mutableListOf<Pair<File, Int>>()
+        val pendingLinks = mutableListOf<Pair<File, String>>()
+        var pendingPath: String? = null
+        var pendingLink: String? = null
+        var count = 0
+        var written = 0L
+
+        fun inside(file: File): Boolean {
+            val path = runCatching { file.canonicalPath }.getOrElse { return false }
+            return path == root.path || path.startsWith(rootPrefix)
+        }
+
+        fun resolve(relative: String, kind: String): File {
+            val dest = File(root, relative)
+            // Check the parent, not the final component: an existing symlink at `dest` is
+            // about to be replaced, but a symlinked parent must never escape the root.
+            val parent = dest.parentFile?.canonicalPath.orEmpty()
+            require(parent == root.path || parent.startsWith(rootPrefix)) { "unsafe tar $kind: $relative" }
+            return dest
+        }
+
+        fun resolveSource(relative: String): File {
+            val source = File(root, relative)
+            require(inside(source)) { "unsafe tar hardlink: $relative" }
+            return source
+        }
+
+        GZIPInputStream(archive.inputStream().buffered(1 shl 20)).use { input ->
+            while (true) {
+                val header = input.readExactly(512) ?: break
+                if (header.all { it == 0.toByte() }) break
+                val size = readOctal(header, 124, 12)
+                val mode = readOctal(header, 100, 8).toInt()
+                val type = header[156].toInt().toChar()
+                var name = entryName(header)
+                var link = readString(header, 157, 100)
+
+                when (type) {
+                    // PAX extended header: applies to the next real entry.
+                    'x', 'X' -> {
+                        val pax = readPax(input, size)
+                        pax["path"]?.let { pendingPath = it }
+                        pax["linkpath"]?.let { pendingLink = it }
+                        continue
+                    }
+                    // Global PAX header: nothing in it matters to us.
+                    'g' -> {
+                        skipEntry(input, size)
+                        continue
+                    }
+                    // GNU long name / long link name.
+                    'L' -> {
+                        pendingPath = readNamePayload(input, size)
+                        continue
+                    }
+                    'K' -> {
+                        pendingLink = readNamePayload(input, size)
+                        continue
+                    }
+                }
+
+                val fullName = (pendingPath ?: name).removePrefix("./")
+                val fullLink = (pendingLink ?: link).removePrefix("./")
+                pendingPath = null
+                pendingLink = null
+
+                val relative = fullName.trimEnd('/')
+                if (relative.isEmpty()) {
+                    skipEntry(input, size)
+                    continue
+                }
+
+                when (type) {
+                    '5' -> {
+                        val dest = resolve(relative, "directory")
+                        dest.mkdirs()
+                        dirModes += dest to mode
+                        skipEntry(input, size)
+                        count++
+                    }
+                    '0', '\u0000', '7' -> {
+                        val dest = resolve(relative, "file")
+                        dest.parentFile?.mkdirs()
+                        if (dest.isDirectory) dest.deleteRecursively() else dest.delete()
+                        FileOutputStream(dest).buffered(256 * 1024).use { out ->
+                            copyExactly(input, out, size)
+                        }
+                        applyMode(dest, mode)
+                        written += size
+                        count++
+                        onProgress(written, -1L)
+                    }
+                    '2' -> {
+                        val dest = resolve(relative, "symlink")
+                        dest.parentFile?.mkdirs()
+                        if (dest.isDirectory) dest.deleteRecursively() else dest.delete()
+                        Files.createSymbolicLink(dest.toPath(), File(fullLink).toPath())
+                        skipEntry(input, size)
+                        count++
+                    }
+                    '1' -> {
+                        // Target may come later in the stream; resolve after the loop.
+                        pendingLinks += resolve(relative, "hardlink") to fullLink
+                        skipEntry(input, size)
+                    }
+                    else -> skipEntry(input, size)
+                }
+            }
+        }
+
+        pendingLinks.forEach { (dest, link) ->
+            val source = resolveSource(link)
+            dest.parentFile?.mkdirs()
+            if (dest.exists()) dest.delete()
+            runCatching {
+                Files.createLink(dest.toPath(), source.toPath())
+            }.onFailure {
+                // Fallback for filesystems that refuse hardlinks (or an unusual ordering).
+                if (source.isFile) {
+                    Files.copy(source.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                } else {
+                    throw it
+                }
+            }
+        }
+
+        // Deepest first: chmod 0555 on a parent would otherwise block the children.
+        dirModes.sortedByDescending { it.first.path.length }.forEach { (dir, mode) ->
+            runCatching { applyMode(dir, mode) }
+        }
+        return count
+    }
+
+    private fun readPax(input: InputStream, size: Long): Map<String, String> {
+        if (size <= 0 || size > 1 shl 20) {
+            skipEntry(input, size)
+            return emptyMap()
+        }
+        val bytes = input.readExactly(size.toInt()) ?: ByteArray(0)
+        skipExactly(input, ((512 - (size % 512)) % 512))
+        val text = String(bytes, StandardCharsets.UTF_8)
+        val result = mutableMapOf<String, String>()
+        var i = 0
+        while (i < text.length) {
+            val space = text.indexOf(' ', i)
+            if (space < 0) break
+            val len = text.substring(i, space).toIntOrNull() ?: break
+            if (len <= 0 || i + len > text.length) break
+            val record = text.substring(space + 1, i + len).trimEnd('\n')
+            val eq = record.indexOf('=')
+            if (eq > 0) result[record.substring(0, eq)] = record.substring(eq + 1)
+            i += len
+        }
+        return result
+    }
+
+    private fun readNamePayload(input: InputStream, size: Long): String? {
+        if (size <= 0 || size > 1 shl 16) {
+            skipEntry(input, size)
+            return null
+        }
+        val bytes = input.readExactly(size.toInt()) ?: return null
+        skipExactly(input, ((512 - (size % 512)) % 512))
+        return String(bytes, StandardCharsets.UTF_8).trimEnd('\u0000', '\n')
+    }
+
+    /**
+     * Applies the tar mode. Android's java.nio has no API for setuid/setgid/sticky, so
+     * those bits go through /system/bin/chmod; a failure here is not fatal (the bits only
+     * matter for a handful of Debian tools, and root mode copies the tree with `cp -a`).
+     */
+    private fun applyMode(file: File, mode: Int) {
+        if (mode == 0) return
+        runCatching {
+            val perms = PosixFilePermissions.fromString(
+                buildString {
+                    val bits = listOf(0x100 to 'r', 0x80 to 'w', 0x40 to 'x', 0x20 to 'r',
+                        0x10 to 'w', 0x8 to 'x', 0x4 to 'r', 0x2 to 'w', 0x1 to 'x')
+                    bits.forEach { (mask, c) -> append(if (mode and mask != 0) c else '-') }
+                }
+            )
+            Files.setPosixFilePermissions(file.toPath(), perms)
+        }
+        // Kotlin has no octal literals: 07000 = 0xE00, 07777 = 0xFFF.
+        val special = mode and 0xE00
+        if (special != 0) {
+            runCatching {
+                ProcessBuilder("/system/bin/chmod", Integer.toOctalString(mode and 0xFFF), file.absolutePath)
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+            }
+        }
     }
 
     private fun entryName(header: ByteArray): String {

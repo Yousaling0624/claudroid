@@ -1,6 +1,7 @@
 # 架构与取舍
 
-> 本文记录的是实现过程中真实测量过的结论，包含四次推翻原设计的地方（原生二进制 / W^X / 不需要 MCP / 免 root 用 PRoot）。
+> 本文记录的是实现过程中真实测量过的结论，包含五次推翻原设计的地方（原生二进制 / W^X /
+> 不需要 MCP / 免 root 用 PRoot / 从手工 Alpine jail 换成 Debian 13 rootfs）。
 
 ## 1. 目标与候选方案
 
@@ -21,28 +22,40 @@ $ curl -s https://registry.npmjs.org/@anthropic-ai/claude-code/latest
 bin   = {"claude":"bin/claude.exe"}
 deps  = {}
 optionalDependencies = {
-  @anthropic-ai/claude-code-linux-arm64-musl: 2.1.318,
   @anthropic-ai/claude-code-linux-arm64:      2.1.318,
-  @anthropic-ai/claude-code-linux-x64-musl:   … }
+  @anthropic-ai/claude-code-linux-arm64-musl: 2.1.318,
+  @anthropic-ai/claude-code-linux-x64:        … }
 unpackedSize = 190570        ← 本体只有 190 KB
 ```
 
-真正的程序在平台包里。下载 `@anthropic-ai/claude-code-linux-arm64-musl` 并解析 ELF 头：
+真正的程序在平台包里。下载 `@anthropic-ai/claude-code-linux-arm64`（**glibc** 变体，不是
+`-musl`）并解析 ELF 头：
 
 ```
 ELF64: true   type: EXEC   machine: AARCH64
-PT_INTERP: /lib/ld-musl-aarch64.so.1        ← 动态链接 musl，不是静态
-DT_NEEDED: （只有 libc.musl-aarch64.so.1，由加载器自己提供）
-size: 306.8 MB
+PT_INTERP: /lib/ld-linux-aarch64.so.1      ← glibc，由 Debian rootfs 提供
+DT_NEEDED: libc.so.6, libm.so.6, libpthread.so.0, libdl.so.2, librt.so.1
+size: 337,438,136 B (321.8 MiB)             ← tarball 158,364,311 B
 ```
 
-两个结论：
+三个结论：
 
 1. **不需要 Node**。所谓"内置 Node + npm 包"针对的是 1.x 时代（纯 `cli.js`）；
-   2.x 之后要跟官方最新版，只需要"平台二进制 + musl 加载器"。
-2. **必须让加载器出现在 `/lib/ld-musl-aarch64.so.1` 这个绝对路径上**。Android 的 `/lib`
-   属于系统分区（多数机型只是 `/system/lib64` 的软链），既不可写也不保证存在，
-   于是用 **chroot** 把私有目录树变成 `/` 是最干净的解法。
+   2.x 之后要跟官方最新版，只需要"平台二进制 + 它依赖的 libc 运行时"。
+2. **需要一整套 glibc 用户态**，而不只是一个加载器。二进制还依赖 `libc.so.6`、`libm.so.6`、
+   `libpthread.so.0`、`libdl.so.2`、`librt.so.1` 等共享库，`PT_INTERP` 只是入口
+   （C++/Rust 运行库是静态链进二进制的，所以没有 `libstdc++` 依赖）。手工凑这些库既容易漏，
+   也跟不上上游发版，所以直接用**官方 `debian:13-slim` rootfs**：glibc、coreutils
+   都是现成的，缺的工具再用 apt 装。
+3. **必须是绝对路径上的 `/lib/ld-linux-aarch64.so.1`**。Android 的 `/lib` 属于系统分区
+   （多数机型只是 `/system/lib64` 的软链），既不可写也不保证存在，于是用 **chroot**
+   把私有目录树变成 `/` 是最干净的解法（Debian 13 是 usrmerge，`/lib` → `/usr/lib`，
+   两种写法都能命中同一个文件）。
+
+> 早期版本用的是 `-linux-arm64-musl` + 手搓 Alpine 小 jail（musl loader + busybox + bash）。
+> musl 变体要求加载器出现在 `/lib/ld-musl-aarch64.so.1`，同样需要 chroot，但库依赖要自己
+> 一个个补。换成官方 Debian rootfs 之后，这段拼装逻辑整体删掉了，`Registry.kt` 里的
+> `npmPackage` 指向 glibc 变体。
 
 ## 3. 关键发现：Android 10 的 W^X，以及 targetSdk 28 + PRoot 的解法
 
@@ -81,35 +94,49 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 `/vendor`、`/odm`、`/product`（存在才 bind）和可读的 `/sdcard` 映射进 guest。
 
 
-## 4. jail 里有什么
+## 4. 容器里有什么
 
-有 root 时在 `/data/adb/claudroid/`；没有 root 时同一套布局在
-`filesDir/engine/jail/`，由 PRoot 当 rootfs 使用。
+有 root 时在 `/data/adb/claudroid/`（不可写则退回 `/data/local/tmp/claudroid`）；没有 root
+时同一套布局在 `filesDir/engine/jail/`，由 PRoot 当 rootfs 使用。两边都是官方
+`debian:13-slim` 的 OCI layer（压缩 blob 30,214,037 B，解开约 100 MB / 2678 个文件），
+再按需 apt 装工具。
 
 ```
 /data/adb/claudroid/                    （或 filesDir/engine/jail/）
-├── lib/ld-musl-aarch64.so.1          Alpine `musl` 包（~723 KB）
-├── lib/libc.musl-aarch64.so.1        软链
-├── bin/busybox                       Alpine `busybox` 包（~919 KB）+ 60 个 applet 软链
-├── bin/bash                          Alpine `bash` 包（GNU bash）
-├── usr/lib/libreadline.so.8          Alpine `readline`
-├── usr/lib/libncursesw.so.6          Alpine `libncursesw`
-├── opt/claude/<version>/claude       官方二进制（~306 MB，只保留当前版本）
+├── lib/ld-linux-aarch64.so.1          Debian glibc 加载器（usrmerge 下软链到 usr/lib/aarch64-linux-gnu/）
+├── usr/lib/aarch64-linux-gnu/         libc.so.6、libm.so.6、librt.so.1 …（base 自带）
+├── bin/bash → usr/bin/bash            base 自带（slim 也有 bash、grep、sed、mawk、tar、gzip）
+├── usr/bin/{git,curl,xz,less}         apt: git curl xz-utils less（base 没有）
+├── etc/ssl/certs/ca-certificates.crt  apt: ca-certificates（base 没有 CA bundle）
+├── usr/share/zoneinfo                 base 自带（tzdata 已被 slim 裁到 509 个条目）
+├── opt/claude/<version>/claude        官方 glibc 二进制（337,438,136 B，只保留当前版本）
+├── etc/debian_version                 Debian 13（"13.7"）
+├── etc/claudroid-rootfs               镜像 tag + layer digest，供日志/排障
 ├── etc/resolv.conf                   当前网络的 DNS（ConnectivityManager 优先）
-├── etc/ssl/certs/ca-certificates.crt curl.se 的 CA bundle（保险）
-├── etc/passwd, group, hosts
+├── etc/hosts, hostname, passwd, group
+├── etc/apt/sources.list.d/debian.sources   trixie / trixie-updates / trixie-security
+├── etc/apt/apt.conf.d/99claudroid     APT::Sandbox::User=root、重试 3 次、超时 30 s
 ├── root/                             HOME，`~/.claude` 会话记录落在这里
 ├── work/                             工作区 bind mount
-└── dev/ proc/ sys/ system/ data/ sdcard/   挂载点
+└── dev/ proc/ sys/ system/ data/ sdcard/ tmp/   挂载点
 ```
 
-GNU bash 是刻意补的：Claude Code 的 Bash 工具按 Unix 习惯调用 `/bin/bash`，
-busybox 只有 ash。没有 bash 时部分命令会失败或退化。bash 的下载失败不会让安装失败，
-jail 会退回 `/bin/sh`，`Installation.hasBash` 记录实际状态。
+工具列表是固定的（`Toolchain.TOOL_PACKAGES`）：`bash git grep coreutils sed mawk tar gzip
+xz-utils curl ca-certificates less`。其中 bash、grep、sed、mawk、tar、gzip 在 slim layer 里
+已经有了，apt 实际补的是 git、coreutils、curl、xz、less、CA bundle 及它们的依赖，约 50 MB。
+apt 失败会重试 3 次；`APT::Sandbox::User` 必须改成 root，因为 PRoot 把 app uid 呈现成
+uid 0，`_apt` 沙箱用户打不开自己的文件。`ca-certificates` 装好之前 sources 用
+`http://deb.debian.org`（不是 https）。
 
-组装由一个 root shell 脚本一次完成（`Toolchain.assembleAsRoot`）：`mkdir` → `cp` 文件 →
-`chmod 0755` → 软链 → 写配置文件 → 删掉旧版本目录。无 root 时
-`assembleAsApp` 做同样的事，只是用 Java NIO。两者幂等，可反复执行。
+组装分两种：无 root 时直接在应用私有目录解包（`TarGz.extractAll`，Java NIO 改权限）；
+有 root 时先解到应用缓存 `rootfs-stage`，再让 root shell `cp -a` 到 `/data/adb`，
+`chown -Rh 0:0`、`chmod 1777 tmp`，最后断言 `etc/debian_version`、`bin/bash`、
+`opt/claude/<version>/claude` 都存在（`Toolchain.assembleAsRoot`）。
+
+**安装是分阶段的，不是原地改**：整个新树先建成 `<jail>.new`，在里面跑 apt 和校验，
+全部通过后才把 `<jail>` 改名成 `<jail>.old`、`<jail>.new` 改名成 `<jail>`，然后删掉
+`.old`；换位失败会把 `.old` 挪回去。`install.json` 只在换位成功之后写，所以任何一步
+失败，App 仍然指向旧安装。`activate()` / `swapAsRoot()` / `swapLocal()` 负责这段。
 
 启动脚本（`engine/turn.sh`，每个 turn 生成一次）大致是：
 
@@ -117,7 +144,7 @@ jail 会退回 `/bin/sh`，`Installation.hasBash` 记录实际状态。
 #!/system/bin/sh
 export ANTHROPIC_BASE_URL='…' ANTHROPIC_AUTH_TOKEN='…' …
 echo $$ > '<filesDir>/engine/turn-<n>.pid'   # exec 之后仍然指向 CLI 本身
-export HOME=/root TMPDIR=/tmp
+export HOME=/root TMPDIR=/tmp SHELL=/bin/bash
 R=/data/adb/claudroid
 bind_mount() { grep -qs " $2 " /proc/mounts || mount --bind "$1" "$2" 2>/dev/null; }
 bind_mount /proc   "$R/proc"
@@ -125,10 +152,11 @@ bind_mount /dev    "$R/dev"
 bind_mount /sys    "$R/sys"
 bind_mount /system "$R/system"
 bind_mount /data   "$R/data"
+bind_mount /storage/emulated/0 "$R/sdcard"
 bind_mount <workspace> "$R/work"
+bind_mount <filesDir>/home "$R/root"
 cd "$R/work"
-exec /data/adb/magisk/busybox chroot "$R" \
-     /lib/ld-musl-aarch64.so.1 /opt/claude/<version>/claude -p '…' --output-format stream-json …
+exec /data/adb/magisk/busybox chroot "$R" /opt/claude/<version>/claude -p '…' --output-format stream-json …
 ```
 
 刻意的设计：
@@ -136,54 +164,104 @@ exec /data/adb/magisk/busybox chroot "$R" \
 - **`/system`、`/data` 一起 bind 进去**：Agent 因此能读真实系统、能写 `/data/adb`，
   `magisk --install-module` 才能工作。挂了 `/system` 之后，Android 自己的 `sh`/`toybox`
   （bionic，`PT_INTERP=/system/bin/linker64`，在 jail 里也存在）同样可用，等于白拿一套工具。
+- **直接 exec CLI，不再手动套加载器**：二进制自己的 `PT_INTERP` 就指向 jail 里的
+  `/lib/ld-linux-aarch64.so.1`，glibc 按默认路径找到其余库。以前 musl 版把 loader 当
+  程序参数传，那是为了绕开加载器不在 `/lib` 的问题；Debian rootfs 里不需要这一步。
 - **用 `grep /proc/mounts` 而不是 `mountpoint`**：toybox 不保证有 `mountpoint`。
 - **每个 turn 一个进程 + `--resume <session_id>`**：CLI 自己保存会话，我们不维护 PTY；
   崩溃或切后台都不会污染下一次对话，代价是每轮约 100 ms 启动。
 - **脚本先写 pid 再 `exec`**：我们持有的直接子进程只是 `su`（或 proot），杀掉它并不会
   带走真正写 stdout 的 CLI。停止时按 pid 精确结束 CLI，否则读循环会一直等不到 EOF，
-  UI 就卡在「正在停止…」。proot 模式同理，通过 jail 的 `/tmp` 里的包装脚本记录 pid。
+  UI 就卡在「正在停止…」。proot 模式同理：包装脚本 `.claudroid-turn.sh` 放在 HOME
+  绑定目录里（guest 侧是 `/root/…`），由 PRoot 以 `/bin/sh <script>` 执行，脚本自己
+  写 pid 再 `exec` CLI。
 - **只给 `--permission-mode`，不给 `--dangerously-skip-permissions`**：语义更明确，
   也让"默认（只读）/ 只读规划"这些模式真的可用（headless 下需要批准的工具会被直接拒绝）。
 
-## 5. 三种执行路径与降级
+### 4.1 bind 挂载比 chroot 进程活得久：删除必须走 `deleteJail`
 
-`EngineManager.probeRoot()` 决定 `rootGranted` / `chrootAvailable`，`ClaudeEngine` 据此选路径：
+chroot 会话用 `mount --bind` 把宿主路径（`/proc`、`/dev`、`/system`、`/data`、
+`/storage/emulated/0`、工作区、HOME）挂进容器。这些挂载属于 root shell 的 mount
+namespace，**chroot 进程退出后它们仍然存在**。此时对容器目录直接 `rm -rf`，删除会
+穿过挂载点落进宿主目录：真机上就发生过一次重装把宿主 `/data` 和 `/dev` 清空的事故。
 
-1. **PRoot**（无 root，默认）
-   `exec libproot.so -0 -r <filesDir jail> -w /work … /bin/sh /tmp/.claudroid-turn.sh <args>`
+所以项目规则是：任何容器目录的删除都必须经过 `RootExec.deleteJail()`
+（应用私有目录走同语义的 `deleteTree()`）：
+
+1. 白名单校验：只允许 `Paths.ROOT_JAIL`、`Paths.ROOT_JAIL_FALLBACK` 及其 `.new` / `.old`
+   换位兄弟，或 `filesDir/engine` 下的树；其它路径一律拒绝（`MountTable.isAllowedJail`）。
+2. 读 `/proc/mounts`（有 root 时通过 su 读，因为挂载可能在本进程看不到的 namespace 里），
+   取 jail 自身及其下所有挂载点，按层级**从深到浅** `umount -l`。
+3. 再读一次挂载表，若仍有残留就**拒绝删除**，而不是硬删。
+4. `rm -rf --`，最后 `[ -e ]` 断言目录真的没了。
+
+此外每个 chroot turn / 终端命令结束后，App 会调 `RootExec.unmountJail()` 清掉这次留下的
+挂载；终端和对话可能并发，所以用 `chrootBegin()/chrootEnd()` 计数，只要还有别的 chroot
+活着就不摘（否则会把另一个会话的 workspace/home 挂载抽走）。`deleteJail` 则无条件清扫，
+因为它本来就要删整棵树。
+
+## 5. 执行路径与降级
+
+`EngineManager.probeRoot()` 决定 `rootGranted` / `chrootAvailable`（后者是
+`busybox chroot <jail> /bin/sh -c 'exit 0'` 的探测结果，按 jail 路径缓存），`ClaudeEngine`
+据此选路径。设置页显示的启动方式就是下面这些名字：
+
+1. **PRoot（免 root）**（无 root，默认）
+   `exec libproot.so -0 -r <filesDir jail> -w /work … /bin/sh /root/.claudroid-turn.sh <args>`
 
    包装脚本只做两件事：把 `$$` 写到 `/root/turn-<n>.pid`，然后 `exec` CLI。PRoot 的
    `--kill-on-exit` 负责正常清场，pid 文件则保证「停止」在极端情况下也能击中真正的 CLI。
 
-   直接 exec CLI，不要让 musl loader 作为程序参数：PRoot 已经用 `PROOT_LOADER`
-   解析 `PT_INTERP`；再手动启动 loader 会与它抢 `0x200000` 固定映射，报
+   直接 exec CLI，不要把 glibc loader 当程序参数传：PRoot 已经用 `PROOT_LOADER`
+   解析二进制的 `PT_INTERP`；再手动启动 loader 会与它抢 `0x200000` 固定映射，报
    `Not a valid dynamic program`（x86_64 的 ET_EXEC CLI 必现）。
-2. **root + chroot**（有 root，能力最全）
-   `su -c "sh turn.sh"` → `busybox chroot` → `ld-musl → claude`
-3. **root，无 chroot**（设备上找不到 `chroot`）
-   `su -c "exec ld-musl-aarch64.so.1 …/claude …"`——直接把加载器当解释器用，绕开 `PT_INTERP`，
-   路径保持真实。代价：`/etc/resolv.conf` 缺失，DNS 可能不通。
-4. **应用目录直启**（最后的兜底）
+2. **root + chroot**（有 root 且 busybox 提供 `chroot(1)`，能力最全）
+   `su -c "sh turn.sh"` → bind 挂载 → `busybox chroot <jail> /opt/claude/<ver>/claude …`。
+   直接 exec 二进制：它的 `PT_INTERP` 指向 jail 内的 glibc 加载器，不需要额外的解释器参数。
+3. **PRoot（root）**（有 root，但设备没有 `chroot(1)`——toybox 不提供）
+   同样 `su -c`，但执行的是 PRoot 的 argv：容器照旧是 `/data/adb/claudroid`，只是多一层
+   ptrace。Debian rootfs 里没有 busybox，所以不能用「jail 自带的 busybox」兜底。
+4. **root（加载器直启）**（有 root、无 chroot，且 APK 没打包 PRoot）
+   `su -c "exec <jail>/lib/ld-linux-aarch64.so.1 --inhibit-cache --library-path <jail>/usr/lib/aarch64-linux-gnu:<jail>/usr/lib:<jail>/lib <jail>/opt/claude/<ver>/claude …"`
+   ——这里才需要显式指定加载器和库路径，因为宿主是 Android 的 bionic，glibc 的默认搜索路径
+   属于宿主而不是容器。代价：没有 `/etc/resolv.conf`、没有 jail 的 bind 挂载，DNS 可能不通。
+5. **应用目录直启**（最后的兜底）
    targetSdk 28 下允许执行，但部分 ROM 仍可能拒绝；保留它用于诊断。
 
-设置页会显示实际运行方式（PRoot / root + chroot / root 直启 / 应用目录直启）、
-PRoot 组件是否打包、root 授权与 chroot 状态，不静默降级。
-`EngineManager.startIssue()` 会在每轮开始前给出可操作的错误信息，而不是让子进程直接崩掉。
+设置页会显示实际运行方式（`PRoot（免 root）` / `PRoot（root）` / `root + chroot` /
+`root（加载器直启）` / `应用目录直启`）、PRoot 组件是否打包、root 授权与 chroot 状态，
+不静默降级。`EngineManager.startIssue()` 会在每轮开始前给出可操作的错误信息
+（未安装、装在 root 目录但没授权、选了 Root 但没 root、PRoot 组件缺失），
+而不是让子进程直接崩掉。自检跑 `claude --version` 时走完全相同的路径；chroot 自检前后
+会 `unmountJail()`，避免把探测用的 bind 挂载留给下一次启动。
 
 ## 6. 升级链路
 
 ```
-registry.npmjs.org/@anthropic-ai/claude-code/latest                    → 版本号
-registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/<ver>   → tarball + integrity
-        ↓ 下载（进度回调到 UI）
+registry.npmjs.org/@anthropic-ai/claude-code/latest                   → 版本号
+registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/<ver>        → tarball + integrity
+        ↓ 下载（进度回调到 UI，支持断点续传与 3 次重试）
 sha512 与 integrity 比对，不一致立即删除缓存并报错
-        ↓ 自研 TarGz 抽取 package/claude（有单测 + 真实 150MB 包集成测试）
-重新组装 jail（旧版本目录在脚本最后被删除）
-        ↓ 写入 app 侧 install.json（版本 / jail 路径 / 模式）
+        ↓ 自研 TarGz 抽取 package/claude（有单测 + 真实 158 MB 包集成测试）
+<jail>.new ← CLI 解包 / 复制（同目录 rename，复制后校验字节数）
+        ↓ 同一 rootfs + 同一 digest：只换 CLI（upgradeInPlace）
+        ↓ rootfs 变了 / 工具缺了 / 是旧 Alpine 安装：整树重建
+apt 装工具 + verify（debian_version、bash、git、CLI > 100 MB）
+        ↓ 换位：<jail> → <jail>.old，<jail>.new → <jail>，失败则回滚
+        ↓ 写入 app 侧 install.json（版本 / jail 路径 / rootfs 版本 / digest / 模式）
+        ↓ 删除 .old 与旧 CLI 版本目录
 下次 turn 即生效
 ```
 
-上游发版即生效，没有硬编码版本号。
+rootfs 本身也走 OCI：`library/debian:13-slim`，digest 钉死在 `Registry.kt`
+（arm64 `sha256:acd43e9b…` 30,214,037 B；amd64 `sha256:37fb86c2…` 29,856,132 B）。
+先试 Docker Hub，失败再试 DaoCloud 镜像 `docker.m.daocloud.io`；两边的 token 端点与
+`service` 值不同，blob 都是 307 到签名 URL，重取时**不带 `Authorization`**（S3 会拒绝
+双重认证）。字节一律按同一个 sha256 校验，镜像换不了内容。本地缓存的 blob 每次复用前
+重新算 hash，坏文件直接删掉重下。
+
+上游发版即生效，没有硬编码版本号。旧版 Alpine 安装（`install.json` 里 `rootfsVersion`
+为空）会被 `verify()` 判为不健康，从而触发整树重装——这就是迁移路径。
 
 ## 7. stream-json → UI 事件
 
@@ -216,26 +294,36 @@ UI 侧不做逐 token 的整表替换：`ChatController` 用 `MutableStateFlow<L
 ```sh
 R=/data/adb/claudroid
 
-# 1. jail 齐了吗
-ls -l $R/lib $R/bin $R/opt/claude/*/
+# 1. 容器齐了吗（Debian 标记 + bash + git + CLI）
+ls -l $R/etc/debian_version $R/bin/bash $R/usr/bin/git $R/opt/claude/*/
+ls -l $R/lib/ld-linux-aarch64.so.1 $R/usr/lib/aarch64-linux-gnu/libc.so.6
 
-# 2. chroot 能不能起
-/data/adb/magisk/busybox chroot $R /bin/busybox echo ok
+# 2. chroot 能不能起（Debian rootfs 里没有 busybox，用 /bin/sh 探）
+/data/adb/magisk/busybox chroot $R /bin/sh -c 'exit 0'
 
-# 3. 加载器 + 二进制
-/data/adb/magisk/busybox chroot $R /lib/ld-musl-aarch64.so.1 /opt/claude/*/claude --version
+# 3. 直接 exec CLI（PT_INTERP 指向 jail 内 glibc，不需要套加载器）
+/data/adb/magisk/busybox chroot $R /opt/claude/*/claude --version
 
-# 4. 不经 chroot 的加载器直启
-$R/lib/ld-musl-aarch64.so.1 $R/opt/claude/*/claude --version
+# 4. 不经 chroot 的加载器直启（降级路径才需要显式 loader + library-path）
+$R/lib/ld-linux-aarch64.so.1 --inhibit-cache \
+  --library-path $R/usr/lib/aarch64-linux-gnu:$R/usr/lib:$R/lib \
+  $R/opt/claude/*/claude --version
 
-# 5. 设备上有哪些 su / busybox
+# 5. 容器工具与 apt 是否可用（DNS 不通时 apt 会先失败）
+/data/adb/magisk/busybox chroot $R /bin/bash -lc 'git --version; curl -sI http://deb.debian.org >/dev/null && echo NET_OK'
+
+# 6. 设备上有哪些 su / busybox
 ls -l /data/adb/magisk/busybox /system/bin/su /debug_ramdisk/su 2>/dev/null
 ```
+
+删容器之前先看挂载（这是事故的那一步）：`cat /proc/mounts | grep "$R"`，正常应该是空的。
+非空就别手工 `rm -rf`，让 App 的卸载（`RootExec.deleteJail`）先 umount 再删。
 
 无 root / PRoot 模式（debug 包可用 `run-as` 进入应用目录）：
 
 ```sh
-adb shell run-as app.claudroid ls -l files/engine/jail/lib files/engine/jail/bin
+adb shell run-as app.claudroid ls -l files/engine/jail/etc/debian_version \
+  files/engine/jail/bin/bash files/engine/jail/opt/claude
 adb shell run-as app.claudroid sh -c 'LD_LIBRARY_PATH=$PWD/../lib \
   PROOT_LOADER=$PWD/../lib/libproot-loader.so PROOT_TMP_DIR=$PWD/../cache/proot-tmp \
   files/engine/jail/../lib/libproot.so ...'   # 直接用 App 内自检更省事
@@ -249,10 +337,13 @@ adb shell run-as app.claudroid sh -c 'LD_LIBRARY_PATH=$PWD/../lib \
 | PRoot 启动后立刻 `killed` / 无输出 | 检查 nativeLibraryDir 里的 `libproot.so` 是否被 strip/压缩坏，重装 APK |
 | `Permission denied` 执行 CLI | SELinux/W^X：确认 `targetSdk=28`；root 模式确认 jail 在 `/data/adb` |
 | `not executable: 64-bit ELF` / `Exec format error` | 架构不符或文件解坏了，重装 |
-| `No such file or directory`（文件确实在） | 加载器路径不对：必须是 `/lib/ld-musl-aarch64.so.1`（jail 内） |
-| `chroot: can't change root` | 设备缺 `chroot(1)`，会自动降级为路径 3 |
-| 请求超时 | jail 里 DNS 不通：PRoot 写入当前网络 DNS；root 模式检查 `$R/etc/resolv.conf`，或把 Base URL 改成 IP |
-| TLS 证书错误 | 换 `$R/etc/ssl/certs/ca-certificates.crt`，或网关走 http |
+| `No such file or directory`（文件确实在） | 加载器缺失或路径不对：`PT_INTERP` 要求 jail 内有 `/lib/ld-linux-aarch64.so.1`；先查 `ls -l $R/lib/ld-linux-*`，缺了就是 rootfs 没解全 |
+| `chroot: can't change root` | 设备缺 `chroot(1)`（toybox 不提供）：App 会自动降级为 `su` 下跑 PRoot，再不行才用加载器直启 |
+| apt 报 `_apt ... Permission denied` | PRoot 把 app uid 当 uid 0，`APT::Sandbox::User` 必须是 root（`etc/apt/apt.conf.d/99claudroid`） |
+| apt 报 `Temporary failure resolving` | 容器 DNS 不通：PRoot 会写入当前网络 DNS；root 模式检查 `$R/etc/resolv.conf`，或把 Base URL 改成 IP |
+| 重装后提示「旧安装仍可用」/ `.new` 残留 | 新树校验失败，换位没有执行；`install.json` 仍指向旧 jail。磁盘空间要 ≥ 1.2 GB（升级 ≥ 700 MB） |
+| `--dangerously-skip-permissions cannot be used with root/sudo privileges` | 官方在 uid 0 下禁止「完全放行」。App 会注入 `IS_SANDBOX=1`；若仍出现，把权限模式改成「默认（只读）」或「只读规划」 |
+| TLS 证书错误 | `ca-certificates` 没装好（`apt-get install ca-certificates`），或网关走 http |
 | `[claude-code:unrecognized_model]` 警告 | 正常：网关的模型名不在官方白名单里，不影响使用 |
 
 ## 9. 为什么没有 MCP 桥接 root

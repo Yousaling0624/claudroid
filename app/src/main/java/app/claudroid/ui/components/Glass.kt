@@ -64,6 +64,11 @@ fun Modifier.glassSource(state: HazeState): Modifier = hazeSource(state)
  * With no source (home, drawer, an opaque sheet) the surface falls back to a
  * low-opacity paper gradient. It stays translucent on purpose: a 0.86-0.95 fill was
  * what made the old chrome read as an outlined card rather than glass.
+ *
+ * [alpha] lowers the opacity of the whole material — body, rim and highlight are drawn
+ * as one layer by Haze, so a lower value thins the glass without replacing it with a
+ * milky solid; refraction and dispersion keep their structure. `null` keeps the preset
+ * value, which is what every surface except the settings picker uses.
  */
 @OptIn(ExperimentalHazeApi::class)
 @Composable
@@ -72,13 +77,15 @@ fun Modifier.glass(
     shape: RoundedCornerShape,
     style: GlassStyle = GlassStyle.regular,
     tint: Color? = null,
+    alpha: Float? = null,
 ): Modifier {
     val colors = MaterialTheme.appColors
     val dark = colors.dark
+    val materialAlpha = alpha?.coerceIn(0f, 1f)
 
     // Styles compare by identity and are resolved on every frame; rebuilding this in
     // each composition would replace the node's material unnecessarily.
-    val resolved = remember(style, shape, tint, dark) {
+    val resolved = remember(style, shape, tint, materialAlpha, dark) {
         var result = style.then {
             this.shape(shape)
             // One shared calibration on top of Regular/Clear: enough highlight and
@@ -100,6 +107,10 @@ fun Modifier.glass(
             val glassTint = tint
             result = result.then { this.tint(glassTint) }
         }
+        if (materialAlpha != null) {
+            val bodyAlpha = materialAlpha
+            result = result.then { this.alpha(bodyAlpha) }
+        }
         result
     }
 
@@ -116,16 +127,19 @@ fun Modifier.glass(
     return if (state != null) {
         raised.hazeGlass(input = HazeInput.Sources(state), style = resolved)
     } else {
+        // No source to sample: the fallback already is a painted gradient, so the
+        // material opacity has to be multiplied into its stops by hand.
+        val fallbackAlpha = materialAlpha ?: 1f
         raised
             .clip(shape)
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        colors.paper.copy(alpha = if (dark) 0.72f else 0.62f),
+                        colors.paper.copy(alpha = (if (dark) 0.72f else 0.62f) * fallbackAlpha),
                         // The lower stop is a touch warmer/darker than the page, so the
                         // capsule keeps an edge on paper without an opaque rim border.
                         (if (dark) colors.canvas else colors.surface1)
-                            .copy(alpha = if (dark) 0.56f else 0.50f),
+                            .copy(alpha = (if (dark) 0.56f else 0.50f) * fallbackAlpha),
                     )
                 )
             )

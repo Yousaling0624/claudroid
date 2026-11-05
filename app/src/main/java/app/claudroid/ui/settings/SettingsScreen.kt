@@ -482,7 +482,7 @@ fun SettingsScreen(
         if (showUninstall) {
             SettingsGlassDialog(
                 title = "卸载内置引擎",
-                message = "将删除 jail 里的 Claude Code 与运行环境（约 300MB）。会话记录默认保留；" +
+                message = "将删除 Debian 容器与其中的 Claude Code 和工具（约 500MB）。会话记录默认保留；" +
                     "选择「全部删除」会同时清空工作区和会话。",
                 onDismiss = { showUninstall = false },
                 frostedState = frostedState,
@@ -688,7 +688,6 @@ private fun ApiPage(
             options = Providers.all.map { preset ->
                 GlassOption(
                     label = preset.label,
-                    subtitle = preset.hint,
                     selected = preset == activePreset,
                     onSelect = {
                         focusManager.clearFocus()
@@ -696,7 +695,6 @@ private fun ApiPage(
                     },
                 )
             },
-            sheetDescription = "选择后自动填写 Base URL、鉴权和默认模型，API Key 保持不变。",
         )
         Hint("档位映射与小模型会清空。")
     }
@@ -711,7 +709,6 @@ private fun ApiPage(
             options = ApiFlavor.entries.map { flavor ->
                 GlassOption(
                     label = flavor.label,
-                    subtitle = flavor.hint,
                     selected = settings.apiFlavor == flavor,
                     onSelect = {
                         scope.launch { container.settings.edit { it.copy(apiFlavor = flavor) } }
@@ -741,7 +738,6 @@ private fun ApiPage(
             options = AuthStyle.entries.map { style ->
                 GlassOption(
                     label = style.label,
-                    subtitle = authStyleHint(style),
                     selected = settings.authStyle == style,
                     onSelect = {
                         scope.launch { container.settings.edit { it.copy(authStyle = style) } }
@@ -840,7 +836,6 @@ private fun TierPage(
                 add(
                     GlassOption(
                         label = "默认 / 路由组",
-                        subtitle = settings.model.ifBlank { "未设置模型" },
                         selected = activeTier == null && !settings.usesAutoModel,
                         onSelect = { onSetTier(null) },
                     )
@@ -849,7 +844,6 @@ private fun TierPage(
                 add(
                     GlassOption(
                         label = "CLI 默认（不指定模型）",
-                        subtitle = "不传 --model / ANTHROPIC_MODEL",
                         selected = settings.usesAutoModel,
                         onSelect = { onSelectAuto() },
                     )
@@ -858,7 +852,6 @@ private fun TierPage(
                     add(
                         GlassOption(
                             label = tier.label,
-                            subtitle = tierMappingLabel(settings, tier),
                             selected = activeTier == tier,
                             onSelect = { onSetTier(tier) },
                         )
@@ -944,7 +937,6 @@ private fun EnginePage(
             options = EngineMode.entries.map { mode ->
                 GlassOption(
                     label = mode.label,
-                    subtitle = mode.hint,
                     selected = settings.engineMode == mode,
                     onSelect = {
                         scope.launch {
@@ -1023,7 +1015,7 @@ private fun EnginePage(
             title = "Root 授权",
             subtitle = when {
                 engineState.rootGranted && engineState.chrootAvailable -> "root 已授权，chroot 可用"
-                engineState.rootGranted -> "root 已授权，chroot 不可用（加载器直启）"
+                engineState.rootGranted -> "root 已授权，chroot 不可用（PRoot 降级）"
                 else -> "未获得 root；不影响 PRoot 模式运行"
             },
             trailing = {
@@ -1041,7 +1033,7 @@ private fun EnginePage(
         )
         rootReport?.let { CodeCard(it, label = "ROOT PROBE", maxHeight = 200.dp) }
         Note(
-            "Root 模式会把 /system、/data、/sdcard 挂载进 jail；只在需要修改系统时使用。" +
+            "Root 模式会把 /system、/data、/sdcard 挂载进容器；只在需要修改系统时使用。" +
                 "Android 10+ 普通应用不能执行自身目录里的文件，本应用使用 targetSdk 28 + PRoot，" +
                 "因此大多数设备无需 root。",
             colors.error,
@@ -1119,7 +1111,6 @@ private fun LabsPage(
             options = EffortLevel.entries.map { level ->
                 GlassOption(
                     label = level.label,
-                    subtitle = level.hint,
                     selected = settings.effort == level,
                     onSelect = {
                         scope.launch { container.settings.edit { it.copy(effort = level) } }
@@ -1217,7 +1208,7 @@ private fun WorkspacePage(
     val colors = MaterialTheme.appColors
     SettingsPageHeader(
         title = "工作区",
-        intro = "Claude 在 jail 内把这里映射为 /work。",
+        intro = "Claude 在容器内把这里映射为 /work。",
     )
     SettingsSection("存储与清理", "工作区里的文件可以直接预览、分享或交给其他应用打开。") {
         SettingsRow(

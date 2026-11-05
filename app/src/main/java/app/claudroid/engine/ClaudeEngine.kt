@@ -23,12 +23,18 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         val useChroot: Boolean,
         /** No root: run the same jail through Termux PRoot. */
         val useProot: Boolean = false,
+        /**
+         * Root exists but busybox chroot(1) does not (some toybox setups): run PRoot
+         * through `su` instead, which still gives the CLI a real Debian root.
+         */
+        val prootViaRoot: Boolean = false,
         /** When set, Claude Code talks to the in-app OpenAI-compatible proxy instead of upstream. */
         val proxyBaseUrl: String? = null,
     ) {
         val label: String
             get() = when {
-                useProot -> "proot（免 root）"
+                prootViaRoot -> "PRoot（root）"
+                useProot -> "PRoot（免 root）"
                 useRoot && useChroot -> "root + chroot"
                 useRoot -> "root（加载器直启）"
                 else -> "应用目录直启"
@@ -142,6 +148,9 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             onEvent(EngineEvent.Failed("已有任务正在执行。请先停止当前任务，或等它结束。"))
             return -3
         }
+        // Declared outside `try` so the `finally` cleanup below can see it: a chroot turn
+        // leaves bind mounts behind, and those must be swept even when the turn throws.
+        val chrootSession = plan.useRoot && plan.useChroot
         try {
             // A stop that arrived before this call (while settings/proxy were prepared)
             // must win; resetCancel() is called by the controller before a new turn.
@@ -157,20 +166,41 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             cleanStalePidFiles()
             val pidName = "turn-${System.nanoTime()}.pid"
             val pidFile: File? = when {
-                plan.useProot -> File(home, pidName)
+                plan.prootViaRoot || plan.useProot -> File(home, pidName)
                 plan.useRoot -> File(Paths.engine(ctx), pidName)
                 else -> null
             }
             pidFile?.delete()
             turnPidFile = pidFile
-            turnPidNeedsRoot = plan.useRoot
+            // PRoot via su and chroot both leave a root-owned CLI; a direct app-uid launch
+            // does not.
+            turnPidNeedsRoot = plan.useRoot || plan.prootViaRoot
 
             var cwd = workspace
             val command: List<String>
             val processEnv = env.toMutableMap()
             val script = File(ctx.filesDir, "engine/turn.sh").apply { parentFile?.mkdirs() }
+            // A chroot turn leaves bind mounts behind; they are swept when this turn is
+            // the last chroot alive (the terminal may be running concurrently).
+            if (chrootSession) root.unmountJail(inst.jailPath)
 
             when {
+                plan.prootViaRoot -> {
+                    // Root but no chroot(1). PRoot still needs to run as root so the CLI
+                    // sees the container files; the script exports PRoot's own env (the
+                    // su shell does not inherit our ProcessBuilder env reliably).
+                    val spec = ProotRunner(ctx).spec(inst, args, env, pidFile = "/root/$pidName")
+                    script.writeText(
+                        TurnScripts.rootExec(
+                            env = spec.env,
+                            argv = spec.argv,
+                            pidFile = pidFile?.absolutePath,
+                            cwd = workspace.absolutePath,
+                        )
+                    )
+                    command = listOf(root.suBinary() ?: "su", "-c", "sh ${script.absolutePath}")
+                    cwd = workspace
+                }
                 plan.useProot -> {
                     // The wrapper writes its pid to /root (bound to filesDir/home) and
                     // execs the CLI, so Stop can kill the real process inside proot.
@@ -187,8 +217,8 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                             jail = inst.jailPath,
                             workspace = workspace.absolutePath,
                             home = home.absolutePath,
-                            chrootTool = root.busybox() ?: "${inst.jailPath}/bin/busybox",
-                            loaderName = "/lib/ld-musl-${inst.arch}.so.1",
+                            // busybox's chroot; the Debian rootfs has none of its own.
+                            chrootTool = root.busybox() ?: "chroot",
                             binary = "/opt/claude/${inst.version}/claude",
                             args = args,
                             hasBash = inst.hasBash,
@@ -200,13 +230,15 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                     processEnv["TMPDIR"] = "/tmp"
                 }
                 plan.useRoot -> {
+                    // Degraded root fallback: no chroot and no PRoot bundle. The glibc
+                    // loader is invoked explicitly with the jail's library directories,
+                    // because its built-in search path belongs to the host, not the jail.
                     script.writeText(
                         TurnScripts.rootDirect(
                             env = env,
                             cwd = workspace.absolutePath,
-                            loader = loader.absolutePath,
-                            binary = binary.absolutePath,
-                            args = args,
+                            binary = loader.absolutePath,
+                            args = loaderOptions(inst.libraryPath()) + binary.absolutePath + args,
                             pidFile = pidFile?.absolutePath,
                         )
                     )
@@ -216,14 +248,14 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                 }
                 else -> {
                     ShellSupport.ensureDirectShell(ctx)
-                    command = listOf(loader.absolutePath, binary.absolutePath) + args
+                    command = directArgv(loader, inst.libraryPath(), binary, args)
                     processEnv["HOME"] = home.absolutePath
                     processEnv["TMPDIR"] = ctx.cacheDir.absolutePath
                 }
             }
-            if (!plan.useProot) {
+            if (!plan.useProot && !plan.prootViaRoot) {
                 processEnv["SHELL"] = if (plan.useRoot && plan.useChroot) {
-                    // Inside the jail: real bash when bundled, otherwise busybox ash.
+                    // Inside the Debian jail bash is part of the base tools.
                     if (inst.hasBash) "/bin/bash" else "/bin/sh"
                 } else {
                     // Host-side launch: there is no /bin/bash on Android. The wrapper in
@@ -246,13 +278,14 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                 return -1
             }
             process = p
+            if (chrootSession) root.chrootBegin()
             // Print mode never reads stdin. Closing it avoids the CLI's 3 s "no stdin data
             // received" grace period before the first request (and a warning on stderr).
             runCatching { p.outputStream.close() }
             if (cancelled) {
                 // Stop landed while the process was starting: cancel() saw no process, so
                 // this side owns the kill.
-                killTurn(p, pidFile, plan.useRoot)
+                killTurn(p, pidFile, plan.useRoot || plan.prootViaRoot)
                 return -2
             }
 
@@ -293,6 +326,12 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val p = process
             if (p != null && p.isAlive) reapAsync(p, turnPidFile, turnPidNeedsRoot)
             process = null
+            if (chrootSession) {
+                root.chrootEnd()
+                // The turn process may still be dying; the count is already down, so
+                // this only runs when no other chroot session is alive.
+                root.unmountJail(plan.installation.jailPath)
+            }
             turnLock.set(false)
         }
     }
@@ -300,7 +339,9 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
     private fun buildEnv(s: AppSettings, plan: LaunchPlan): Map<String, String> {
         val env = linkedMapOf<String, String>()
         env["PATH"] = when {
-            plan.useProot || plan.useChroot ->
+            // PRoot-via-root is a guest too: exporting the host PATH would hide git/grep
+            // from the CLI's Bash tool.
+            plan.useProot || plan.prootViaRoot || plan.useChroot ->
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/bin:/system/xbin"
             else -> "/system/bin:/system/xbin:${File(ctx.filesDir, "bin").absolutePath}"
         }
@@ -336,13 +377,17 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         // it believes it is sandboxed. Upstream's own escape hatch (see claude-code#3490).
         env["IS_SANDBOX"] = "1"
         if (s.maxTurns > 0) env["CLAUDE_CODE_MAX_TURNS"] = s.maxTurns.toString()
-        // user supplied KEY=VALUE lines
-        s.extraEnv.lineSequence().map { it.trim() }.filter { it.contains("=") && !it.startsWith("#") }
-            .forEach { line ->
-                val k = line.substringBefore("=").trim()
-                val v = line.substringAfter("=").trim()
-                if (k.isNotEmpty()) env[k] = v
-            }
+        // User supplied KEY=VALUE lines. The value is quoted by TurnScripts, but the key
+        // is spliced into `export <key>=` raw; invalid identifiers are skipped with a
+        // hint rather than failing the whole turn.
+        val rejected = EnvKeys.applyUserLines(env, s.extraEnv)
+        if (rejected.isNotEmpty()) {
+            // Only the count: a malformed line may contain a token on the left side.
+            Logx.e(
+                "已忽略 ${rejected.size} 个非法环境变量名（只允许字母、数字、下划线，且不能以数字开头）",
+                ctx,
+            )
+        }
         return env
     }
 
@@ -353,6 +398,24 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
      * public API while allowing `ClaudeEngine.buildArgs(...)` from tests.
      */
     companion object {
+        /**
+         * Explicit loader invocation for the host-side fallback modes. glibc would
+         * otherwise consult the Android host's `ld.so.cache` and find nothing for the
+         * Debian binary; `--inhibit-cache` plus [libraryPath] (jail-internal absolute
+         * paths) makes it self-contained. PRoot/chroot modes do not use this: there the
+         * binary's own PT_INTERP already points into the rootfs.
+         */
+        internal fun loaderOptions(libraryPath: String): List<String> =
+            listOf("--inhibit-cache", "--library-path", libraryPath)
+
+        internal fun directArgv(
+            loader: File,
+            libraryPath: String,
+            binary: File,
+            args: List<String>,
+        ): List<String> = listOf(loader.absolutePath) + loaderOptions(libraryPath) +
+            listOf(binary.absolutePath) + args
+
         internal fun buildArgs(
             prompt: String,
             resume: String?,

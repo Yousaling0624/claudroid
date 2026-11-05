@@ -17,3 +17,7 @@ dist/
 app/src/main/jniLibs/
 # CI-generated release notes
 release-notes.md
+# Subagent git worktrees (isolated copies of this repo)
+.claude/worktrees/
+# Scratch mockups / design experiments, not shipped
+docs/demo/

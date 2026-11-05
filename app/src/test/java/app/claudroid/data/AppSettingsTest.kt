@@ -47,12 +47,12 @@ class AppSettingsTest {
     @Test
     fun `provider presets change transport fields but keep the key`() {
         val current = AppSettings(apiKey = "sk-secret", model = "old")
-        val deepseek = Providers.all.first { it.id == "deepseek" }
-        val next = Providers.apply(current, deepseek)
+        val openrouter = Providers.all.first { it.id == "openrouter" }
+        val next = Providers.apply(current, openrouter)
         assertEquals(ApiFlavor.OPENAI, next.apiFlavor)
-        assertEquals("https://api.deepseek.com/v1", next.baseUrl)
+        assertEquals("https://openrouter.ai/api/v1", next.baseUrl)
         assertEquals(AuthStyle.BEARER, next.authStyle)
-        assertEquals("deepseek-chat", next.model)
+        assertEquals("anthropic/claude-sonnet-4.5", next.model)
         assertEquals("sk-secret", next.apiKey)
     }
 
@@ -68,7 +68,7 @@ class AppSettingsTest {
             haikuModel = "old-haiku",
             smallModel = "old-small",
         )
-        val next = Providers.apply(current, Providers.all.first { it.id == "deepseek" })
+        val next = Providers.apply(current, Providers.all.first { it.id == "openrouter" })
 
         assertEquals("", next.activeTier)
         assertEquals("", next.opusModel)
@@ -77,7 +77,15 @@ class AppSettingsTest {
         assertEquals("", next.haikuModel)
         assertEquals("", next.smallModel)
         assertEquals("sk-secret", next.apiKey)
-        assertEquals("deepseek-chat", next.model)
+        assertEquals("anthropic/claude-sonnet-4.5", next.model)
+    }
+
+    @Test
+    fun `provider presets are the three supported endpoints`() {
+        assertEquals(
+            listOf("anthropic", "openrouter", "ollama"),
+            Providers.all.map { it.id },
+        )
     }
 
     @Test

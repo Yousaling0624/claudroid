@@ -53,9 +53,23 @@ class EngineLabelTest {
     }
 
     @Test
-    fun `auto and root fall back to the loader when chroot is missing`() {
-        assertEquals("root（加载器直启）", label(EngineMode.AUTO, rootGranted = true))
-        assertEquals("root（加载器直启）", label(EngineMode.ROOT, rootGranted = true))
+    fun `root without chroot prefers proot via su`() {
+        // Debian has no host-loadable musl jail any more: PRoot through su gives a real
+        // container, so it wins over the loader-direct fallback.
+        assertEquals("PRoot（root）", label(EngineMode.AUTO, rootGranted = true, proot = true))
+        assertEquals("PRoot（root）", label(EngineMode.ROOT, rootGranted = true, proot = true))
+    }
+
+    @Test
+    fun `auto and root fall back to the loader when chroot and proot are missing`() {
+        assertEquals(
+            "root（加载器直启）",
+            label(EngineMode.AUTO, rootGranted = true, proot = false),
+        )
+        assertEquals(
+            "root（加载器直启）",
+            label(EngineMode.ROOT, rootGranted = true, proot = false),
+        )
     }
 
     @Test
@@ -99,6 +113,18 @@ class EngineLabelTest {
         assertEquals(
             "应用目录直启",
             EngineManager.ShellPlan(installation, useRoot = false, useChroot = false, useProot = false).label,
+        )
+        // Root without chroot(1) but with the PRoot components: same command shape as a
+        // PRoot turn, just entered through su.
+        assertEquals(
+            "PRoot（root）",
+            EngineManager.ShellPlan(
+                installation,
+                useRoot = true,
+                useChroot = false,
+                useProot = false,
+                prootViaRoot = true,
+            ).label,
         )
     }
 }

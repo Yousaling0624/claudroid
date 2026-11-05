@@ -1,8 +1,9 @@
 # Claudroid · 手机上的 Claude Code Agent
 
 一个 Android 端的 AI Agent 客户端：界面参考 Claude 客户端（暖纸色 + 陶土橙 + 卡片式会话流），
-后端把**官方 Claude Code CLI 直接跑在手机本地**。**没有 root 也能用**（内置 Termux PRoot），
-有 root 时自动切换到 chroot，Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执行 su 命令）。
+后端把**官方 Claude Code CLI 直接跑在手机本地的 Debian 容器里**。**没有 root 也能用**
+（内置 Termux PRoot 跑 rootfs），有 root 时自动切换到 chroot，Agent 就能真正操作这台设备
+（刷 Magisk 模块、改系统文件、执行 su 命令）。
 
 ```
 ┌──────────────── Android App（Kotlin + Compose）────────────────┐
@@ -10,7 +11,7 @@
 │    · 流式输出、思考/工具合并折叠、消息编辑/重新回答、费用/耗时   │
 │    · Anthropic / OpenAI 兼容端点 + 服务商预设 + 模型列表         │
 ├─────────────────── 引擎层（纯 Kotlin，零第三方 SDK）─────────────┤
-│  Toolchain：下载 / sha512 校验 / 解包 / 组装 jail / 版本切换      │
+│  Toolchain：下载 / sha256 / sha512 校验 / 解包 / 组装 Debian 容器 │
 │  ClaudeEngine：spawn CLI → 解析 stream-json → UI 事件           │
 │  ProotRunner：免 root 启动（Termux PRoot，打包进 jniLibs）       │
 │  RootExec：su -c + chroot（有 root 时能力最全）                  │
@@ -18,8 +19,8 @@
                         │ 无 root              │ 有 root
 ┌───────────────────────▼──────────┐  ┌───────▼───────────────────┐
 │ filesDir/engine/jail（PRoot）     │  │ /data/adb/claudroid       │
-│  /lib/ld-musl-aarch64.so.1        │  │  busybox chroot           │
-│  /bin/busybox /bin/bash           │  │  /system /data /sdcard    │
+│  Debian 13 rootfs（OCI layer）    │  │  busybox chroot           │
+│  apt: bash git grep sed awk …     │  │  /system /data /sdcard    │
 │  /opt/claude/<ver>/claude         │  │  bind mount，真实设备      │
 │  /work ← 工作区 bind              │  │  /work ← 工作区 bind      │
 └───────────────────────────────────┘  └───────────────────────────┘
@@ -55,17 +56,17 @@
 
 ```
 bin  = {"claude":"bin/claude.exe"},  deps = {},  unpackedSize = 190570
-optionalDependencies = { @anthropic-ai/claude-code-linux-arm64-musl: 2.1.x, … }
+optionalDependencies = { @anthropic-ai/claude-code-linux-arm64: 2.1.x, … }
 ```
 
-真正的程序在平台包里，解出来是**单个约 306 MB 的 AArch64 ELF**：
+真正的程序在平台包里，解出来是**单个约 300 MB 的原生 ELF**：
 
 ```
 ELF64 / type EXEC / machine AARCH64
-PT_INTERP: /lib/ld-musl-aarch64.so.1      ← 动态链接 musl，不是静态
+PT_INTERP: /lib/ld-linux-aarch64.so.1      ← glibc，由 Debian rootfs 提供
 ```
 
-所以「内置 CLI」= 官方平台包 + Alpine musl 加载器，**根本不需要 Node**。
+所以「内置 CLI」= 官方 glibc 平台包 + Debian rootfs，**根本不需要 Node**。
 这也正是「跟随官方升级」的实现方式：上游发版，App 下次检查就能装。
 
 ### 2. targetSdk 28 + PRoot，让无 root 也能执行
@@ -75,22 +76,26 @@ Android 10 起，`targetSdk ≥ 29` 的应用**不允许 exec() 自己数据目�
 
 两条路，和 Termux / dsh-Go 的做法一致：
 
-- **targetSdk 固定为 28**。这不是忘了升，而是 PRoot 和 jail 内二进制能执行的前提。
+- **targetSdk 固定为 28**。这不是忘了升，而是 PRoot 和容器内二进制能执行的前提。
   本项目不面向 Play 商店。
 - **PRoot 本体放在 `jniLibs`**。Android 会把 `lib*.so` 解到 `nativeLibraryDir`
   （可执行、应用自有），Termux 的 `proot`、`loader`、`libtalloc.so.2`、
   `libandroid-shmem.so` 就在这里被改名/改写后打包。构建时由
   `tools/fetch-proot.py` 自动完成，不把第三方 GPL 二进制提交进仓库。
 
-没有 root 时，jail 在 `filesDir/engine/jail`，PRoot 把工作区、`/dev`、`/proc`、`/system`
-等 bind 进去；有 root 时 jail 改放 `/data/adb/claudroid`，换成 `chroot`，并额外挂载
-`/data` 与 `/sdcard`。
+没有 root 时，容器在 `filesDir/engine/jail`，PRoot 把工作区、`/dev`、`/proc`、`/system`
+等 bind 进去；有 root 时容器改放 `/data/adb/claudroid`，换成 `chroot`，并额外挂载
+`/data` 与 `/sdcard`。两种方式都从 OCI registry 拉官方的 `debian:13-slim` layer
+（sha256 摘要钉死，官方源失败时回退 DaoCloud 镜像），apt 装好 bash、git、grep 等基础工具。
+
+删除容器目录前必须先卸载这些 bind 挂载：挂载在进程退出后仍然存在，直接 `rm -rf`
+会穿过挂载点删掉宿主目录（App 内部统一走 `RootExec.deleteJail()` 做「先 umount、再删除」）。
 
 ### 3. root 是可选项，不是前提
 
 - **自动 / PRoot**：不需要 root，能读写工作区、跑命令、改工作区里的文件。
   受 Android 沙箱限制，不能直接改 `/system` 或其它应用的私有数据。
-- **Root**：`su` + `chroot`，jail 里直接看到真实 `/system`、`/data`、`/sdcard`。
+- **Root**：`su` + `chroot`，容器里直接看到真实 `/system`、`/data`、`/sdcard`。
   刷模块就是标准 `magisk --install-module`，少一层协议、少一个桥接进程。
 
 每个 turn 一个进程，`--resume <session-id>` 续上下文；崩溃或切后台都不会污染下一次对话。
@@ -130,7 +135,7 @@ bash tools/build-apk.sh
 
 | 项 | 说明 |
 | --- | --- |
-| 服务商预设 | Anthropic 官方 / DeepSeek（Anthropic 兼容或 OpenAI 兼容）/ OpenRouter / 本地 Ollama |
+| 服务商预设 | Anthropic 官方 / OpenRouter / 本地 Ollama |
 | Base URL | Anthropic 兼容端点填到根路径（CLI 会追加 `/v1/messages`）；OpenAI 兼容填到 `/v1` |
 | API Key | 本地/内网端点（127.0.0.1、192.168.x、10.x、172.16-31.x、`.local`）可以留空 |
 | 鉴权方式 | `Authorization: Bearer` / `x-api-key` / 两个都发；官方 Anthropic 用 `x-api-key` |
@@ -140,7 +145,8 @@ bash tools/build-apk.sh
 | 权限模式 | **自动（官方 Auto）** / `完全放行` / `自动改文件` / `默认（只读）` / `只读规划` |
 | 功能与实验 | Agent teams、workflows、auto memory、后台任务、扩展思考、effort、子代理模型、Auto 分类器模型 |
 
-首次启动会在后台下载内置 CLI（约 150 MB，落盘约 310 MB，建议 Wi-Fi）。
+首次启动会在后台拉 Debian rootfs（约 30 MB）、下载内置 CLI（约 150 MB，解包后约 300 MB），
+再用 apt 装基础工具（bash / git / grep / sed / awk 等，约 50 MB），建议 Wi-Fi。
 完成后点**自检**，看到 `2.1.x (Claude Code)` 和实际启动方式（PRoot / root + chroot）说明这台机器能跑。
 
 ### 用起来
@@ -186,16 +192,16 @@ claudroid/
 │   ├── core/Paths.kt           安装记录（版本 / jail 位置 / 模式）、工作区、会话目录
 │   ├── data/                   设置(DataStore) + 服务商预设 + 会话(JSON 文件)
 │   ├── engine/
-│   │   ├── Registry.kt         npm registry 查询 + Alpine 包解析
-│   │   ├── HttpUtil.kt         下载 + sha512 + 断点续传
+│   │   ├── Registry.kt         npm registry 查询 + Debian rootfs 规格（digest）
+│   │   ├── HttpUtil.kt         下载 + sha512/sha256 + OCI blob 多源回退
 │   │   ├── TarGz.kt            极简 tar.gz 抽取（有单测）
-│   │   ├── Toolchain.kt        下载/校验/组装 jail（root 脚本 or 应用侧）
+│   │   ├── Toolchain.kt        下载/校验/组装 Debian 容器（root 脚本 or 应用侧）
 │   │   ├── ProotRunner.kt      PRoot 启动参数 + 宿主 bind（有单测）
 │   │   ├── ShellSupport.kt     直启模式下的 /bin/sh 包装
 │   │   ├── ClaudeEngine.kt     进程启动 + 四种执行路径
 │   │   ├── StreamParser.kt     stream-json 解码（有单测）
 │   │   ├── openai/             OpenAI 兼容桥：协议翻译 + 本地代理 + 模型列表
-│   │   ├── RootExec.kt         su / busybox / chroot 探测与执行
+│   │   ├── RootExec.kt         su / busybox / chroot 探测与执行，删除容器前先 umount
 │   │   └── EngineManager.kt    生命周期状态机 + 自检 + 存储统计
 │   ├── ui/                     Compose：home / chat / settings / markdown / theme
 │   └── ui/theme/               暖纸色 + 陶土橙配色
@@ -209,7 +215,7 @@ claudroid/
 │   ├── setup-toolchain.sh      一键装 JDK/SDK/Gradle
 │   ├── build-apk.sh            编译
 │   ├── mock-anthropic.mjs      本地假 Anthropic 端点，抓 CLI 真实事件流
-│   └── fetch-cli.sh            手动预下载 CLI + musl 加载器
+│   └── fetch-cli.sh            手动预下载 glibc CLI 平台包
 └── .github/workflows/          PR 检查 + push main 自动发版
 ```
 
@@ -237,13 +243,20 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 
 ## 这一轮补齐的功能
 
+- **Debian 容器运行时**：安装时拉官方 `debian:13-slim` OCI layer（sha256 摘要钉死），
+  apt 装好 bash、git、grep、coreutils、sed、awk、tar、gzip、xz、curl、less；
+  CLI 用官方 glibc 平台包。官方 registry 不可达时自动回退 DaoCloud 镜像，字节仍按同一
+  摘要校验。旧的 Alpine 安装会自动识别并重装。
 - **免 root 引擎**：Termux PRoot 打包进 APK，targetSdk 28 允许在应用目录执行；
-  没有 root 也能完整跑 Claude Code。
+  没有 root 也能完整跑 Debian 容器里的 Claude Code。
 - **引擎模式**：自动 / Proot / Root 三选一；设置页显示实际运行方式、PRoot 是否可用、
   root/chroot 状态、引擎占用空间，并支持卸载（可保留会话）。
-- **GNU bash**：jail 里补上 Alpine bash + readline + ncursesw，Bash 工具不再退化。
-- **服务商预设**：Anthropic、DeepSeek（两种协议）、OpenRouter、Ollama 一键填充；
+- **删除安全**：chroot 的 bind 挂载在进程退出后仍存在，删除容器前统一先 `umount`
+  再 `rm -rf`，避免穿透挂载点清空宿主 `/dev`、`/data`。
+- **服务商预设**：Anthropic、OpenRouter、Ollama 一键填充（移除 DeepSeek 预设）；
   本地/内网端点允许空 Key。
+- **设置选择面板**：所有「当前值 + chevron」行统一为液态玻璃菜单，只让右侧值按钮可点，
+  面板右对齐并覆盖按钮，去掉说明文字；支持下拉拖动形变与 55% 毛玻璃。
 - **OpenAI 桥修复**：非流式请求不再被强制 `stream=true`；补上图片转 `image_url`、
   `reasoning_content` -> thinking、`finish_reason=length` -> `max_tokens`、
   上游 401/429/400 状态映射、无 Key 时不发空 Authorization。
@@ -261,8 +274,9 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 | PRoot 启动报 `Permission denied` / `exec format error` | 确认 `targetSdk` 仍是 28；确认安装的是 arm64-v8a 或 x86_64 包。 |
 | 提示「引擎安装在 root 目录，但当前没有 root」 | 切到「自动」重新授权，或把模式改为 Proot 后点「升级 / 重装」。 |
 | 发消息后没反应，日志里 `自检结果：Bus error` | 安装文件被截断（下载中断）或存储不足。**设置 → Claude Code 引擎 → 升级 / 重装**。下载支持断点续传与 3 次重试。 |
-| 自检输出 `binary: 12345678 字节` | 正常应约 306 MB；明显偏小就是没下完，点「升级 / 重装」。 |
-| `chroot: can't change root` | 设备缺 `chroot(1)`，App 会自动降级为「加载器直启」。 |
+| 自检输出 `binary: 12345678 字节` | 正常应约 300 MB；明显偏小就是没下完，点「升级 / 重装」。 |
+| `chroot: can't change root` | 设备缺 `chroot(1)`，App 会自动降级为 `su` 下跑 PRoot。 |
+| 安装报「rootfs 下载失败（官方源与镜像均不可达）」 | Docker Hub 与 DaoCloud 镜像都没连上，或返回字节的 sha256 不符。换网络/代理后重试。 |
 | 请求超时 | jail 里 DNS 不通：PRoot 会自动写入当前网络的 DNS；root 模式检查 `/data/adb/claudroid/etc/resolv.conf`，或把 Base URL 换成 IP。 |
 | `--dangerously-skip-permissions cannot be used with root/sudo privileges` | 官方在 uid 0 下禁止「完全放行」。App 会自动注入 `IS_SANDBOX=1`；若仍出现，把权限模式改成「默认（只读）」或「只读规划」。 |
 | 一直停在升级进度不动 | 到 registry.npmjs.org 的网络不稳：会自动重试 3 次并续传；仍失败可检查网络或代理。 |

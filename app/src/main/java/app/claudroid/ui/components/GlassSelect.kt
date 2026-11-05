@@ -46,14 +46,16 @@ import app.claudroid.ui.theme.LocalReduceMotion
 import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
+import kotlin.math.sqrt
 
 /**
- * One choice inside [GlassOptionSheet]. [onSelect] runs immediately on tap, before the
+ * One choice inside [GlassOptionSheet]. Menus are title-only: the page's Hint/Note
+ * carries the explanation, so an option never grows a second text line that makes the
+ * compact panel taller and noisier. [onSelect] runs immediately on tap, before the
  * sheet animates out, so a settings write can start while the glass is still on screen.
  */
 class GlassOption(
     val label: String,
-    val subtitle: String? = null,
     val selected: Boolean = false,
     val onSelect: () -> Unit,
 )
@@ -62,14 +64,19 @@ class GlassOption(
 class GlassPickerRequest(
     val title: String,
     val options: List<GlassOption>,
-    val description: String? = null,
     /**
-     * Bounds of the row that opened the picker, in window pixels. The overlay subtracts
-     * its own window origin and grows out of this rect, so the list feels attached to
-     * the row instead of appearing in the middle of the screen. Null in previews or any
-     * host without a row (the picker then falls back to a centred fade).
+     * Bounds of the value button that opened the picker, in window pixels. The panel
+     * grows out of this rect, covers it, and aligns its right edge to it. The overlay
+     * subtracts its own window origin before using it. Null in previews or any host
+     * without a row (the picker then falls back to a centred fade).
      */
     val anchor: Rect? = null,
+    /**
+     * Measured width of the enclosing select row, px. The panel may grow leftwards for
+     * a long option title but must never be wider than its row. Null falls back to the
+     * picker's own width cap.
+     */
+    val rowWidth: Float? = null,
 )
 
 /**
@@ -105,8 +112,10 @@ val LocalGlassPicker = staticCompositionLocalOf<GlassPickerState?> { null }
  * name, current value, chevron — instead of a wrapping chip row, so the paper card keeps
  * a calm vertical rhythm and long labels stop stealing width from their neighbours.
  *
- * The whole row is one button with the current value as its state description; the
- * actual choice happens in [GlassOptionSheet] at the screen root.
+ * Only the value + chevron is interactive. The left-hand label is plain text: tapping
+ * it must not open anything, so it carries no ripple, no press feedback and no click
+ * semantics. TalkBack announces one compact button with the current value as its state
+ * description; the actual choice happens in [GlassOptionSheet] at the screen root.
  */
 @Composable
 fun GlassSelectRow(
@@ -116,19 +125,18 @@ fun GlassSelectRow(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     sheetTitle: String = title,
-    sheetDescription: String? = null,
 ) {
     val picker = LocalGlassPicker.current
     val haptic = LocalHapticFeedback.current
     val reduceMotion = LocalReduceMotion.current
     val interaction = remember { MutableInteractionSource() }
     // Window coordinates rather than local ones: the picker overlay is mounted at the
-    // screen root, so it needs an origin-independent rect to subtract from. A plain
-    // holder keeps scrolling from invalidating composition just to update a rect the
+    // screen root, so it needs an origin-independent rect to subtract from. Plain
+    // holders keep scrolling from invalidating composition just to update a rect the
     // tap handler reads later.
-    val rowAnchor = remember { RowAnchor() }
+    val metrics = remember { RowMetrics() }
     val pressed by interaction.collectIsPressedAsState()
-    val background by animateColorAsState(
+    val buttonBackground by animateColorAsState(
         targetValue = if (pressed) {
             MaterialTheme.appColors.surface1.copy(alpha = 0.55f)
         } else {
@@ -139,34 +147,15 @@ fun GlassSelectRow(
     )
     Row(
         modifier
-            .pressFeedback(shape = Radii.smShape)
             .fillMaxWidth()
-            .onGloballyPositioned { rowAnchor.bounds = it.boundsInWindow() }
-            .clip(Radii.smShape)
-            .background(background)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClickLabel = "选择$title",
-                role = Role.Button,
-            ) {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                picker?.show(
-                    GlassPickerRequest(
-                        title = sheetTitle,
-                        options = options,
-                        description = sheetDescription,
-                        // Read at tap time so a scroll between layout and tap cannot
-                        // leave the picker anchored to the row's old position.
-                        anchor = rowAnchor.bounds,
-                    )
-                )
-            }
-            .semantics { stateDescription = value }
+            .onGloballyPositioned { metrics.rowWidth = it.size.width.toFloat() }
             .heightIn(min = 56.dp)
-            .padding(vertical = 8.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Inert on purpose: the row label explains the field, it is not a second tap
+        // target. A 56dp row with a 40dp value button keeps the touch target large
+        // without making the entire line react.
         Column(Modifier.weight(1f)) {
             Text(
                 title,
@@ -187,28 +176,62 @@ fun GlassSelectRow(
             }
         }
         Spacer(Modifier.width(12.dp))
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.appColors.graphite,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.End,
-            modifier = Modifier.widthIn(max = 190.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Icon(
-            AppIcons.ChevronDown,
-            contentDescription = null,
-            tint = MaterialTheme.appColors.stone,
-            modifier = Modifier.size(15.dp),
-        )
+        Row(
+            Modifier
+                .pressFeedback(shape = Radii.smShape)
+                // The picker anchors to this button, not to the whole row: its right
+                // edge becomes the panel's right edge and its top edge is covered by
+                // the panel, so the list reads as unfolding from the value itself.
+                .onGloballyPositioned { metrics.buttonBounds = it.boundsInWindow() }
+                .clip(Radii.smShape)
+                .background(buttonBackground)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClickLabel = "选择$title",
+                    role = Role.Button,
+                ) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    picker?.show(
+                        GlassPickerRequest(
+                            title = sheetTitle,
+                            options = options,
+                            // Read at tap time so a scroll between layout and tap
+                            // cannot leave the picker anchored to an old position.
+                            anchor = metrics.buttonBounds,
+                            rowWidth = metrics.rowWidth.takeIf { it > 0f },
+                        )
+                    )
+                }
+                .semantics { stateDescription = value }
+                .heightIn(min = 40.dp)
+                .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.appColors.graphite,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(max = 190.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                AppIcons.ChevronDown,
+                contentDescription = null,
+                tint = MaterialTheme.appColors.stone,
+                modifier = Modifier.size(15.dp),
+            )
+        }
     }
 }
 
-/** Non-observable row bounds; only the tap handler reads them. */
-private class RowAnchor {
-    var bounds: Rect? = null
+/** Non-observable row metrics; only the tap handler reads them. */
+private class RowMetrics {
+    var rowWidth: Float = 0f
+    var buttonBounds: Rect? = null
 }
 
 // ---------------------------------------------------------------- picker placement
@@ -241,36 +264,64 @@ internal data class PickerPlacement(
 )
 
 /**
- * Places the anchored picker beside its row.
+ * Final panel width. The panel has to be wide enough for the longest option title and
+ * never narrower than the value button it unfolds from; it may grow leftwards but stays
+ * inside [maxWidth] and the viewport margins. On phones this keeps the picker compact
+ * instead of stretching it across the whole settings row.
+ */
+internal fun fitPickerWidth(
+    anchorWidth: Float,
+    contentWidth: Float,
+    maxWidth: Float,
+    viewportWidth: Float,
+    margin: Float,
+): Float {
+    val usable = (viewportWidth - margin * 2f).coerceAtLeast(0f)
+    val upper = minOf(maxWidth, usable).coerceAtLeast(0f)
+    // A value button can itself be wider than the cap on a tiny screen; the cap wins.
+    val lower = minOf(anchorWidth.coerceAtLeast(0f), upper)
+    return contentWidth.coerceAtLeast(0f).coerceIn(lower, upper)
+}
+
+/**
+ * Places the anchored picker so it covers the value button.
  *
- * The panel matches the row's width on phones; on a tablet the capped panel is centred
- * inside the row instead of hugging one edge. It prefers opening downwards, flips up
+ * The right edge line sits exactly on the button's right edge; the panel extends to the
+ * left by its content width. Vertically it covers the button: opening down puts the top
+ * edge on the button's top edge, flipping up puts the bottom edge on the button's bottom
+ * edge. Covering the control makes the menu read as the value itself unfolding, instead
+ * of a detached card floating below the row. It prefers opening downwards, flips up
  * only when the content cannot fit below, and when neither side fits it takes the
  * roomier side at the smaller height (the list scrolls inside). The result is clamped
- * to the margins so an anchor near or past a viewport edge can never place the panel
- * off-screen.
+ * to the margins so an anchor near a viewport edge can never place the panel off-screen;
+ * that edge clamp is the only case where the right edge leaves the button.
  */
 internal fun placePicker(
     anchor: PickerRect,
     viewportWidth: Float,
     viewportHeight: Float,
+    contentWidth: Float,
     contentHeight: Float,
-    gap: Float,
-    margin: Float,
     maxWidth: Float,
+    margin: Float,
     maxHeightFraction: Float,
 ): PickerPlacement {
-    val usableWidth = (viewportWidth - margin * 2f).coerceAtLeast(0f)
-    val width = minOf(anchor.width, maxWidth, usableWidth).coerceAtLeast(0f)
-    val centredLeft = anchor.left + (anchor.width - width) / 2f
-    val left = safeClamp(centredLeft, margin, viewportWidth - margin - width)
+    val width = fitPickerWidth(
+        anchorWidth = anchor.width,
+        contentWidth = contentWidth,
+        maxWidth = maxWidth,
+        viewportWidth = viewportWidth,
+        margin = margin,
+    )
+    val left = safeClamp(anchor.right - width, margin, viewportWidth - margin - width)
 
     val cap = (viewportHeight * maxHeightFraction).coerceAtLeast(0f)
-    val belowTop = anchor.bottom + gap
-    val belowSpace = (viewportHeight - margin - belowTop).coerceAtLeast(0f)
-    val aboveBottom = anchor.top - gap
-    val aboveSpace = (aboveBottom - margin).coerceAtLeast(0f)
     val desired = contentHeight.coerceAtLeast(0f).coerceAtMost(cap)
+    // Down: the panel's top edge is the button's top edge, so it grows into the space
+    // between that edge and the bottom margin. Up: its bottom edge is the button's
+    // bottom edge, so it grows into the space above the button.
+    val belowSpace = (viewportHeight - margin - anchor.top).coerceAtLeast(0f)
+    val aboveSpace = (anchor.bottom - margin).coerceAtLeast(0f)
     val expandsUp = when {
         belowSpace >= desired -> false
         aboveSpace >= desired -> true
@@ -278,11 +329,57 @@ internal fun placePicker(
     }
     val sideSpace = if (expandsUp) aboveSpace else belowSpace
     val height = desired.coerceAtMost(sideSpace)
-    val rawTop = if (expandsUp) aboveBottom - height else belowTop
+    val rawTop = if (expandsUp) anchor.bottom - height else anchor.top
     val top = safeClamp(rawTop, margin, viewportHeight - margin - height)
 
     return PickerPlacement(left, top, width, height, expandsUp)
 }
+
+/**
+ * Rubber-band curve for the pull-to-dismiss drag: starts at 1:1 with the finger, then
+ * asymptotically approaches [limit], so the panel never detaches from its anchor. Pure
+ * so the feel and the release thresholds can be pinned by JVM tests.
+ */
+internal fun pickerDragOffset(raw: Float, limit: Float): Float {
+    if (limit <= 0f || raw <= 0f) return 0f
+    return limit * raw / (limit + raw)
+}
+
+/**
+ * Scale deltas for the dragged panel. [stretch] lengthens the panel vertically,
+ * [squash] narrows it a little, and [cornerGrowth] enlarges the corner radius so the
+ * silhouette rounds as it is pulled. The square-root easing makes the first few
+ * millimetres of pull visible instead of hiding the deformation behind the asymptote.
+ */
+internal data class PickerDragDeformation(
+    val stretch: Float,
+    val squash: Float,
+    val cornerGrowth: Float,
+)
+
+internal fun pickerDragDeformation(offset: Float, limit: Float): PickerDragDeformation {
+    if (limit <= 0f || offset <= 0f) return PickerDragDeformation(0f, 0f, 0f)
+    val eased = sqrt((offset / limit).coerceIn(0f, 1f))
+    return PickerDragDeformation(
+        stretch = eased * 0.06f,
+        squash = eased * 0.035f,
+        cornerGrowth = eased * 0.50f,
+    )
+}
+
+/**
+ * A release dismisses when the pull is deep enough or fast enough. [offset] is the
+ * distance the finger actually travelled, not the damped visual offset: the rubber
+ * band compresses what the user sees, so judging intent on the finger keeps the
+ * threshold honest ("pull it down about a row's height") instead of asking for a
+ * drag roughly 1.5× longer than the number says.
+ */
+internal fun pickerShouldDismiss(
+    offset: Float,
+    velocityY: Float,
+    distanceThreshold: Float,
+    velocityThreshold: Float,
+): Boolean = offset >= distanceThreshold || velocityY >= velocityThreshold
 
 /** `coerceIn` throws when a tiny viewport makes the range empty; prefer the min edge. */
 private fun safeClamp(value: Float, min: Float, max: Float): Float =

@@ -73,6 +73,14 @@ object Motion {
     val PickerCorners = spring<Float>(dampingRatio = 0.75f, stiffness = 324f)
     val PickerRetract = spring<Float>(dampingRatio = 1f, stiffness = 340f)
 
+    /**
+     * Release curve for a below-threshold pull on the picker. It is a little softer
+     * than the press spring so the panel sinks back into place with the finger's
+     * velocity instead of snapping; the pull-to-dismiss path reuses [PickerRetract]
+     * because that motion has to land on the anchor without overshoot.
+     */
+    val PickerDragSettle = spring<Float>(dampingRatio = 0.62f, stiffness = 420f)
+
     /** Corner spring delay and the short content fade that leads the retract. */
     const val PICKER_CORNERS_DELAY = 70L
     const val PICKER_CONTENT_OUT = 36

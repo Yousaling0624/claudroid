@@ -4,11 +4,14 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,15 +72,20 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
@@ -372,21 +381,48 @@ fun SettingsGlassDialog(
     }
 }
 
+// Picker metrics. The width cap is deliberately below a phone row's width: the panel
+// should read as a compact menu unfolding from the value, not as a full-width sheet.
+private val PickerMaxWidth = 280.dp
+
+/** LazyColumn inset (2×10) + option inset (2×12) + gap (12) + radio (22) + 4dp slack. */
+private val PickerContentChrome = 80.dp
+
 /**
- * The settings picker: an anchored liquid-glass list that grows out of the row that
- * opened it.
+ * Pull-to-dismiss tuning. 220dp is the rubber-band asymptote, not the dismiss point: the
+ * panel may keep following the finger but can never be dragged off the anchor. A release
+ * dismisses past 72dp of finger travel or a 900dp/s downward flick; the distance is
+ * measured before damping so the threshold matches what the gesture reads as, while the
+ * panel's own displacement stays compressed by the rubber band.
+ */
+private val PickerDragLimit = 220.dp
+private val PickerDragDismissDistance = 72.dp
+private val PickerDragDismissVelocity = 900.dp
+
+/** Frosted body opacity for the picker only; every other glass surface keeps the preset. */
+private const val PickerGlassAlpha = 0.55f
+
+/**
+ * The settings picker: an anchored liquid-glass list that unfolds out of the value
+ * button that opened it.
  *
  * It must stay in the settings window — a Dialog/Popup/ModalBottomSheet would render in
  * its own window, where Haze cannot sample the page behind it. The screen root owns the
  * single instance and opens it through [LocalGlassPicker], so pages do not thread a
  * sheet parameter through every level.
  *
- * The panel is laid out once at its final width and capped height; the opening morph is
- * pure graphicsLayer work. A round bubble forms at the tapped row, stretches toward the
- * panel while a row-sized droplet splits away and flows into it, and a second spring
- * squares off the corners once the bubble has left the row. The LazyColumn is never
- * re-laid out per frame, and closing runs the geometry back into the row without a
- * wobble.
+ * The panel is sized once from the longest option title (never narrower than the value
+ * button and never wider than its row), then laid out over the button: right edges
+ * aligned, top edge covering the button, flipping to a bottom-edge cover when the list
+ * would run off-screen. The opening morph is pure graphicsLayer work. A round bubble
+ * forms at the button, stretches toward the panel while a button-sized droplet splits
+ * away and flows into it, and a second spring squares off the corners. The LazyColumn
+ * is never re-laid out per frame, and closing runs the geometry back into the button.
+ *
+ * Once open, the panel can be pulled down to dismiss. The pull follows the finger with
+ * rubber-band damping, stretches/squashes the glass and grows its corners; the list
+ * keeps ownership of upward drags and of downward drags while it is scrolled, so normal
+ * scrolling is untouched.
  */
 @Composable
 fun GlassOptionSheet(
@@ -400,30 +436,72 @@ fun GlassOptionSheet(
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val touchSlop = LocalViewConfiguration.current.touchSlop
 
     val morph = remember { Animatable(0f) }
     val corners = remember { Animatable(0f) }
     val contentOut = remember { Animatable(1f) }
+    // Pull-to-dismiss distance, in overlay pixels. A plain float state rather than an
+    // Animatable: during the pull the panel has to track the finger in the very frame
+    // the event arrives, which a suspend `snapTo` cannot guarantee from a pointer
+    // coroutine. Only the release runs an animation, and it animates this state.
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val dragLimitPx = with(density) { PickerDragLimit.toPx() }
+    val dismissDistancePx = with(density) { PickerDragDismissDistance.toPx() }
+    val dismissVelocityPx = with(density) { PickerDragDismissVelocity.toPx() }
     var rootBounds by remember { mutableStateOf<Rect?>(null) }
     var panelSize by remember { mutableStateOf(IntSize.Zero) }
     var started by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     var openingJob by remember { mutableStateOf<Job?>(null) }
+    // The release animation owns `dragOffset` until it finishes; a new pull cancels it
+    // so the spring-back can never fight the finger.
+    var settleJob by remember { mutableStateOf<Job?>(null) }
     val selectedIndex = remember(request) {
         request.options.indexOfFirst { it.selected }.coerceAtLeast(0)
     }
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+    // Always start at the top. Pinning the selected row to the first visible slot makes
+    // `canScrollBackward` true even when the whole menu fits, which would hand every
+    // downward pull to the list and leave pull-to-dismiss dead. A long list is scrolled
+    // to the selection in `open()` only if that selection is not already visible.
+    val listState = rememberLazyListState()
+
+    // Menus are title-only, so the width can come from the longest title. Measuring with
+    // the option rows' own type plus their fixed chrome makes the panel exactly wide
+    // enough without a second layout pass that would make the list jump.
+    val textMeasurer = rememberTextMeasurer()
+    val contentWidthPx = remember(request, textMeasurer, density) {
+        val widest = request.options.maxOfOrNull { option ->
+            textMeasurer.measure(
+                text = AnnotatedString(option.label),
+                style = SettingsType.rowTitle,
+                maxLines = 1,
+                softWrap = false,
+            ).size.width.toFloat()
+        } ?: 0f
+        widest + with(density) { PickerContentChrome.toPx() }
+    }
 
     fun open() {
         if (started || closing) return
         started = true
-        // The panel is first measured before the anchored cap is known, sometimes with a
-        // viewport tall enough to fit everything below the selected row. LazyColumn then
-        // clamps the initial index to the end of the content, and that offset survives
-        // the shorter final viewport as a sliver of the previous row above the selection.
-        // Pin the selected row once the panel has its final height; `open` only runs on
-        // that settled measurement and exactly once, so user scrolling is left alone.
-        scope.launch { listState.scrollToItem(selectedIndex) }
+        // Bring the selected row into view only when the list actually overflows and the
+        // selection sits outside the visible window. A short menu that already fits stays
+        // at scroll position 0, so a downward pull belongs to the panel; a long one opens
+        // on the selected tier/model and can be scrolled back to the top like any other
+        // list. The overflow check keeps a still-empty layout from triggering a scroll
+        // that would immediately make `canScrollBackward` true and kill pull-to-dismiss.
+        // `open` runs once, on the settled measurement, so user scrolling is never
+        // overridden afterwards.
+        scope.launch {
+            val info = listState.layoutInfo
+            val measured = info.visibleItemsInfo.isNotEmpty()
+            val selectionVisible = info.visibleItemsInfo.any { it.index == selectedIndex }
+            val overflows = info.visibleItemsInfo.size < info.totalItemsCount
+            if (measured && !selectionVisible && overflows && selectedIndex > 0) {
+                listState.scrollToItem(selectedIndex)
+            }
+        }
         if (reduceMotion) {
             openingJob = scope.launch {
                 morph.snapTo(1f)
@@ -480,7 +558,6 @@ fun GlassOptionSheet(
     ) {
         val viewportWidth = constraints.maxWidth.toFloat()
         val viewportHeight = constraints.maxHeight.toFloat()
-        val gapPx = with(density) { 6.dp.toPx() }
         val marginPx = with(density) { 12.dp.toPx() }
         val edgeInsets = WindowInsets.safeDrawing.asPaddingValues()
         val topInsetPx = with(density) { edgeInsets.calculateTopPadding().toPx() } +
@@ -488,7 +565,12 @@ fun GlassOptionSheet(
         val bottomInsetPx = with(density) { edgeInsets.calculateBottomPadding().toPx() } +
             with(density) { 8.dp.toPx() }
         val effectiveHeight = (viewportHeight - topInsetPx - bottomInsetPx).coerceAtLeast(0f)
-        val maxWidthPx = with(density) { 420.dp.toPx() }
+        // A row can never be wider than the page; the request's measured row width is
+        // the tighter cap when the page has its own margins.
+        val maxWidthPx = minOf(
+            with(density) { PickerMaxWidth.toPx() },
+            request.rowWidth?.takeIf { it > 0f } ?: Float.MAX_VALUE,
+        )
 
         // Both rects are in window coordinates, so the overlay's own origin removes any
         // status-bar/window offset; the safe-area inset is subtracted separately so the
@@ -506,18 +588,32 @@ fun GlassOptionSheet(
             null
         }
 
-        val panelWidthPx = minOf(
-            anchorRect?.width ?: maxWidthPx,
-            maxWidthPx,
-            (viewportWidth - marginPx * 2f).coerceAtLeast(0f),
-        )
+        val panelWidthPx = if (anchorRect != null) {
+            fitPickerWidth(
+                anchorWidth = anchorRect.width,
+                contentWidth = contentWidthPx,
+                maxWidth = maxWidthPx,
+                viewportWidth = viewportWidth,
+                margin = marginPx,
+            )
+        } else {
+            // Previews have no button to cover; keep the same compact, centred width
+            // instead of falling back to the old full-row panel.
+            minOf(
+                contentWidthPx,
+                maxWidthPx,
+                (viewportWidth - marginPx * 2f).coerceAtLeast(0f),
+            ).coerceAtLeast(0f)
+        }
 
         // The side space is known before the content is measured. Capping the panel at
         // the roomier side means the chosen direction always fits the measured height,
-        // so the list needs one layout pass rather than shrinking after the fact.
+        // so the list needs one layout pass rather than shrinking after the fact. The
+        // panel covers the button, so "down" starts at the button's top edge and "up"
+        // ends at its bottom edge; there is no gap to subtract.
         val maxSidePx = if (anchorRect != null) {
-            val below = effectiveHeight - marginPx - (anchorRect.bottom + gapPx)
-            val above = anchorRect.top - gapPx - marginPx
+            val below = effectiveHeight - marginPx - anchorRect.top
+            val above = anchorRect.bottom - marginPx
             maxOf(below, above).coerceAtLeast(0f)
         } else {
             effectiveHeight
@@ -535,10 +631,10 @@ fun GlassOptionSheet(
                 ),
                 viewportWidth = viewportWidth,
                 viewportHeight = effectiveHeight,
+                contentWidth = contentWidthPx,
                 contentHeight = panelSize.height.toFloat(),
-                gap = gapPx,
-                margin = marginPx,
                 maxWidth = maxWidthPx,
+                margin = marginPx,
                 maxHeightFraction = 0.6f,
             )
             // Previews or a host without a row: keep the picker usable with a plain
@@ -621,7 +717,7 @@ fun GlassOptionSheet(
                 if (height <= 0f) return@Canvas
                 val card = PickerRect(
                     finalLeft,
-                    finalTop,
+                    finalTop + dragOffset,
                     panelSize.width.toFloat().coerceAtLeast(1f),
                     height,
                 )
@@ -665,17 +761,33 @@ fun GlassOptionSheet(
                         alpha = 0f
                         return@graphicsLayer
                     }
+                    val drag = dragOffset
                     // A host without a row has no bubble to grow from; show the panel
                     // directly instead of inventing an anchor.
                     if (anchor == null) {
                         alpha = 1f
+                        translationY = drag
                         return@graphicsLayer
                     }
                     val width = panelSize.width.toFloat().coerceAtLeast(1f)
-                    val card = PickerRect(finalLeft, finalTop, width, height)
+                    // The dragged card is the resting card shifted down; the morph
+                    // geometry (and therefore the translation) follows it, so the pull
+                    // never adds a second offset on top of the platter frame.
+                    val cardTop = finalTop + drag
+                    val card = PickerRect(finalLeft, cardTop, width, height)
                     val frame = platterMorph(anchor, card, morph.value, cardRadiusPx, corners.value)
-                    val sx = (frame.width / width).coerceAtLeast(0.001f)
-                    val sy = (frame.height / height).coerceAtLeast(0.001f)
+                    // Elastic deformation is pure graphicsLayer work: the panel is never
+                    // re-laid out. Reduced motion keeps the drag itself (it is direct
+                    // manipulation) but drops the stretch and corner swell.
+                    val deformation = if (reduceMotion) {
+                        PickerDragDeformation(0f, 0f, 0f)
+                    } else {
+                        pickerDragDeformation(drag, dragLimitPx)
+                    }
+                    val sx = ((frame.width / width).coerceAtLeast(0.001f)) *
+                        (1f - deformation.squash)
+                    val sy = ((frame.height / height).coerceAtLeast(0.001f)) *
+                        (1f + deformation.stretch)
 
                     transformOrigin = TransformOrigin(0.5f, 0.5f)
                     scaleX = sx
@@ -683,10 +795,12 @@ fun GlassOptionSheet(
                     translationX = frame.centerX - (finalLeft + width / 2f)
                     translationY = frame.centerY - (finalTop + height / 2f)
                     // The layer shape lives in local pixels and is then scaled, so the
-                    // radius is divided back out to keep the drawn corner round.
+                    // radius is divided back out to keep the drawn corner round. The
+                    // corner grows with the pull, so the stretched glass stays soft.
+                    val grownRadius = frame.cornerRadius * (1f + deformation.cornerGrowth)
                     shape = MorphShape(
-                        radiusX = (frame.cornerRadius / sx).coerceAtLeast(0f),
-                        radiusY = (frame.cornerRadius / sy).coerceAtLeast(0f),
+                        radiusX = (grownRadius / sx).coerceAtLeast(0f),
+                        radiusY = (grownRadius / sy).coerceAtLeast(0f),
                     )
                     clip = true
                     // The first bubble is the paper droplet; the glass material fades
@@ -701,7 +815,98 @@ fun GlassOptionSheet(
                     state = frostedState,
                     shape = Radii.menuShape,
                     tint = colors.paper.copy(alpha = 0.10f),
+                    // Only the picker runs thinner: a menu is read through, while every
+                    // other glass surface keeps the preset body.
+                    alpha = PickerGlassAlpha,
                 )
+                // Pull-to-dismiss. Listens in the Initial pass so it can own a downward
+                // drag at the top of the list before the LazyColumn starts scrolling;
+                // upward drags and drags while the list is scrolled are left to the
+                // list untouched. Taps are never consumed, so option clicks still land.
+                //
+                // The handler is installed on the first composition and `started` is
+                // deliberately not a pointerInput key: the gate is read per gesture, so
+                // the morph finishing can never leave a stale, dead pointer coroutine
+                // behind.
+                .pointerInput(closing, reduceMotion, dragLimitPx) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        // Only pull after the opening morph has settled. A spring may end
+                        // a hair short of 1f, so compare with a tolerance rather than an
+                        // exact float; `isRunning` covers the frames before that.
+                        if (!started || closing || morph.isRunning || morph.value < 0.98f) {
+                            return@awaitEachGesture
+                        }
+                        val tracker = VelocityTracker()
+                        tracker.addPosition(down.uptimeMillis, down.position)
+                        var claimed = false
+                        var rawTravel = 0f
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            rawTravel = change.position.y - down.position.y
+                            if (!claimed) {
+                                if (abs(rawTravel) <= touchSlop) continue
+                                // Down at the top belongs to the panel; everything else
+                                // (up, or down while the list can scroll back) belongs
+                                // to the list and must not be consumed here.
+                                if (rawTravel > 0f && !listState.canScrollBackward) {
+                                    claimed = true
+                                    settleJob?.cancel()
+                                    settleJob = null
+                                } else {
+                                    break
+                                }
+                            }
+                            change.consume()
+                            // Direct manipulation: write the state in the event frame so
+                            // the glass moves with the finger, with no coroutine hop.
+                            dragOffset = pickerDragOffset(rawTravel, dragLimitPx)
+                        }
+                        if (!claimed) return@awaitEachGesture
+                        // Dismiss on the finger's own travel, not the damped visual
+                        // offset: the rubber band always shrinks the distance the panel
+                        // moves, so a "72dp pull" would otherwise need ~107dp of drag
+                        // (72 * 220 / (220 - 72) with the current rubber band).
+                        val velocity = tracker.calculateVelocity().y
+                        val dismiss = pickerShouldDismiss(
+                            offset = rawTravel,
+                            velocityY = velocity,
+                            distanceThreshold = dismissDistancePx,
+                            velocityThreshold = dismissVelocityPx,
+                        )
+                        settleJob = scope.launch {
+                            if (reduceMotion) {
+                                dragOffset = 0f
+                            } else {
+                                animate(
+                                    initialValue = dragOffset,
+                                    targetValue = 0f,
+                                    // A dismissed pull must retract into the anchor
+                                    // without overshooting; a kept pull inherits the
+                                    // finger's speed, capped so a flick cannot throw
+                                    // the panel past its anchor.
+                                    initialVelocity = if (dismiss) {
+                                        0f
+                                    } else {
+                                        velocity.coerceIn(0f, 2400f)
+                                    },
+                                    animationSpec = if (dismiss) {
+                                        Motion.PickerRetract
+                                    } else {
+                                        Motion.PickerDragSettle
+                                    },
+                                ) { value, _ -> dragOffset = value }
+                            }
+                        }
+                        if (dismiss) close()
+                    }
+                }
                 // The panel is glass itself; taps inside must not fall through to the
                 // dim layer and close it while the user is choosing.
                 .pointerInput(Unit) { detectTapGestures { } }
@@ -731,23 +936,15 @@ fun GlassOptionSheet(
                         }
                     },
             ) {
-                if (request.description != null) {
-                    Text(
-                        request.description,
-                        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
-                        color = colors.stone,
-                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
                 LazyColumn(
                     Modifier.fillMaxWidth(),
                     state = listState,
+                    // Menus carry no description line, so the list owns the whole panel
+                    // with one even inset on every side.
                     contentPadding = PaddingValues(
                         start = 10.dp,
                         end = 10.dp,
-                        top = if (request.description == null) 8.dp else 4.dp,
+                        top = 8.dp,
                         bottom = 8.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -777,7 +974,7 @@ fun GlassOptionSheet(
                 if (height <= 0f) return@Canvas
                 val card = PickerRect(
                     finalLeft,
-                    finalTop,
+                    finalTop + dragOffset,
                     panelSize.width.toFloat().coerceAtLeast(1f),
                     height,
                 )
@@ -910,25 +1107,14 @@ private fun GlassOptionRow(option: GlassOption, onClick: () -> Unit) {
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                option.label,
-                style = SettingsType.rowTitle,
-                color = colors.ink,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (option.subtitle != null) {
-                Text(
-                    option.subtitle,
-                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                    color = colors.stone,
-                    modifier = Modifier.padding(top = 2.dp),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+        Text(
+            option.label,
+            style = SettingsType.rowTitle,
+            color = colors.ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         Spacer(Modifier.width(12.dp))
         Box(
             Modifier

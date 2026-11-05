@@ -279,15 +279,25 @@ Android 12 以下由 Haze 的有限渲染器近似，文字必须仍然可读。
 - **设置悬浮返回键**：46dp 正圆，复用 `GlassIconButton`（新材质 / dragMorph / 长按触感）。
 - **液态玻璃选择列表**（`GlassSelect.kt` + `SettingsChrome.kt` + `PickerMorph.kt`）：服务商预设、
   接口协议、Key 传递方式、当前档位、引擎模式、Effort、主题等多选项统一为一行“当前值 + chevron”；
-  点击由设置根层弹出 `GlassOptionSheet`，同窗口采样，不跨 window。几何用纯函数 `placePicker`
-  锚定到被点的行：优先向下，放不下向上翻转，宽度跟随行并夹在安全区内；选项行 52dp，radio 语义，
-  列表最高 60% 屏高，内部滚动。
+  只有右侧「当前值 + chevron」是按钮（含 pressFeedback、radio 语义、stateDescription），左侧标签
+  惰性。点击由设置根层弹出 `GlassOptionSheet`，同窗口采样，不跨 window。几何用纯函数 `placePicker`
+  锚定到值按钮：向下时面板顶边 = 按钮顶边、盖住触发器；放不下向上翻时底边 = 按钮底边。面板右边缘
+  对齐按钮右边缘，宽度按最长选项标题实测并夹在 [按钮宽, min(280dp, 行宽, 视口 − 24dp)]。菜单内
+  不显示任何说明文字，选项只剩标题；选项行 52dp，列表最高 60% 屏高，内部滚动。面板本体玻璃
+  alpha 0.55（仅此表面），其余玻璃保持原样。
   - **泡泡分裂形变**：面板按最终尺寸布局一次，动画只走 `graphicsLayer`，不逐帧重排 LazyColumn。
-    开场由 400/0.754 弹簧驱动 `platter` 从行中心一颗 41% 行短边的圆泡出发，宽度/高度/中心分别插值
-    到最终卡片；第二根 324/0.75 弹簧延迟 70ms 把胶囊圆角压成 22dp。行里另有一颗水滴（行高为高、
-    宽度上限 2×行高）缩小到 25% 并向面板内落点移动，用 smooth-min 场与 platter 做 metaball 粘连，
-    被吞没后淡出。内容随 platter 缩放，alpha 跟 progress，API 31+ 从 4dp 模糊渐清。关闭时内容先
-    36ms 淡出，几何按 340ms 无回弹弹簧缩回行里。`LocalReduceMotion` 时直接吸附到终态。
+    开场由 400/0.754 弹簧驱动 `platter` 从值按钮中心一颗 41% 按钮短边的圆泡出发，宽度/高度/中心
+    分别插值到最终卡片；第二根 324/0.75 弹簧延迟 70ms 把胶囊圆角压成 22dp。按钮上另有一颗水滴
+    （按钮高为高、宽度上限 2×按钮高）缩小到 25% 并向面板内落点移动，用 smooth-min 场与 platter
+    做 metaball 粘连，被吞没后淡出。内容随 platter 缩放，alpha 跟 progress，API 31+ 从 4dp 模糊
+    渐清。关闭时内容先 36ms 淡出，几何按 340ms 无回弹弹簧缩回按钮里。`LocalReduceMotion` 时直接
+    吸附到终态。
+  - **拖动形变**：列表从顶部开始；短菜单（内容不溢出）整块归下拉手势，长菜单只在列表滚到顶部后
+    才接管。向下拖拽按 220dp 橡皮筋阻尼直接跟手（同帧写状态，不排队等协程），释放后按**手指原始
+    行程** ≥72dp 或向下速度 ≥900dp/s 判定关闭（阻尼后视觉位移更短，用原始行程才与「拉一行」的
+    直觉一致），否则 spring(0.62/420) 回弹。拖动中玻璃纵向拉伸最多 6%、横向收缩 3.5%、圆角外扩
+    50%，morph 帧与水滴/纸面层同步跟随；`LocalReduceMotion` 时保留直接拖拽但不做形变。列表未到
+    顶部时向下拖动先交给 LazyColumn，滚到顶后再拉一次才关闭。
   - Haze 2.1 的 `GlassStyle.shape` 只接受 `RoundedCornerShape`，无法直接给 metaball 路径做折射；
     面板玻璃仍是圆角矩形，水滴/颈部用 paper 半透明轮廓补在玻璃层上。形变几何移植自
     `chen08209/prism_ui`（GPL-3.0），出处见 `THIRD_PARTY_NOTICES.md`。

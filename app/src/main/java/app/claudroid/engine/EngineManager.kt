@@ -63,6 +63,9 @@ class EngineManager(
             // let the capability fallback below claim "PRoot（免 root）".
             rootMode && !rootGranted -> "root 目录中的引擎（当前无 root）"
             rootGranted && chrootAvailable -> "root + chroot"
+            // Debian jail plus root but no chroot(1): PRoot via su is the preferred
+            // fallback (a real container instead of a host-side loader launch).
+            rootGranted && prootAvailable -> "PRoot（root）"
             rootGranted -> "root（加载器直启）"
             prootAvailable -> "PRoot（免 root）"
             else -> "应用目录直启"
@@ -75,9 +78,11 @@ class EngineManager(
         val useRoot: Boolean,
         val useChroot: Boolean,
         val useProot: Boolean,
+        val prootViaRoot: Boolean = false,
     ) {
         val label: String
             get() = when {
+                prootViaRoot -> "PRoot（root）"
                 useProot -> "PRoot（免 root）"
                 useRoot && useChroot -> "root + chroot"
                 useRoot -> "root（加载器直启）"
@@ -129,6 +134,15 @@ class EngineManager(
         val wantRoot = wantRoot(settings)
         val needsInstall = existing == null || existing.rootMode != wantRoot || !verifyInstalled(existing)
         if (needsInstall) {
+            // install.json written by the Alpine-era app has no rootfs fields; treating
+            // it as unhealthy above is exactly the migration trigger. Tell the user why
+            // a ~1 GB download starts on first launch after the update.
+            if (existing != null && existing.rootfsVersion.isBlank()) {
+                Logx.i("检测到旧版 Alpine 引擎，将自动重装为 Debian 容器", ctx)
+                _state.update {
+                    it.copy(detail = "检测到旧版 Alpine 引擎，正在迁移到 Debian 容器（需重新下载）")
+                }
+            }
             install(force = existing != null)
         } else {
             refreshChroot(existing)
@@ -143,16 +157,14 @@ class EngineManager(
         EngineMode.PROOT -> false
     }
 
+    /**
+     * Same health definition as the installer. In particular a legacy Alpine install
+     * (no `rootfsVersion`, no `/etc/debian_version`) is *unhealthy*, which is what drives
+     * the automatic reinstall/migration on first launch after this update.
+     */
     private fun verifyInstalled(existing: Installation?): Boolean {
         if (existing == null) return false
-        val bin = existing.binary()
-        if (!existing.rootMode) {
-            return bin.isFile && bin.length() > Toolchain.MIN_BINARY_BYTES && existing.loader().isFile
-        }
-        val q = rootExec::q
-        val size = rootExec.run("stat -c %s ${q(bin.absolutePath)} 2>/dev/null || echo 0")
-            .out.trim().substringBefore('\n').toLongOrNull() ?: 0L
-        return size > Toolchain.MIN_BINARY_BYTES
+        return toolchain.verify(existing, existing.rootMode)
     }
 
     suspend fun install(force: Boolean = false) = withContext(Dispatchers.IO) {
@@ -181,6 +193,9 @@ class EngineManager(
                 val installation = toolchain.ensure(force = force, useRoot = useRoot) { p ->
                     _state.update { s -> s.copy(stage = p.stage, detail = p.detail, fraction = p.fraction) }
                 }
+                // The install swapped the jail into its official name; any su/busybox/
+                // chroot probe from an earlier attempt was for a different path.
+                rootExec.resetCache()
                 refreshChroot(installation)
                 _state.update {
                     it.copy(
@@ -219,7 +234,6 @@ class EngineManager(
             latest
         }.onFailure { e ->
             if (!quiet) _state.update { it.copy(phase = Phase.Ready, error = "检查更新失败：${e.message}") }
-            null
         }
     }
 
@@ -227,6 +241,9 @@ class EngineManager(
         val granted = runCatching { rootExec.probeRoot() }.getOrDefault(false)
         _state.update { it.copy(rootGranted = granted) }
         if (granted) {
+            // A previous "no su / no busybox / no chroot" answer may have been cached
+            // before the user approved the su dialog; re-probe with the new grant.
+            rootExec.resetCache()
             installation()?.let { refreshChroot(it) }
         }
     }
@@ -239,7 +256,11 @@ class EngineManager(
         val ok = runCatching { rootExec.chrootReady(installation) }.getOrDefault(false)
         _state.update { it.copy(chrootAvailable = ok) }
         if (!ok) {
-            Logx.e("jail 里没有可用的 chroot(1)：将退回「加载器直启」方式，DNS 可能受影响", ctx)
+            Logx.e(
+                "jail 里没有可用的 chroot(1)：将改用 " +
+                    (if (proot.available()) "PRoot（root）" else "加载器直启") + " 方式",
+                ctx,
+            )
         }
     }
 
@@ -277,6 +298,7 @@ class EngineManager(
             useRoot = root,
             useChroot = useChroot,
             useProot = useProot,
+            prootViaRoot = root && !useChroot && proot.available(),
             proxyBaseUrl = ensureProxy(settings),
         )
     }
@@ -298,6 +320,7 @@ class EngineManager(
             useRoot = root,
             useChroot = useChroot,
             useProot = useProot,
+            prootViaRoot = root && !useChroot && proot.available(),
         )
     }
 
@@ -346,7 +369,8 @@ class EngineManager(
         val plan = plan(settings) ?: return@withContext "尚未安装 CLI，无法自检"
         val inst = plan.installation
         val q = rootExec::q
-        val env = baseEnv(settings, plan.proxyBaseUrl, plan.useProot || plan.useChroot)
+        val guest = plan.useProot || plan.useChroot || plan.prootViaRoot
+        val env = baseEnv(settings, plan.proxyBaseUrl, guest)
 
         val size = if (plan.useRoot) {
             rootExec.run("stat -c %s ${q(inst.binary().absolutePath)} 2>/dev/null || echo 0")
@@ -354,52 +378,86 @@ class EngineManager(
         } else {
             inst.binary().length().toString()
         }
+        val workspace = Paths.workspace(ctx)
+        val home = Paths.home(ctx)
+        val guestBinary = "/opt/claude/${inst.version}/claude"
+
+        fun runRootScript(body: String): RootExec.Result {
+            val f = File(ctx.filesDir, "engine/selftest.sh").apply { parentFile?.mkdirs() }
+            f.writeText(body)
+            return rootExec.execute(
+                listOf(rootExec.suBinary() ?: "su", "-c", "sh ${f.absolutePath}"),
+                120_000,
+            )
+        }
 
         val result: RootExec.Result = when {
+            plan.prootViaRoot -> {
+                val spec = ProotRunner(ctx).runSpec(inst, listOf(guestBinary, "--version"), env)
+                runRootScript(TurnScripts.rootExec(spec.env, spec.argv, pidFile = null))
+            }
             plan.useProot -> {
                 val spec = ProotRunner(ctx).spec(inst, listOf("--version"), env)
                 runProcess(spec.argv, spec.env, spec.cwd, 120_000)
             }
             plan.useRoot && plan.useChroot -> {
-                val script = buildString {
-                    appendLine("#!/system/bin/sh")
-                    appendLine("R=${q(inst.jailPath)}")
-                    env.forEach { (k, v) -> appendLine("export $k=${q(v)}") }
-                    appendLine("export HOME=/root")
-                    appendLine(
-                        "${q(rootExec.busybox() ?: "${inst.jailPath}/bin/busybox")} chroot \"\$R\" " +
-                            "/lib/ld-musl-${inst.arch}.so.1 /opt/claude/${inst.version}/claude --version"
+                // The self-test chroot binds workspace/home like a real turn; clear them
+                // afterwards so they never outlive the process (see RootExec.deleteJail).
+                rootExec.unmountJail(inst.jailPath)
+                rootExec.chrootBegin()
+                try {
+                    runRootScript(
+                        TurnScripts.chroot(
+                            env = env,
+                            jail = inst.jailPath,
+                            workspace = workspace.absolutePath,
+                            home = home.absolutePath,
+                            chrootTool = rootExec.busybox() ?: "chroot",
+                            binary = guestBinary,
+                            args = listOf("--version"),
+                            hasBash = inst.hasBash,
+                            pidFile = null,
+                        )
                     )
+                } finally {
+                    rootExec.chrootEnd()
+                    rootExec.unmountJail(inst.jailPath)
                 }
-                val f = File(ctx.filesDir, "engine/selftest.sh").apply { parentFile?.mkdirs() }
-                f.writeText(script)
-                rootExec.execute(listOf(rootExec.suBinary() ?: "su", "-c", "sh ${f.absolutePath}"), 120_000)
             }
-            plan.useRoot -> rootExec.execute(
-                listOf(
-                    rootExec.suBinary() ?: "su", "-c",
-                    "exec ${q(inst.loader().absolutePath)} ${q(inst.binary().absolutePath)} --version",
-                ),
-                120_000,
+            plan.useRoot -> runRootScript(
+                TurnScripts.rootDirect(
+                    env = env,
+                    cwd = workspace.absolutePath,
+                    binary = inst.loader().absolutePath,
+                    args = ClaudeEngine.loaderOptions(inst.libraryPath()) +
+                        inst.binary().absolutePath + "--version",
+                    pidFile = null,
+                )
             )
             else -> runProcess(
-                listOf(inst.loader().absolutePath, inst.binary().absolutePath, "--version"),
+                ClaudeEngine.directArgv(
+                    inst.loader(), inst.libraryPath(), inst.binary(), listOf("--version"),
+                ),
                 env,
-                Paths.workspace(ctx),
+                workspace,
                 120_000,
             )
         }
         var text = result.combined.ifBlank { "（无输出，退出码 ${result.code}）" }
 
         // A crash inside the jail is worth one more data point: run the same binary with
-        // the loader directly. It distinguishes "jail is broken" from "binary is broken".
+        // the jail's loader on the host. It distinguishes "jail is broken" from "binary is
+        // broken".
         if (plan.useRoot && plan.useChroot && text.contains("Bus error", ignoreCase = true)) {
-            val direct = rootExec.execute(
-                listOf(
-                    rootExec.suBinary() ?: "su", "-c",
-                    "exec ${q(inst.loader().absolutePath)} ${q(inst.binary().absolutePath)} --version",
-                ),
-                60_000,
+            val direct = runRootScript(
+                TurnScripts.rootDirect(
+                    env = env,
+                    cwd = workspace.absolutePath,
+                    binary = inst.loader().absolutePath,
+                    args = ClaudeEngine.loaderOptions(inst.libraryPath()) +
+                        inst.binary().absolutePath + "--version",
+                    pidFile = null,
+                )
             )
             text += "\n— 直启模式（不经 chroot）—\n" +
                 direct.combined.ifBlank { "（无输出，退出码 ${direct.code}）" }
@@ -460,19 +518,41 @@ class EngineManager(
         engine.cancel()
         val inst = installation()
         runCatching {
-            if (inst != null) {
-                if (inst.rootMode) rootExec.run("rm -rf ${rootExec.q(inst.jailPath)}")
-                else inst.jail().deleteRecursively()
+            // `.new`/`.old` are swap leftovers; removing only the official name would
+            // leak a full Debian tree after an interrupted reinstall.
+            val trees = if (inst == null) emptyList() else listOf(
+                inst.jailPath,
+                inst.jailPath + ".new",
+                inst.jailPath + ".old",
+            )
+            // App-private trees (PRoot mode) may still carry chroot-era mounts; deleteTree
+            // sweeps them before deleting, so `rm -rf` cannot walk into the host.
+            if (inst == null || !inst.rootMode) {
+                trees.forEach { if (!rootExec.deleteTree(it)) Logx.e("删除 jail 失败：$it", ctx) }
+            }
+            // Root jails are outside app storage: unreadable without root, but they still
+            // cost ~1 GB and may be orphans of an install that never finished.
+            if (rootExec.isGranted()) {
+                // deleteJail unmounts the chroot's workspace/home binds first; a plain
+                // rm -rf would otherwise follow them into the host filesystem.
+                (trees + Paths.ROOT_JAIL + Paths.ROOT_JAIL_FALLBACK)
+                    .distinct()
+                    .forEach {
+                        val r = runCatching { rootExec.deleteJail(it) }.getOrNull()
+                        if (r == null || !r.ok) Logx.e("删除 jail 失败：$it", ctx)
+                    }
             }
             if (deleteWorkspace) {
                 Paths.workspace(ctx).deleteRecursively()
                 Paths.home(ctx).deleteRecursively()
                 Paths.sessions(ctx).deleteRecursively()
             }
-            // The 150 MB verified tarball is engine cache, not user data.
+            // Verified CLI/rootfs archives are engine cache, not user data.
             Paths.staging(ctx).deleteRecursively()
             Paths.clearInstallation(ctx)
         }.onFailure { Logx.e("卸载失败：${it.message}", ctx) }
+        // The jail is gone; a cached chroot/su answer has no valid target anymore.
+        rootExec.resetCache()
         _state.update {
             it.copy(
                 phase = Phase.Idle,

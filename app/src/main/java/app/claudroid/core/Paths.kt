@@ -12,6 +12,10 @@ import java.io.File
  * directory (W^X / SELinux). The CLI is an executable we download, so in root mode the
  * jail is created under /data/adb (a Magisk-owned, exec-friendly place) by a root shell,
  * and the app keeps only small control files in its private storage.
+ *
+ * The jail is a full Debian rootfs (see [EngineManager]); the Alpine-era fields are kept
+ * only so an old install.json remains parseable. A blank [rootfsVersion] means "legacy
+ * Alpine jail" and is deliberately treated as unhealthy so it gets replaced.
  */
 @Serializable
 data class Installation(
@@ -19,14 +23,43 @@ data class Installation(
     val jailPath: String,
     val arch: String,
     val rootMode: Boolean,
-    /** GNU bash is bundled into the jail when the Alpine package download succeeded. */
+    /** GNU bash is always present in the Debian rootfs; the default keeps old JSON valid. */
     val hasBash: Boolean = false,
     val installedAt: Long = System.currentTimeMillis(),
+    /** e.g. "debian-13-slim"; blank on an Alpine-era install. */
+    val rootfs: String = "",
+    /** Debian release ("13"); blank marks a legacy install that must be reinstalled. */
+    val rootfsVersion: String = "",
+    /** Layer digest (`sha256:...`) the rootfs was unpacked from. */
+    val rootfsSha256: String = "",
 ) {
     fun jail(): File = File(jailPath)
     fun binary(): File = File(jail(), "opt/claude/$version/claude")
-    fun loader(): File = File(jail(), "lib/ld-musl-$arch.so.1")
-    fun busybox(): File = File(jail(), "bin/busybox")
+
+    /** Present in every Debian rootfs; the cheapest "this is really Debian" marker. */
+    fun debianVersion(): File = File(jail(), "etc/debian_version")
+
+    /** Written by us: image tag, release and layer digest, for support logs. */
+    fun rootfsMarker(): File = File(jail(), "etc/claudroid-rootfs")
+
+    fun isDebian(): Boolean = rootfsVersion.isNotBlank() && debianVersion().isFile
+
+    /** ELF interpreter of the Debian rootfs (Debian 13 is usrmerge: /lib -> usr/lib). */
+    fun loader(): File = if (arch == "x86_64") {
+        File(jail(), "lib64/ld-linux-x86-64.so.2")
+    } else {
+        File(jail(), "lib/ld-linux-aarch64.so.1")
+    }
+
+    fun multiarch(): String = if (arch == "x86_64") "x86_64-linux-gnu" else "aarch64-linux-gnu"
+
+    /**
+     * Host-side library search path for the rare no-root/no-PRoot launch. The rootfs is
+     * not mounted at "/", so every entry is prefixed with the jail path.
+     */
+    fun libraryPath(): String = listOf("usr/lib/${multiarch()}", "usr/lib", "lib")
+        .joinToString(":") { File(jail(), it).absolutePath }
+
     fun bash(): File = File(jail(), "bin/bash")
 }
 

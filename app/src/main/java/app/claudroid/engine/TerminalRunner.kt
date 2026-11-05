@@ -52,7 +52,7 @@ class TerminalRunner(
         val workspace = Paths.workspace(ctx)
         val home = Paths.home(ctx)
         val startCwd = resolveExistingCwd(workspace, cwdRel)
-        val guest = plan.useProot || (plan.useRoot && plan.useChroot)
+        val guest = plan.useProot || plan.prootViaRoot || (plan.useRoot && plan.useChroot)
 
         // The status file lives in the home directory because that directory is already
         // bound to /root in PRoot/chroot. Direct and root-direct runs use its host path.
@@ -80,12 +80,42 @@ class TerminalRunner(
         } else {
             null
         }
+        // A chroot command leaves bind mounts behind; sweep them once this command is
+        // the last chroot session in the process (a chat turn may run in parallel).
+        val chrootSession = plan.useRoot && plan.useChroot
+        if (chrootSession) root.unmountJail(plan.installation.jailPath)
 
         var scriptFile: File? = null
         val commandLine: List<String>
         val processCwd: File
         val processEnv: Map<String, String>
         when {
+            plan.prootViaRoot -> {
+                // Root + no chroot(1): PRoot through su. The wrapper records the root
+                // process pid so terminate() can kill it with su.
+                val spec = try {
+                    ProotRunner(ctx).shellSpec(
+                        installation = plan.installation,
+                        workDir = guestCwd,
+                        script = guestScript!!,
+                        baseEnv = env,
+                    )
+                } catch (e: Exception) {
+                    return@withContext Result(
+                        output = "",
+                        exitCode = -1,
+                        cwdRel = startCwd,
+                        error = e.message ?: "PRoot 无法启动",
+                    )
+                }
+                scriptFile = writeScript(
+                    token,
+                    TurnScripts.rootExec(spec.env, spec.argv, pidHost.absolutePath),
+                )
+                commandLine = suCommand(scriptFile)
+                processCwd = ctx.filesDir
+                processEnv = suEnv()
+            }
             plan.useProot -> {
                 val spec = try {
                     ProotRunner(ctx).shellSpec(
@@ -112,7 +142,7 @@ class TerminalRunner(
                     jail = plan.installation.jailPath,
                     workspace = workspace.absolutePath,
                     home = home.absolutePath,
-                    chrootTool = root.busybox() ?: "${plan.installation.jailPath}/bin/busybox",
+                    chrootTool = root.busybox() ?: "chroot",
                     guestScript = guestScript!!,
                     pidFile = pidHost.absolutePath,
                 )
@@ -162,6 +192,7 @@ class TerminalRunner(
                 error = "命令无法启动：${e.message ?: "未知错误"}",
             )
         }
+        if (chrootSession) root.chrootBegin()
         // Commands such as `cat` or `read` would otherwise wait for terminal input
         // until the 120 s timeout. There is no interactive stdin in this API.
         runCatching { process.outputStream.close() }
@@ -169,28 +200,31 @@ class TerminalRunner(
         val output = StringBuilder()
         val truncated = AtomicBoolean(false)
         fun snapshot(): String = synchronized(output) { output.toString() }
-        val reader = launch {
-            process.inputStream.reader(Charsets.UTF_8).use { input ->
-                val buffer = CharArray(4096)
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    if (n == 0) continue
-                    val chunk = String(buffer, 0, n)
-                    val accepted = synchronized(output) {
-                        appendCapped(output, chunk, MAX_OUTPUT_CHARS)
-                    }
-                    if (accepted == null || accepted.length < chunk.length) {
-                        // Keep draining the pipe so the command can finish normally, but
-                        // stop growing memory and stop feeding the UI callback.
-                        truncated.set(true)
-                    }
-                    if (accepted != null) onOutput(accepted)
-                }
-            }
-        }
 
         try {
+            // The reader lives inside the try so the finally below always pairs chrootBegin
+            // with chrootEnd: a stuck counter would permanently disable mount sweeps.
+            val reader = launch {
+                process.inputStream.reader(Charsets.UTF_8).use { input ->
+                    val buffer = CharArray(4096)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        val chunk = String(buffer, 0, n)
+                        val accepted = synchronized(output) {
+                            appendCapped(output, chunk, MAX_OUTPUT_CHARS)
+                        }
+                        if (accepted == null || accepted.length < chunk.length) {
+                            // Keep draining the pipe so the command can finish normally, but
+                            // stop growing memory and stop feeding the UI callback.
+                            truncated.set(true)
+                        }
+                        if (accepted != null) onOutput(accepted)
+                    }
+                }
+            }
+
             var timedOut = false
             val deadline = System.nanoTime() + TIMEOUT_MS * 1_000_000L
             while (process.isAlive) {
@@ -200,7 +234,7 @@ class TerminalRunner(
                 }
                 delay(50)
             }
-            if (timedOut) terminate(process, pidHost, plan.useRoot)
+            if (timedOut) terminate(process, pidHost, plan.useRoot || plan.prootViaRoot)
 
             // A background grandchild can inherit stdout and keep the pipe open after
             // the command itself exits; do not let that turn into a second timeout.
@@ -272,12 +306,16 @@ class TerminalRunner(
             }
             Result(snapshot(), status.exitCode, verified, truncated = truncated.get())
         } finally {
-            if (process.isAlive) terminate(process, pidHost, plan.useRoot)
+            if (process.isAlive) terminate(process, pidHost, plan.useRoot || plan.prootViaRoot)
             runCatching { process.inputStream.close() }
             runCatching { process.outputStream.close() }
             statusHost.delete()
             pidHost.delete()
             scriptFile?.delete()
+            if (chrootSession) {
+                root.chrootEnd()
+                root.unmountJail(plan.installation.jailPath)
+            }
         }
     }
 
