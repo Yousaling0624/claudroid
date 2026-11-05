@@ -77,6 +77,21 @@
 `Shapes` 把 extraSmall…extraLarge 一一对应上去。卡片比按钮圆一点、按钮比小 chip 圆一点，
 形成"越大的容器越圆"的稳定节奏；需要胶囊时直接用 `CircleShape`，不新增硬编码半径。
 侧边栏的会话行、引擎卡、搜索框、新对话按钮都使用 `lg` 或胶囊，不再使用 `sm` 小圆角。
+工作区的文件块、缩略图、小按钮也一律取 `Radii` 档位（10/8/14dp 这类散落值已并入 `xs`/`sm`）。
+
+### 3.1 按钮、胶囊与输入框
+
+- **悬浮 chrome**：46dp 正圆图标键、46–54dp 胶囊；图标 18–20dp。玻璃只用于操作入口
+  （顶栏、输入框附件/发送、抽屉 X/新对话/工作区/设置、设置返回键、斜杠卡片），标题不裹气泡。
+- **主/次操作**：50dp 高、`CircleShape`。主按钮陶土渐变 + 顶部白色高光 + 橙色 glow；
+  次按钮纸面 + 白→沙 rim + 2dp 阴影。disabled 用 `surface2`/`bone`，destructive 用 error 渐变。
+- **设置 / 抽屉大胶囊入口**：52–54dp 高；左侧图标放进 36–42dp 圆容器；标题 15.5sp SemiBold；
+  入口之间 8–10dp 间距，不要退回普通列表行。
+- **chip / 列表行**：chip 触控高度至少 44dp（视觉内边距可更紧），列表行至少 56dp；
+  选中态用 ink/sand/paper，不用橙色实心铺底。
+- **输入胶囊**用 `Radii.mdShape`（20dp），不用 `CircleShape`：`CircleShape` 的半径恒等于高度的一半，
+  多行增高后左右两个 40dp 按钮（距边缘 6dp）会落进底部圆角的内切区域被裁掉。20dp 是单行高度下
+  仍能完整包住按钮的最大 `Radii` 档位；单行看起来仍接近胶囊，多行只保留正常圆角。
 
 ## 4. 图标规范（`AppIcons.kt`）
 
@@ -120,41 +135,59 @@
 `EaseInOut`。页面进入/退出用横向 1/20~1/40 位移 + 淡入淡出；列表项用 `animateItem`；
 折叠展开用 `expandVertically`/`shrinkVertically` + `fadeIn/Out`；状态切换用 `animateColorAsState`。
 
-**触摸物理**：可复用 `Modifier.pressFeedback(shape = ...)`，加在 `clickable` **之前**，本身只观察不消费事件。
+**触摸物理层级**（`PressFeedback.kt`）：可复用 `Modifier.pressFeedback(shape = ...)`，加在
+`clickable` **之前**，本身只观察不消费事件。一共三层，不要每个按钮都加戏：
 
-- 按下：`scale 0.96` + `translationY 1dp`；松手用 `spring(dampingRatio = 0.72f, stiffness = 340f)`
-  （`Motion.Release`）回弹，软 Q 弹但不过分晃；
-- 滚动防误触：位移超过 `LocalViewConfiguration.touchSlop` 立即取消按压态，把手势让给父滚动容器；
-- **拖动形变（`dragMorph = true`，2026 液态材质）**：用于悬浮 chrome，不用于 `LazyColumn` 行。
-  - 按下 90ms 内到 `0.96`；拖动后沿主轴拉伸、垂直轴压缩：
-    `stretch ≤ 0.15`，`squash = stretch × 0.65`，以拖动反方向的边为锚点（anchor stretch）；
-  - 中心向手指阻尼位移 `0.12 × 拖动距离`，不 1:1 跟手；
-  - 松手用 `spring(dampingRatio = 0.55f, stiffness = 380f)`，并把 `VelocityTracker` 的
-    速度换算成形变速度作为 `initialVelocity`，避免固定时长曲线的顿挫；
-  - 按下时叠一层 `alpha ≤ 0.07` 的白色高光，只裁剪高光本身（阴影和拉伸仍可越出原边界），
-    拖动越远高光越淡；
-  - 只应用于顶栏三个胶囊、输入框附件/发送按钮、侧边栏「新对话」；消息操作、建议 chip、
-    列表行仍用默认的安静按压；
-- 尊重无障碍：系统"移除动画"（`ANIMATOR_DURATION_SCALE == 0`）时 `LocalReduceMotion` 为 true，
-  所有按压/页面/折叠动画降级为瞬时；`ClaudroidTheme` 注入该 CompositionLocal。
+1. **悬浮 chrome（`dragMorph = true`）**：顶栏胶囊、输入框附件/发送、抽屉 X / 新对话 /
+   工作区 / 设置、设置返回胶囊。
+   - 按下 90ms 内到 `0.96`；拖动后沿主轴拉伸、垂直轴压缩：
+     `stretch ≤ 0.15`，`squash = stretch × 0.65`，以拖动反方向的边为锚点（anchor stretch）；
+   - 中心向手指阻尼位移 `0.12 × 拖动距离`，不 1:1 跟手；
+   - 松手用 `spring(dampingRatio = 0.55f, stiffness = 380f)`，并把 `VelocityTracker` 的
+     速度换算成形变速度作为 `initialVelocity`，避免固定时长曲线的顿挫；
+   - 按下时叠一层 `alpha ≤ 0.07` 的白色高光，只裁剪高光本身（阴影和拉伸仍可越出原边界），
+     拖动越远高光越淡；抽屉 / 首页没有 Haze 源时退化为半透明 paper，但物理参数不变。
+2. **主 / 次操作按钮**：`pressFeedback(pressedScale = 0.97f)`，补按下态颜色/亮度/rim：
+   按下时叠 4–5% 墨色 wash（深色主题用白色 wash），Primary 的白色 rim 变亮，Ghost 的填充过渡到
+   `surface1`、rim 过渡到 ink 30%；主按钮保留长按触感。只用短 tween，不做形变。
+3. **列表行 / chip / 开关 / 代码复制**：默认 `pressedScale = 0.98f`、`translationY = 0.5dp`，
+   `Motion.PressQuiet` 短 tween + 同一条 4–5% wash。无弹簧、无形变；滚动超过 touch slop 立即取消。
 
-原则：安静、不浮夸。纸张不该像橡胶，也不该有涟漪扩散；只给"按下去"一点物理反馈。
+**滚动防误触**：位移超过 `LocalViewConfiguration.touchSlop` 立即取消按压态，把手势让给父滚动容器。
+消息操作、建议 chip、模型列表行、工具 / 思考折叠、会话行都不启用 `dragMorph`。
+
+**无障碍**：系统"移除动画"（`ANIMATOR_DURATION_SCALE == 0`）时 `LocalReduceMotion` 为 true，
+按压、颜色、页面、折叠动画全部降级为瞬时；`ClaudroidTheme` 注入该 CompositionLocal。
+不添加 ripple，纸张不该有涟漪扩散；配合 `Modifier.quietClickable`（`indication = null`）
+使用，不要直接叠默认带 ripple 的 `clickable`。
+
+原则：安静、不浮夸。纸张不该像橡胶，也不该有涟漪扩张；只给"按下去"一点物理反馈。
 
 ## 6. 设置页 IA（`ui/settings/SettingsScreen.kt`）
 
-两级结构，**不平铺全部控件**：
+三级结构，**不平铺全部控件**：
 
-- 根页：一句当前配置摘要 + 8 个带图标/摘要的分类行
-  （接口与模型、模型档位、引擎与权限、功能与实验、外观、工作区、高级、关于）。
-- 二级页：返回箭头 + 标题，`AnimatedContent` 横向进入/返回；`BackHandler` 先退二级页，
-  根页的返回交给 `MainActivity` 的路由栈（顺序：二级 → 根 → 离开设置）。
+- **根页**：H1「设置」+ 一句说明；当前配置 hero 卡（模型 headline、协议/权限/主题/引擎摘要、
+  右侧陶土星标）；分类是 8 个间距 10dp 的大胶囊行（图标块 + 标题 + 摘要 + chevron），
+  不再塞进一张大卡。
+- **详情页**：H1 26sp SemiBold + 一句 intro；H2 17.5sp 在卡片外，卡片内只放控件；
+  按钮是 50dp 大胶囊。所有二级页共享同一个 `AnimatedContent` 横向进入/返回。
+- **三级页**：权限模式、引擎日志、环境变量。同样 H1/H2，顶部返回胶囊；`rememberSaveable`
+  保存子页，`BackHandler` 顺序为：模态 → 三级页 → 详情页 → 根页 → 离开设置。
+- **顶栏**：只有悬浮的 46dp 圆形玻璃返回胶囊。**页面标题是滚动内容里的 H1 文字，不做标题气泡、
+  不加玻璃胶囊**；玻璃胶囊只留给返回键、模型卡关闭键、大按钮与 chip 等操作控件。
+- **玻璃模型选择面板**（`ModelListSheet`）：同窗口浮层，背景 `GlassScrim` 真实模糊 + 低透明压暗；
+  面板高约屏高 88%，顶部拖拽 handle、H1 标题/说明、模型计数、46dp 玻璃关闭键；搜索框 48dp；
+  每行 58dp 大胶囊（左圆形 provider 标记、14.5sp Medium 模型 ID、右侧圆形勾选），行距 7dp；
+  选中行 `surface1` + ink 细边，未选中 paper + sand 发丝边；列表占满剩余高度并滚动；
+  底部固定手动输入 + 全宽 50dp 主按钮；`imePadding` 保证键盘弹出时按钮不被遮挡。
+  点击整行选择并关闭，遮罩 / 系统返回也会关闭；空列表与无匹配都有下一步提示。
 - 所有异步状态（模型拉取、自检、日志、发布检查、sheet/对话框）留在顶层 `SettingsScreen`，
-  切分类不会取消进行中的任务。
-- 保留全部既有设置项与行为。「功能与实验」二级页新增开关与说明：
-  agent teams（诚实标注 headless `-p` 下队友无法真正启动，属实验）、workflows、auto memory、
-  background tasks、extended thinking；`EffortLevel`（AUTO 不传 `--effort`）；
-  `subagentModel`；`autoModeModel`（注明仅供官方 auto 权限分类器）。
-  权限模式含「自动（官方 Auto）」并说明网关兼容性；模型档位区分
+  切分类或进三级页都不会取消进行中的任务。
+- 保留全部既有设置项与行为。「功能与实验」二级页包含 agent teams（诚实标注 headless `-p`
+  下队友无法真正启动，属实验）、workflows、auto memory、background tasks、extended thinking；
+  `EffortLevel`（AUTO 不传 `--effort`）；`subagentModel`；`autoModeModel`（仅供官方 auto
+  权限分类器）。权限模式含「自动（官方 Auto）」并说明网关兼容性；模型档位区分
   「默认 / 路由组」（把原始模型 ID 原样传给 `--model`，可填 Magpie 的 `auto/dfmodel[1m]`）
   与「CLI 默认（不指定模型）」（完全不传 `--model`）。
 
@@ -224,19 +257,37 @@
 
 ## 11. 毛玻璃与有机形变（Haze / graphics-shapes）
 
-两个"重"库只用在两个明确的地方，不做无意义的炫技：
+两个"重"库只用在明确的浮层与玻璃节点上，不做无意义的炫技。所有玻璃都只能在**同一个 window**
+内采样；跨 window 的 `Dialog` / `ModalBottomSheet` 会失去真实模糊，改用同窗口 overlay。
+Haze 固定 1.0.1，Android 11 及以下退化为 `fallbackTint` 近不透明表面，文字必须仍然可读。
 
+- **共享玻璃材质**（`ui/components/Glass.kt`）：`Modifier.glass` 默认 `blurRadius = 28dp`；
+  图标型胶囊 tint `0.58–0.66`，文字型胶囊 `0.68–0.74`（保证对比度），`noiseFactor = 0.05`。
+  阴影 9dp 柔光；亮边为白色→沙色的竖向渐变（深色主题白色 0.22、沙色 0.38）。
+  无 Haze 源时退化为 90% 不透明 paper，仍保留同样的阴影和 rim，不能变成一块死白。
 - **悬浮顶栏玻璃**（`ui/components/FloatingTopBar.kt` + `Frosted.kt`）：聊天/首页顶栏由四个
   独立胶囊组成——圆形侧栏、标题长胶囊（点按打开菜单）、模型切换胶囊、圆形新会话。聊天页
   滚动内容挂 `Modifier.hazeSource(state)`，每个胶囊挂 `Modifier.frosted(...)`；
-  `HazeStyle` 用 `blurRadius = 22dp`、canvas tint `alpha = 0.80`、`noiseFactor = 0.05`，
-  Android 11 及以下退化为近乎不透明的 `fallbackTint`。首页没有滚动源，胶囊退化为半透明
-  `paper` + 柔和阴影。胶囊共用亮边（白→沙的竖向渐变）和 6dp 阴影，形成"浮在纸面上"的层次。
-  顶栏总高 **62dp（不含状态栏）**，`LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`，
-  消息从胶囊之间和下方穿过。
-- **底部输入胶囊**（`ui/components/Composer.kt`）：一个 `CircleShape` 长条包住附件、可增高
-  输入框和发送/停止；paper 填充 + 1dp 沙色/橙色边框 + 8dp 柔和阴影。编辑消息时上方出现
-  一条 `orangeSoft` 胶囊提示，不把工具条塞回输入框内部。
+  `HazeStyle` 用 `blurRadius = 26–30dp`、canvas tint、`noiseFactor = 0.05`。首页没有滚动源，
+  胶囊退化为半透明 `paper` + 柔和阴影。顶栏总高 **62dp（不含状态栏）**，
+  `LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`，消息从胶囊之间和下方穿过。
+- **设置悬浮返回键**：46dp 正圆，直接复用同一个 `GlassIconButton`（阴影 / Haze / rim /
+  dragMorph / 长按触感）。设置页顶栏只有这个操作胶囊，**标题是 H1 纸面文字，不做标题气泡**。
+- **模糊模型面板**（`ModelListSheet`）：同窗口浮层。全屏 `GlassScrim` 用 26dp 模糊 +
+  低透明 canvas tint 与压暗；面板本身保持 paper 以保证长模型 ID 的可读性，顶部圆角 28dp。
+  面板高度约 88%，关闭键用共享玻璃轮廓的 fallback paper 形态（面板不透明，若用 Haze
+  会在卡片上开一个透出背景的小窗）。
+- **侧边栏玻璃入口**（`SessionDrawer.kt`）：抽屉是 paper Surface，没有自己的 Haze 源，
+  因此 X 收起键、新对话、工作区、设置两行统一用半透明 paper fallback + 9dp 阴影 + rim；
+  大行高 52–54dp，图标放进圆形容器，行距 9dp。会话行、搜索框仍是安静按压，不加 dragMorph。
+- **输入胶囊**（`ui/components/Composer.kt`）：`Radii.mdShape`（20dp）长条包住附件、可增高
+  输入框和发送/停止；paper 填充 + 1dp 沙色/橙色边框 + 8dp 柔和阴影。`maxLines = 7` 后内部
+  滚动，不再继续撑高。编辑消息时上方出现一条 `orangeSoft` 胶囊提示，不把工具条塞回输入框内部。
+- **斜杠功能卡片**（`ui/components/SlashPalette.kt`）：同窗口玻璃卡（28dp 模糊、tint 0.74、
+  9dp 阴影），悬在输入胶囊上方，向上展开 + 淡入；行高 54dp，图标圆容器 + 14.5sp SemiBold
+  标题 + 12sp 说明 + 右侧 `/key` 等宽小字；最大高度 300dp（键盘弹出时取可用高度的 55%），
+  内部滚动。空草稿输入 `/` 才触发，空格 / 清空 / 选中 / 返回即收起；已有草稿不触发。
+  动作只做 App 级操作（新建、模型、附件、工作区、设置、停止、重试），不假装支持 CLI 斜杠命令。
 - **顶栏下拉菜单**（`FloatingMenu` / `ModelDropdownMenu`）：模型与标题菜单都从胶囊向下展开，
   不再用 `ModalBottomSheet`。两者共用 paper 背景、`Radii.menu = 22dp`、0 tonal elevation、
   10dp 阴影和 6dp 垂直偏移；模型菜单宽 **248dp**，标题菜单宽 **236dp**。
@@ -245,10 +296,10 @@
   - 标题菜单在标题胶囊内居中：`offsetX = (标题宽 - 236dp) / 2`，标题胶囊窄于 236dp 时
     offsetX 为负值也照样居中，由 M3 popup 的 position provider 夹在窗口内；
   - 两个胶囊的 chevron 都随菜单展开旋转；选中项用 `AppIcons.Check` 尾标。
-- **拖动形变**（`PressFeedback.kt`）：顶栏三个胶囊、输入框附件/发送、侧边栏「新对话」使用
-  `pressFeedback(dragMorph = true)`。参数与验收：按下 <100ms 到 0.96；沿拖动轴拉伸 ≤0.15，
-  垂直轴压缩 0.65×；中心阻尼跟手 0.12×；松手 `spring(0.55, 380)` + 速度回弹；
-  高光 7% 且随拖动淡出。列表行、消息操作、建议 chip 不启用，避免滚动时误触。
+- **拖动形变**（`PressFeedback.kt`）：浮动 chrome 使用 `pressFeedback(dragMorph = true)`：
+  顶栏胶囊、输入框附件/发送、抽屉 X / 新对话 / 工作区 / 设置、设置返回键。
+  参数与验收见第 5 节；斜杠卡片按行安静按压，列表行、消息操作、建议 chip、模型行都不启用，
+  避免滚动时误触。
 - **品牌呼吸光环**（`ui/components/OrganicHalo.kt`）：`graphics-shapes` 的
   `Morph(circle → 圆角五角星)` 用 `asCubics(progress)` 生成真实曲线，慢速呼吸 + 42s 自转，
   放在 `ClaudeMark` 后面的低透明度陶土色圆斑里。只在首页问候与空对话页出现，替掉静态装饰；

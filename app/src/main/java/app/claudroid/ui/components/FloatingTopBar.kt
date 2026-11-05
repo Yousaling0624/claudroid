@@ -4,9 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,11 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
@@ -228,35 +220,6 @@ fun FloatingMenuItem(
 }
 
 @Composable
-private fun GlassIconButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    frostedState: HazeState?,
-) {
-    val haptic = LocalHapticFeedback.current
-    val colors = MaterialTheme.appColors
-    Box(
-        Modifier
-            .size(46.dp)
-            .pressFeedback(shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape)
-            .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onClick()
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = colors.graphite,
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
-@Composable
 private fun TitlePill(
     title: String,
     subtitle: String?,
@@ -271,8 +234,8 @@ private fun TitlePill(
         Modifier
             .fillMaxSize()
             .pressFeedback(enabled = hasMenu, shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape)
-            .clickable(enabled = hasMenu, onClick = onClick ?: {})
+            .glass(frostedState, CircleShape, tintAlpha = 0.72f)
+            .quietClickable(enabled = hasMenu) { onClick?.invoke() }
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -327,8 +290,8 @@ private fun ModelPill(
             .height(46.dp)
             .widthIn(max = 132.dp)
             .pressFeedback(shape = CircleShape, dragMorph = true)
-            .glass(frostedState, CircleShape)
-            .clickable {
+            .glass(frostedState, CircleShape, tintAlpha = 0.70f)
+            .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
@@ -351,42 +314,4 @@ private fun ModelPill(
         Spacer(Modifier.width(2.dp))
         RotatingChevron(expanded = menuOpen, tint = colors.stone, size = 11.dp)
     }
-}
-
-/**
- * The shared liquid-glass surface: soft shadow, a clipped Haze child (or translucent
- * paper when there is no source to blur) and a bright-to-sand rim that catches the
- * light like iOS's floating capsules.
- */
-@Composable
-private fun Modifier.glass(frostedState: HazeState?, shape: Shape): Modifier {
-    val colors = MaterialTheme.appColors
-    val rim = Brush.verticalGradient(
-        listOf(
-            Color.White.copy(alpha = if (colors.dark) 0.14f else 0.62f),
-            colors.sand.copy(alpha = if (colors.dark) 0.32f else 0.5f),
-        )
-    )
-    return this
-        .shadow(
-            elevation = 6.dp,
-            shape = shape,
-            clip = false,
-            ambientColor = colors.ink.copy(alpha = if (colors.dark) 0.35f else 0.10f),
-            spotColor = colors.ink.copy(alpha = if (colors.dark) 0.4f else 0.12f),
-        )
-        .clip(shape)
-        .then(
-            if (frostedState != null) {
-                Modifier.frosted(
-                    state = frostedState,
-                    surface = colors.canvas,
-                    blurRadius = 22.dp,
-                    tintAlpha = 0.80f,
-                )
-            } else {
-                Modifier.background(colors.paper.copy(alpha = 0.94f))
-            }
-        )
-        .border(1.dp, rim, shape)
 }

@@ -43,9 +43,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
@@ -62,7 +65,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.LocalReduceMotion
 import app.claudroid.ui.theme.Radii
+import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
 
 /**
@@ -123,7 +128,12 @@ fun ClaudeTopBar(
     }
 }
 
-/** A paper section card: rounded from the shared scale, hairline sand border, no shadow. */
+/**
+ * A settings group: the H2 and its supporting sentence live *above* the paper card
+ * instead of inside it. That separation is what gives the redesigned pages their
+ * rhythm — headings read as navigation, cards as content. The card itself keeps the
+ * warm-paper language and gets a slightly larger radius and roomier padding.
+ */
 @Composable
 fun SettingsSection(
     title: String,
@@ -131,27 +141,30 @@ fun SettingsSection(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = Radii.lgShape
-    Column(
-        modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp)
-            .clip(shape)
-            .background(MaterialTheme.appColors.paper)
-            .border(1.dp, MaterialTheme.appColors.sand, shape)
-            .padding(horizontal = 18.dp, vertical = 16.dp),
-    ) {
-        SectionLabel(title)
-        if (subtitle != null) {
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.appColors.stone,
-                modifier = Modifier.padding(top = 5.dp),
-            )
+    val colors = MaterialTheme.appColors
+    val shape = Radii.xlShape
+    Column(modifier.fillMaxWidth().padding(top = 26.dp)) {
+        Column(Modifier.padding(horizontal = 4.dp)) {
+            Text(title, style = SettingsType.h2, color = colors.ink)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = SettingsType.intro.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
+                    color = colors.stone,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
-        Spacer(Modifier.height(4.dp))
-        content()
+        Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(colors.paper)
+                .border(1.dp, colors.sand.copy(alpha = 0.85f), shape)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            content = content,
+        )
     }
 }
 
@@ -202,7 +215,7 @@ fun SettingsRow(
         Column(Modifier.weight(1f)) {
             Text(
                 title,
-                style = MaterialTheme.typography.titleMedium,
+                style = SettingsType.rowTitle,
                 color = MaterialTheme.appColors.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -210,7 +223,7 @@ fun SettingsRow(
             if (subtitle != null) {
                 Text(
                     subtitle,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
                     color = MaterialTheme.appColors.stone,
                     modifier = Modifier.padding(top = 2.dp),
                     maxLines = 2,
@@ -276,11 +289,12 @@ fun ClaudeField(
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = if (singleLine) 0.dp else 112.dp)
                 .clip(Radii.smShape)
                 .background(MaterialTheme.appColors.surface1)
                 .border(1.dp, borderColor, Radii.smShape)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
         ) {
             Box(Modifier.weight(1f)) {
                 if (text.isEmpty()) {
@@ -341,18 +355,23 @@ fun PillChip(
     onClick: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+    val reduceMotion = LocalReduceMotion.current
+    val colorSpec = tween<Color>(
+        durationMillis = if (reduceMotion) 0 else Motion.MEDIUM,
+        easing = Motion.EaseOut,
+    )
     val background by animateColorAsState(
         targetValue = when {
             !enabled -> MaterialTheme.appColors.surface2.copy(alpha = 0.5f)
             selected -> MaterialTheme.appColors.ink
             else -> MaterialTheme.appColors.paper
         },
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        animationSpec = colorSpec,
         label = "chip-bg",
     )
     val border by animateColorAsState(
         targetValue = if (selected) MaterialTheme.appColors.ink else MaterialTheme.appColors.sand,
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        animationSpec = colorSpec,
         label = "chip-border",
     )
     val foreground by animateColorAsState(
@@ -361,7 +380,7 @@ fun PillChip(
             selected -> MaterialTheme.appColors.paper
             else -> MaterialTheme.appColors.graphite
         },
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        animationSpec = colorSpec,
         label = "chip-fg",
     )
     Box(
@@ -370,16 +389,25 @@ fun PillChip(
             .clip(CircleShape)
             .background(background)
             .border(1.dp, border, CircleShape)
-            .clickable(enabled = enabled) {
+            .quietClickable(enabled = enabled) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .heightIn(min = 44.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(text, style = MaterialTheme.typography.labelMedium, color = foreground)
     }
 }
 
+/**
+ * Large capsule action. Primary is the one place a terracotta fill is allowed, so it
+ * gets the full material treatment: vertical orange gradient, a faint top highlight,
+ * a warm glow instead of a neutral drop shadow, and SemiBold text. The 50dp height is
+ * intentionally taller than the old 44dp button — this is the main action on a page,
+ * not a toolbar chip.
+ */
 @Composable
 fun PrimaryButton(
     text: String,
@@ -389,35 +417,108 @@ fun PrimaryButton(
     destructive: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
-    // Primary is the one place a terracotta fill is allowed: it is the key action.
-    val shape = Radii.mdShape
-    val fill = when {
-        !enabled -> MaterialTheme.appColors.surface2
-        destructive -> MaterialTheme.appColors.error
-        else -> MaterialTheme.appColors.orange
-    }
+    val colors = MaterialTheme.appColors
+    val reduceMotion = LocalReduceMotion.current
+    val shape = CircleShape
     val foreground = when {
-        !enabled -> MaterialTheme.appColors.bone
+        !enabled -> colors.bone
         destructive -> MaterialTheme.colorScheme.onError
         else -> MaterialTheme.colorScheme.onPrimary
     }
+    val glow = if (destructive) colors.error else colors.orange
+    val shade = colors.codeBg
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val rimPulse by animateColorAsState(
+        targetValue = if (pressed && enabled) {
+            Color.White.copy(alpha = if (colors.dark) 0.40f else 0.62f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(if (reduceMotion) 0 else Motion.FAST, easing = Motion.EaseChrome),
+        label = "primary-rim-press",
+    )
+    val fill: Brush = when {
+        !enabled -> SolidColor(colors.surface2)
+        destructive -> Brush.verticalGradient(
+            listOf(colors.error, lerp(colors.error, shade, 0.16f))
+        )
+        else -> Brush.verticalGradient(
+            listOf(colors.orange, lerp(colors.orange, shade, if (colors.dark) 0.08f else 0.12f))
+        )
+    }
     Box(
         modifier
-            .pressFeedback(enabled = enabled, shape = shape)
+            .pressFeedback(enabled = enabled, shape = shape, pressedScale = 0.97f)
+            .then(
+                if (enabled) {
+                    Modifier.shadow(
+                        elevation = 10.dp,
+                        shape = shape,
+                        clip = false,
+                        ambientColor = glow.copy(alpha = 0.30f),
+                        spotColor = glow.copy(alpha = 0.38f),
+                    )
+                } else Modifier
+            )
             .clip(shape)
             .background(fill)
-            .clickable(enabled = enabled) {
+            .then(
+                if (enabled) {
+                    Modifier.border(
+                        1.dp,
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = if (colors.dark) 0.16f else 0.38f),
+                                Color.Transparent,
+                            )
+                        ),
+                        shape,
+                    )
+                } else Modifier
+            )
+            // Brightening the rim on press reads as a material response even while the
+            // fill is a gradient that cannot itself be tweened.
+            .border(1.dp, rimPulse, shape)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+            ) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
-            .heightIn(min = 44.dp)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .heightIn(min = 50.dp)
+            .padding(horizontal = 22.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = MaterialTheme.typography.labelLarge, color = foreground)
+        if (enabled) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.verticalGradient(
+                            *arrayOf(
+                                0f to Color.White.copy(alpha = if (colors.dark) 0.10f else 0.18f),
+                                0.55f to Color.Transparent,
+                                1f to Color.Transparent,
+                            )
+                        )
+                    )
+            )
+        }
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = foreground,
+        )
     }
 }
 
+/**
+ * Quiet capsule action: paper fill, rim light along the top edge, and a barely-there
+ * shadow so it still lifts off the canvas without competing with Primary.
+ */
 @Composable
 fun GhostButton(
     text: String,
@@ -426,27 +527,73 @@ fun GhostButton(
     enabled: Boolean = true,
     destructive: Boolean = false,
 ) {
-    val shape = Radii.mdShape
-    val border = if (destructive) MaterialTheme.appColors.error.copy(alpha = 0.45f)
-    else MaterialTheme.appColors.sand
+    val haptic = LocalHapticFeedback.current
+    val colors = MaterialTheme.appColors
+    val reduceMotion = LocalReduceMotion.current
+    val shape = CircleShape
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val fill by animateColorAsState(
+        targetValue = if (pressed && enabled) {
+            if (destructive) colors.error.copy(alpha = 0.07f) else colors.surface1
+        } else {
+            colors.paper
+        },
+        animationSpec = tween(if (reduceMotion) 0 else Motion.FAST, easing = Motion.EaseChrome),
+        label = "ghost-press-fill",
+    )
+    val rimPulse by animateColorAsState(
+        targetValue = if (pressed && enabled) {
+            if (destructive) colors.error.copy(alpha = 0.45f) else colors.ink.copy(alpha = 0.30f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(if (reduceMotion) 0 else Motion.FAST, easing = Motion.EaseChrome),
+        label = "ghost-rim-press",
+    )
+    val rim = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (colors.dark) 0.10f else 0.55f),
+            if (destructive) colors.error.copy(alpha = 0.45f) else colors.sand,
+        )
+    )
     Box(
         modifier
-            .pressFeedback(enabled = enabled, shape = shape)
+            .pressFeedback(enabled = enabled, shape = shape, pressedScale = 0.97f)
+            .then(
+                if (enabled) {
+                    Modifier.shadow(
+                        elevation = 2.dp,
+                        shape = shape,
+                        clip = false,
+                        ambientColor = colors.ink.copy(alpha = 0.06f),
+                        spotColor = colors.ink.copy(alpha = 0.08f),
+                    )
+                } else Modifier
+            )
             .clip(shape)
-            .background(MaterialTheme.appColors.paper)
-            .border(1.dp, border, shape)
-            .clickable(enabled = enabled, onClick = onClick)
-            .heightIn(min = 44.dp)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
+            .background(fill)
+            .border(1.dp, rim, shape)
+            .border(1.dp, rimPulse, shape)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
+            .heightIn(min = 50.dp)
+            .padding(horizontal = 22.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
             color = when {
-                !enabled -> MaterialTheme.appColors.bone
-                destructive -> MaterialTheme.appColors.error
-                else -> MaterialTheme.appColors.ink
+                !enabled -> colors.bone
+                destructive -> colors.error
+                else -> colors.ink
             },
         )
     }
@@ -456,14 +603,15 @@ fun GhostButton(
 @Composable
 fun WarmSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     val haptic = LocalHapticFeedback.current
+    val reduceMotion = LocalReduceMotion.current
     val track by animateColorAsState(
         targetValue = if (checked) MaterialTheme.appColors.ink else MaterialTheme.appColors.surface2,
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseChrome),
+        animationSpec = tween(if (reduceMotion) 0 else Motion.MEDIUM, easing = Motion.EaseChrome),
         label = "switch-track",
     )
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 20.dp else 2.dp,
-        animationSpec = Motion.ReleaseDp,
+        animationSpec = if (reduceMotion) tween(0) else Motion.ReleaseDp,
         label = "switch-thumb",
     )
     Box(
@@ -473,7 +621,7 @@ fun WarmSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
             .clip(CircleShape)
             .background(track)
             .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.55f), CircleShape)
-            .clickable {
+            .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onCheckedChange(!checked)
             },
@@ -571,9 +719,10 @@ fun CodeCard(
             )
             Box(
                 Modifier
-                    .size(30.dp)
+                    .size(36.dp)
+                    .pressFeedback(shape = CircleShape)
                     .clip(CircleShape)
-                    .clickable {
+                    .quietClickable {
                         clipboard.setText(AnnotatedString(text))
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         copied = true

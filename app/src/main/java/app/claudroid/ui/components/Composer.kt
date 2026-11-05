@@ -1,10 +1,10 @@
 package app.claudroid.ui.components
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,8 +14,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +45,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
@@ -53,14 +53,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.LocalReduceMotion
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
+import dev.chrisbanes.haze.HazeState
 
 /**
  * The one composer shared by the landing page and the transcript.
  *
- * One capsule holds every affordance — attach, the growing text field and send/stop —
- * instead of stacking a toolbar under the input. The top-bar model pill owns model
- * switching now, so the composer stays a single uninterrupted rounded surface.
+ * One rounded surface holds every affordance — attach, the growing text field and
+ * send/stop — instead of stacking a toolbar under the input. The top-bar model pill
+ * owns model switching now, so the composer stays a single uninterrupted surface.
+ *
+ * The surface uses a fixed 20dp corner rather than [CircleShape]: a capsule's radius is
+ * always half the current height, so once the field grows to several lines the two
+ * 40dp action buttons at the 6dp inset fall inside the bottom corner arc and get
+ * clipped. 20dp is the largest Radii token that stays clear of those buttons at the
+ * single-line height, while still reading as a capsule on one line.
  */
 @Composable
 fun ClaudeComposer(
@@ -75,11 +84,29 @@ fun ClaudeComposer(
     editing: Boolean = false,
     onCancelEdit: () -> Unit = {},
     focusRequester: FocusRequester? = null,
+    slashCommands: List<SlashCommand> = emptyList(),
+    onSlashAction: (SlashAction) -> Unit = {},
+    frostedState: HazeState? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val colors = MaterialTheme.appColors
-    val shape = CircleShape
+    val shape = Radii.mdShape
+    val reduceMotion = LocalReduceMotion.current
+    var slashOpen by rememberSaveable { mutableStateOf(false) }
+    val activeQuery = slashQuery(value)
+    val showSlashPalette = slashOpen && slashCommands.isNotEmpty() && activeQuery != null
+
+    fun handleValueChange(next: String) {
+        if (opensSlashPalette(value, next)) slashOpen = true
+        if (slashQuery(next) == null) slashOpen = false
+        onValueChange(next)
+    }
+
+    // A modal card should be the first thing Back dismisses, ahead of the screen's
+    // route handler. Sheets and dialogs elsewhere follow the same last-registered rule.
+    BackHandler(enabled = showSlashPalette) { slashOpen = false }
+
     val borderWidth by animateDpAsState(
         targetValue = if (focused) 1.5.dp else 1.dp,
         animationSpec = tween(Motion.FAST, easing = Motion.EaseChrome),
@@ -98,15 +125,43 @@ fun ClaudeComposer(
         label = "send-color",
     )
     val sendInteraction = remember { MutableInteractionSource() }
-    val sendPressed by sendInteraction.collectIsPressedAsState()
-    val sendScale by animateFloatAsState(
-        targetValue = if (sendPressed) 0.94f else 1f,
-        animationSpec = Motion.Press,
-        label = "send-scale",
-    )
     val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
 
     Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+        AnimatedVisibility(
+            visible = showSlashPalette,
+            enter = expandVertically(
+                animationSpec = tween(
+                    if (reduceMotion) 0 else Motion.MEDIUM,
+                    easing = Motion.EaseChrome,
+                ),
+                expandFrom = Alignment.Bottom,
+            ) + fadeIn(tween(if (reduceMotion) 0 else Motion.FAST)),
+            exit = shrinkVertically(
+                animationSpec = tween(if (reduceMotion) 0 else Motion.FAST),
+                shrinkTowards = Alignment.Bottom,
+            ) + fadeOut(tween(if (reduceMotion) 0 else Motion.FAST)),
+        ) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                // The card must not swallow the keyboard's space. Cap it at half of the
+                // composer's available height (at most 300dp); the list scrolls inside.
+                val paletteMaxHeight = minOf(300.dp, maxHeight * 0.55f)
+                SlashPalette(
+                    commands = slashCommands,
+                    query = activeQuery.orEmpty(),
+                    onPick = { command ->
+                        slashOpen = false
+                        handleValueChange("")
+                        onSlashAction(command.action)
+                    },
+                    frostedState = frostedState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = paletteMaxHeight)
+                        .padding(bottom = 8.dp),
+                )
+            }
+        }
         AnimatedVisibility(
             visible = editing,
             enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
@@ -177,7 +232,7 @@ fun ClaudeComposer(
                     .pressFeedback(shape = CircleShape, dragMorph = true)
                     .clip(CircleShape)
                     .background(colors.surface1)
-                    .clickable(onClick = onAttach),
+                    .quietClickable(onClick = onAttach),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -201,7 +256,7 @@ fun ClaudeComposer(
                 }
                 BasicTextField(
                     value = value,
-                    onValueChange = onValueChange,
+                    onValueChange = ::handleValueChange,
                     textStyle = AppType.userBody.copy(color = colors.ink),
                     cursorBrush = SolidColor(colors.orange),
                     maxLines = 7,
@@ -217,12 +272,8 @@ fun ClaudeComposer(
             Box(
                 Modifier
                     .size(40.dp)
-                    .graphicsLayer {
-                        scaleX = sendScale
-                        scaleY = sendScale
-                    }
-                    // The legacy interaction-source scale stays; the morph layer stacks
-                    // on top so the send circle also stretches while dragged.
+                    // The morph layer already presses to chromeScale; a second legacy
+                    // scale on the same button would compound into a 0.90 press.
                     .pressFeedback(shape = CircleShape, dragMorph = true)
                     .clip(CircleShape)
                     .background(sendColor)

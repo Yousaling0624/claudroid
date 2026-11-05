@@ -26,13 +26,14 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.claudroid.AppContainer
 import app.claudroid.BuildConfig
 import app.claudroid.core.Logx
@@ -73,34 +75,44 @@ import app.claudroid.data.ReleaseCheck
 import app.claudroid.data.ReleaseStatus
 import app.claudroid.engine.EngineManager
 import app.claudroid.engine.openai.ModelCatalog
-import app.claudroid.ui.components.ClaudeDialog
 import app.claudroid.ui.components.ClaudeDivider
 import app.claudroid.ui.components.ClaudeField
+import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.CodeCard
 import app.claudroid.ui.components.GhostButton
 import app.claudroid.ui.components.ModelListSheet
 import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.PillChip
 import app.claudroid.ui.components.PrimaryButton
+import app.claudroid.ui.components.SettingsCategoryCard
+import app.claudroid.ui.components.SettingsGlassDialog
+import app.claudroid.ui.components.SettingsOptionRow
+import app.claudroid.ui.components.SettingsPageHeader
 import app.claudroid.ui.components.SettingsRow
 import app.claudroid.ui.components.SettingsSection
+import app.claudroid.ui.components.SettingsTopBar
 import app.claudroid.ui.components.WarmSwitch
 import app.claudroid.ui.components.activeTierSummary
+import app.claudroid.ui.components.hazeSource
+import app.claudroid.ui.components.rememberFrostedState
 import app.claudroid.ui.components.tierMappingLabel
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.LocalReduceMotion
 import app.claudroid.ui.theme.Radii
+import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
 
 private enum class ModelTarget { DEFAULT, SMALL }
 
 /**
- * Two-level settings IA. The root is a short list of icon+summary category rows; each
- * detail page owns one scrollable column of the existing controls. Keeping the state
- * (async operations, sheets, dialogs) in this one composable means a turn or model fetch
- * is never cancelled by navigating between categories, and BackHandler follows the
- * expected order: detail -> root -> leave settings.
+ * Three-level settings IA. The root is a short list of icon+summary categories; each
+ * detail page owns one scrollable column of the existing controls; a handful of
+ * genuinely nested choices (permission mode, engine logs, extra environment) get a
+ * third page instead of an inline expander. Keeping the state (async operations,
+ * sheets, dialogs) in this one composable means a turn or model fetch is never
+ * cancelled by navigating between categories, and BackHandler follows the expected
+ * order: modal -> sub-page -> detail -> root -> leave settings.
  */
 private enum class Page(val title: String, val icon: ImageVector) {
     ROOT("设置", AppIcons.Settings),
@@ -112,6 +124,13 @@ private enum class Page(val title: String, val icon: ImageVector) {
     WORKSPACE("工作区", AppIcons.Folder),
     ADVANCED("高级", AppIcons.Sliders),
     ABOUT("关于", AppIcons.Info),
+}
+
+/** The three pages that earn a real third level instead of an inline control. */
+private enum class SubPage(val parent: Page) {
+    PERMISSIONS(Page.ENGINE),
+    ENGINE_LOGS(Page.ABOUT),
+    EXTRA_ENV(Page.ADVANCED),
 }
 
 /** Root row metadata: icon + one-line summary of what lives behind it. */
@@ -131,12 +150,21 @@ fun SettingsScreen(
     val engineState by container.engine.state.collectAsState()
     val logs by Logx.lines.collectAsState()
     val reduceMotion = LocalReduceMotion.current
+    val frostedState = rememberFrostedState()
+    // AnimatedContent disposes the outgoing page, so a page-local rememberScrollState
+    // would forget where the user was. Keep one state per destination for the life of
+    // the settings screen; returning from a third-level page lands back on its row.
+    val scrollStates = remember { mutableMapOf<String, ScrollState>() }
 
-    // Saved as the enum name so a rotation (or process restore) keeps the open detail
-    // page; an unknown name falls back to the root list. Page-local UI state below is
-    // deliberately not saved — leaving a page should discard its transient output.
+    // Saved as enum names so rotation (or process restore) keeps the open detail or
+    // sub-page; an unknown name falls back to the parent/root. Page-local UI state
+    // below is deliberately not saved — leaving a page should discard its output.
     var pageName by rememberSaveable { mutableStateOf(Page.ROOT.name) }
     val page = runCatching { Page.valueOf(pageName) }.getOrDefault(Page.ROOT)
+    var subPageName by rememberSaveable { mutableStateOf<String?>(null) }
+    val subPage = subPageName?.let { runCatching { SubPage.valueOf(it) }.getOrNull() }
+    val currentPage = subPage?.parent ?: page
+
     var testingEngine by remember { mutableStateOf(false) }
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
     var modelTarget by remember { mutableStateOf<ModelTarget?>(null) }
@@ -215,216 +243,280 @@ fun SettingsScreen(
         scope.launch { container.settings.edit { it.copy(activeTier = AppSettings.AUTO_MODEL) } }
     }
 
+    fun openPage(target: Page) {
+        subPageName = null
+        pageName = target.name
+    }
+
+    fun openSub(target: SubPage) {
+        subPageName = target.name
+    }
+
+    fun goBack() {
+        when {
+            subPage != null -> subPageName = null
+            currentPage != Page.ROOT -> pageName = Page.ROOT.name
+            else -> onBack()
+        }
+    }
+
     LaunchedEffect(Unit) { checkRelease() }
     LaunchedEffect(engineState.installedVersion) {
         usage = if (engineState.installedVersion == null) null else container.engine.storageUsage()
     }
 
-    // Detail -> root -> leave. Root back is left to MainActivity's route handler;
-    // this handler is registered inside settings so it wins on a detail page.
-    BackHandler(enabled = page != Page.ROOT) { pageName = Page.ROOT.name }
+    // One handler covers sub-page -> detail -> root; root back is left to MainActivity's
+    // route handler. Sheets/dialogs register their own handler later and therefore win.
+    BackHandler(enabled = subPage != null || currentPage != Page.ROOT) {
+        if (subPage != null) subPageName = null else pageName = Page.ROOT.name
+    }
 
-    Column(Modifier.fillMaxSize()) {
-        SettingsTopBar(
-            title = page.title,
-            isRoot = page == Page.ROOT,
-            onBack = if (page == Page.ROOT) onBack else { { pageName = Page.ROOT.name } },
-        )
+    val destination = subPage?.let { "sub:${it.name}" } ?: currentPage.name
+    val backLabel = when {
+        subPage != null -> "返回${currentPage.title}"
+        currentPage != Page.ROOT -> "返回设置"
+        else -> "返回"
+    }
 
-        AnimatedContent(
-            targetState = page,
-            transitionSpec = {
-                val forward = targetState != Page.ROOT
-                if (reduceMotion) {
-                    fadeIn(tween(0)) togetherWith fadeOut(tween(0))
-                } else if (forward) {
-                    (fadeIn(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) +
-                        slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { it / 20 })
-                        .togetherWith(
-                            fadeOut(tween(Motion.FAST)) +
-                                slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { -it / 40 }
-                        )
-                } else {
-                    (fadeIn(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) +
-                        slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { -it / 20 })
-                        .togetherWith(
-                            fadeOut(tween(Motion.FAST)) +
-                                slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { it / 40 }
-                        )
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .hazeSource(frostedState)
+                .background(MaterialTheme.appColors.canvas)
+        ) {
+            AnimatedContent(
+                targetState = destination,
+                transitionSpec = {
+                    fun level(value: String) = when {
+                        value.startsWith("sub:") -> 2
+                        value == Page.ROOT.name -> 0
+                        else -> 1
+                    }
+                    val forward = level(targetState) >= level(initialState)
+                    if (reduceMotion) {
+                        fadeIn(tween(0)) togetherWith fadeOut(tween(0))
+                    } else if (forward) {
+                        (fadeIn(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) +
+                            slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { it / 20 })
+                            .togetherWith(
+                                fadeOut(tween(Motion.FAST)) +
+                                    slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { -it / 40 }
+                            )
+                    } else {
+                        (fadeIn(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) +
+                            slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { -it / 20 })
+                            .togetherWith(
+                                fadeOut(tween(Motion.FAST)) +
+                                    slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) { it / 40 }
+                            )
+                    }
+                },
+                label = "settings-page",
+            ) { key ->
+                val targetSub = key
+                    .takeIf { it.startsWith("sub:") }
+                    ?.removePrefix("sub:")
+                    ?.let { runCatching { SubPage.valueOf(it) }.getOrNull() }
+                val targetPage = targetSub?.parent
+                    ?: runCatching { Page.valueOf(key) }.getOrDefault(Page.ROOT)
+                // A single scroll container per page, keyed so each page keeps its own
+                // scroll position and the activity line never fights the route transition.
+                val scrollState = remember(key) {
+                    scrollStates.getOrPut(key) { ScrollState(0) }
                 }
-            },
-            label = "settings-page",
-        ) { current ->
-            // A single scroll container per page, keyed so each detail keeps its own
-            // scroll position and the activity line never fights the route transition.
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp)
-            ) {
-                Spacer(Modifier.height(2.dp))
-                when (current) {
-                    Page.ROOT -> RootPage(
-                        settings = settings,
-                        onOpen = { target -> pageName = target.name },
-                    )
-                    Page.API -> ApiPage(
-                        settings = settings,
-                        scope = scope,
-                        container = container,
-                        focusManager = focusManager,
-                        loadingModels = loadingModels,
-                        testingConnection = testingConnection,
-                        modelError = modelError,
-                        connectionMessage = connectionMessage,
-                        connectionOk = connectionOk,
-                        modelList = modelList,
-                        onFetchModels = ::fetchModels,
-                        onTestConnection = ::testConnection,
-                        onPickSmall = { modelTarget = ModelTarget.SMALL },
-                    )
-                    Page.TIERS -> TierPage(
-                        settings = settings,
-                        onSetTier = ::setActiveTier,
-                        onSelectAuto = ::selectAutoModel,
-                        onOpenTier = { tier -> tierSheet = tier },
-                    )
-                    Page.ENGINE -> EnginePage(
-                        container = container,
-                        settings = settings,
-                        engineState = engineState,
-                        scope = scope,
-                        testingEngine = testingEngine,
-                        onTestingChange = { testingEngine = it },
-                        onUninstall = { showUninstall = true },
-                    )
-                    Page.LABS -> LabsPage(
-                        settings = settings,
-                        scope = scope,
-                        container = container,
-                    )
-                    Page.APPEARANCE -> AppearancePage(
-                        settings = settings,
-                        haptic = haptic,
-                        scope = scope,
-                        container = container,
-                    )
-                    Page.WORKSPACE -> WorkspacePage(
-                        appContext = appContext,
-                        usage = usage,
-                        onOpenWorkspace = onOpenWorkspace,
-                        onUninstall = { showUninstall = true },
-                    )
-                    Page.ADVANCED -> AdvancedPage(
-                        settings = settings,
-                        scope = scope,
-                        container = container,
-                    )
-                    Page.ABOUT -> AboutPage(
-                        appContext = appContext,
-                        logs = logs,
-                        release = release,
-                        releaseError = releaseError,
-                        checkingRelease = checkingRelease,
-                        testingEngine = testingEngine,
-                        scope = scope,
-                        container = container,
-                        onCheckRelease = { scope.launch { checkRelease() } },
-                        onTestingChange = { testingEngine = it },
-                    )
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .verticalScroll(scrollState)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 18.dp)
+                ) {
+                    // The floating bar is 46dp + 8dp vertical padding below the status
+                    // bar; 76dp lets the first heading start just under it while the
+                    // page still scrolls behind the glass.
+                    Spacer(Modifier.height(76.dp))
+                    when {
+                        targetSub == SubPage.PERMISSIONS -> PermissionsPage(settings, scope, container)
+                        targetSub == SubPage.ENGINE_LOGS -> EngineLogsPage(logs)
+                        targetSub == SubPage.EXTRA_ENV -> EnvPage(settings, scope, container)
+                        targetPage == Page.ROOT -> RootPage(
+                            settings = settings,
+                            engineState = engineState,
+                            onOpen = { openPage(it) },
+                        )
+                        targetPage == Page.API -> ApiPage(
+                            settings = settings,
+                            scope = scope,
+                            container = container,
+                            focusManager = focusManager,
+                            loadingModels = loadingModels,
+                            testingConnection = testingConnection,
+                            modelError = modelError,
+                            connectionMessage = connectionMessage,
+                            connectionOk = connectionOk,
+                            modelList = modelList,
+                            onFetchModels = ::fetchModels,
+                            onTestConnection = ::testConnection,
+                            onPickSmall = { modelTarget = ModelTarget.SMALL },
+                        )
+                        targetPage == Page.TIERS -> TierPage(
+                            settings = settings,
+                            onSetTier = ::setActiveTier,
+                            onSelectAuto = ::selectAutoModel,
+                            onOpenTier = { tier -> tierSheet = tier },
+                        )
+                        targetPage == Page.ENGINE -> EnginePage(
+                            container = container,
+                            settings = settings,
+                            engineState = engineState,
+                            scope = scope,
+                            testingEngine = testingEngine,
+                            onTestingChange = { testingEngine = it },
+                            onUninstall = { showUninstall = true },
+                            onOpenPermissions = { openSub(SubPage.PERMISSIONS) },
+                        )
+                        targetPage == Page.LABS -> LabsPage(
+                            settings = settings,
+                            scope = scope,
+                            container = container,
+                        )
+                        targetPage == Page.APPEARANCE -> AppearancePage(
+                            settings = settings,
+                            haptic = haptic,
+                            scope = scope,
+                            container = container,
+                        )
+                        targetPage == Page.WORKSPACE -> WorkspacePage(
+                            appContext = appContext,
+                            usage = usage,
+                            onOpenWorkspace = onOpenWorkspace,
+                            onUninstall = { showUninstall = true },
+                        )
+                        targetPage == Page.ADVANCED -> AdvancedPage(
+                            settings = settings,
+                            scope = scope,
+                            container = container,
+                            onOpenEnv = { openSub(SubPage.EXTRA_ENV) },
+                        )
+                        else -> AboutPage(
+                            appContext = appContext,
+                            logs = logs,
+                            release = release,
+                            releaseError = releaseError,
+                            checkingRelease = checkingRelease,
+                            testingEngine = testingEngine,
+                            scope = scope,
+                            container = container,
+                            onCheckRelease = { scope.launch { checkRelease() } },
+                            onTestingChange = { testingEngine = it },
+                            onOpenLogs = { openSub(SubPage.ENGINE_LOGS) },
+                        )
+                    }
+                    Spacer(Modifier.height(40.dp))
                 }
-                Spacer(Modifier.height(36.dp))
             }
         }
-    }
 
-    // ------------------------------------------------ sheets & dialogs (screen-level)
-    modelTarget?.let { target ->
-        val isDefault = target == ModelTarget.DEFAULT
-        ModelListSheet(
-            title = if (isDefault) "默认模型" else "小模型（可选）",
-            description = if (isDefault) {
-                "未选择档位时使用；档位映射留空时也会回退到这里。"
-            } else {
-                "留空时使用 Haiku 档位映射，再回退默认模型。"
-            },
-            models = modelList,
-            current = if (isDefault) settings.model else settings.smallModel,
-            emptyOption = if (isDefault) null else "留空（跟随 Haiku / 默认模型）",
-            onSelect = { value ->
-                scope.launch {
-                    container.settings.edit {
-                        if (isDefault) it.copy(model = value) else it.copy(smallModel = value)
-                    }
-                }
-                modelTarget = null
-            },
-            onDismiss = { modelTarget = null },
+        SettingsTopBar(
+            backLabel = backLabel,
+            onBack = { goBack() },
+            frostedState = frostedState,
+            modifier = Modifier.align(Alignment.TopCenter),
         )
-    }
 
-    tierSheet?.let { tier ->
-        ModelListSheet(
-            title = "${tier.label} 档位",
-            description = "留空则使用官方默认/跟随默认模型。Anthropic 兼容网关会写入 " +
-                "ANTHROPIC_DEFAULT_${tier.name}_MODEL；OpenAI 兼容由内置代理按档位转发。",
-            models = modelList,
-            current = settings.tierModel(tier),
-            emptyOption = "使用官方默认",
-            onSelect = { value ->
-                scope.launch { container.settings.edit { it.withTierModel(tier, value) } }
-                tierSheet = null
-            },
-            onDismiss = { tierSheet = null },
-        )
-    }
-
-    if (showUninstall) {
-        ClaudeDialog(
-            title = "卸载内置引擎",
-            message = "将删除 jail 里的 Claude Code 与运行环境（约 300MB）。会话记录默认保留；" +
-                "选择「全部删除」会同时清空工作区和会话。",
-            onDismiss = { showUninstall = false },
-        ) {
-            PrimaryButton(
-                "仅卸载引擎",
-                {
-                    showUninstall = false
+        // -------------------------------------------- sheets & dialogs (screen-level)
+        modelTarget?.let { target ->
+            val isDefault = target == ModelTarget.DEFAULT
+            ModelListSheet(
+                title = if (isDefault) "默认模型" else "小模型（可选）",
+                description = if (isDefault) {
+                    "未选择档位时使用；档位映射留空时也会回退到这里。"
+                } else {
+                    "留空时使用 Haiku 档位映射，再回退默认模型。"
+                },
+                models = modelList,
+                current = if (isDefault) settings.model else settings.smallModel,
+                emptyOption = if (isDefault) null else "留空（跟随 Haiku / 默认模型）",
+                onSelect = { value ->
                     scope.launch {
-                        container.engine.uninstall(deleteWorkspace = false)
-                        usage = null
+                        container.settings.edit {
+                            if (isDefault) it.copy(model = value) else it.copy(smallModel = value)
+                        }
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
+                onDismiss = { modelTarget = null },
+                frostedState = frostedState,
             )
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                "全部删除（含工作区与会话）",
-                {
-                    showUninstall = false
-                    scope.launch {
-                        container.engine.uninstall(deleteWorkspace = true)
-                        usage = null
-                    }
+        }
+
+        tierSheet?.let { tier ->
+            ModelListSheet(
+                title = "${tier.label} 档位",
+                description = "留空则使用官方默认/跟随默认模型。Anthropic 兼容网关会写入 " +
+                    "ANTHROPIC_DEFAULT_${tier.name}_MODEL；OpenAI 兼容由内置代理按档位转发。",
+                models = modelList,
+                current = settings.tierModel(tier),
+                emptyOption = "使用官方默认",
+                onSelect = { value ->
+                    scope.launch { container.settings.edit { it.withTierModel(tier, value) } }
                 },
-                modifier = Modifier.fillMaxWidth(),
-                destructive = true,
+                onDismiss = { tierSheet = null },
+                frostedState = frostedState,
             )
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                "取消",
-                { showUninstall = false },
-                modifier = Modifier.fillMaxWidth(),
-            )
+        }
+
+        if (showUninstall) {
+            SettingsGlassDialog(
+                title = "卸载内置引擎",
+                message = "将删除 jail 里的 Claude Code 与运行环境（约 300MB）。会话记录默认保留；" +
+                    "选择「全部删除」会同时清空工作区和会话。",
+                onDismiss = { showUninstall = false },
+                frostedState = frostedState,
+            ) {
+                PrimaryButton(
+                    "仅卸载引擎",
+                    {
+                        showUninstall = false
+                        scope.launch {
+                            container.engine.uninstall(deleteWorkspace = false)
+                            usage = null
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                GhostButton(
+                    "全部删除（含工作区与会话）",
+                    {
+                        showUninstall = false
+                        scope.launch {
+                            container.engine.uninstall(deleteWorkspace = true)
+                            usage = null
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    destructive = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                GhostButton(
+                    "取消",
+                    { showUninstall = false },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------- root
 @Composable
-private fun RootPage(settings: AppSettings, onOpen: (Page) -> Unit) {
+private fun RootPage(
+    settings: AppSettings,
+    engineState: EngineManager.State,
+    onOpen: (Page) -> Unit,
+) {
     val categories = listOf(
         Category(Page.API, "协议、Base URL、Key、默认与小模型"),
         Category(Page.TIERS, activeTierSummary(settings)),
@@ -435,84 +527,92 @@ private fun RootPage(settings: AppSettings, onOpen: (Page) -> Unit) {
         Category(Page.ADVANCED, "自动更新、系统提示词、环境变量、轮数"),
         Category(Page.ABOUT, "版本、发布、引擎日志与自检"),
     )
+    val colors = MaterialTheme.appColors
 
-    // A short, calm summary of the active configuration instead of a wall of controls.
-    val configLine = buildString {
-        append(
-            when {
-                settings.usesAutoModel -> "CLI 默认（不指定模型）"
-                settings.resolvedActiveTier != null -> activeTierSummary(settings)
-                else -> "默认 / 路由组 · ${settings.model.ifBlank { "未设置" }}"
-            }
+    SettingsPageHeader(
+        title = "设置",
+        intro = "接口、模型与引擎都在这台设备上；改动即时保存。",
+    )
+    ConfigHero(settings, engineState)
+    Text(
+        "全部设置",
+        style = SettingsType.eyebrow,
+        color = colors.stone,
+        modifier = Modifier.padding(start = 4.dp, top = 28.dp, bottom = 12.dp),
+    )
+    categories.forEachIndexed { index, category ->
+        SettingsCategoryCard(
+            title = category.page.title,
+            summary = category.summary,
+            icon = category.page.icon,
+            onClick = { onOpen(category.page) },
         )
-        append(" · ")
-        append(settings.apiFlavor.label)
-        append(" · ")
-        append(settings.permissionMode.label)
-    }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp)
-            .clip(Radii.lgShape)
-            .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand, Radii.lgShape)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
-    ) {
-        Text(
-            "当前配置",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.appColors.stone,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            configLine,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.appColors.ink,
-        )
-    }
-
-    Spacer(Modifier.height(12.dp))
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(Radii.lgShape)
-            .background(MaterialTheme.appColors.paper)
-            .border(1.dp, MaterialTheme.appColors.sand, Radii.lgShape)
-            .padding(vertical = 6.dp, horizontal = 6.dp)
-    ) {
-        categories.forEachIndexed { index, category ->
-            CategoryRow(category, onClick = { onOpen(category.page) })
-            if (index != categories.lastIndex) ClaudeDivider(Modifier.padding(horizontal = 12.dp))
-        }
+        if (index != categories.lastIndex) Spacer(Modifier.height(10.dp))
     }
 }
 
 @Composable
-private fun CategoryRow(category: Category, onClick: () -> Unit) {
-    // SettingsRow already owns the press physics and the trailing chevron; the leading
-    // slot keeps the icon on the same 60dp rhythm as every other row in the app.
-    SettingsRow(
-        title = category.page.title,
-        subtitle = category.summary,
-        onClick = onClick,
-        leading = {
-            Box(
-                Modifier
-                    .size(38.dp)
-                    .clip(Radii.smShape)
-                    .background(MaterialTheme.appColors.surface1),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    category.page.icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.appColors.graphite,
-                    modifier = Modifier.size(19.dp),
+private fun ConfigHero(settings: AppSettings, engineState: EngineManager.State) {
+    val colors = MaterialTheme.appColors
+    val model = when {
+        settings.usesAutoModel -> "CLI 默认（不指定模型）"
+        settings.resolvedActiveTier != null -> activeTierSummary(settings)
+        else -> settings.model.ifBlank { "未设置模型" }
+    }
+    val meta = listOf(
+        settings.apiFlavor.label,
+        settings.permissionMode.label,
+        themeLabel(settings.themeMode),
+        engineState.engineLabel(settings.engineMode),
+    ).joinToString(" · ")
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clip(Radii.xlShape)
+            .background(colors.paper)
+            .border(1.dp, colors.sand, Radii.xlShape)
+            .padding(18.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("当前配置", style = SettingsType.eyebrow, color = colors.stone)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    model,
+                    style = SettingsType.hero,
+                    color = colors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        },
-    )
+            Spacer(Modifier.width(14.dp))
+            Box(
+                Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(colors.orangeSoft)
+                    .border(1.dp, colors.sand.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                ClaudeMark(size = 22.dp)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            meta,
+            style = MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp),
+            color = colors.stone,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun themeLabel(mode: Int): String = when (mode) {
+    1 -> "浅色"
+    2 -> "深色"
+    else -> "跟随系统"
 }
 
 // ---------------------------------------------------------------- API
@@ -532,8 +632,16 @@ private fun ApiPage(
     onTestConnection: () -> Unit,
     onPickSmall: () -> Unit,
 ) {
-    SettingsSection("接口与模型", "Anthropic 与 OpenAI 兼容端点都支持；OpenAI 由内置代理转译。") {
-        GroupLabel("服务商预设")
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "接口与模型",
+        intro = "Anthropic 与 OpenAI 兼容端点都支持；OpenAI 由内置代理转译。",
+    )
+
+    SettingsSection(
+        "服务商预设",
+        "点选后自动填好 Base URL、鉴权方式和默认模型；API Key 保持不变。",
+    ) {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -547,8 +655,13 @@ private fun ApiPage(
                 }
             }
         }
-        Hint("点选后自动填好 Base URL、鉴权方式和默认模型，API Key 保持不变；档位映射与小模型会清空。")
+        Hint("档位映射与小模型会清空。")
+    }
 
+    SettingsSection(
+        "连接",
+        "Base URL 只填到网关根路径：CLI 会自动追加 /v1/messages，带了 /v1 会被自动去掉。",
+    ) {
         GroupLabel("接口协议")
         ChipRow(
             options = ApiFlavor.entries.toList(),
@@ -557,7 +670,6 @@ private fun ApiPage(
             onSelect = { v -> scope.launch { container.settings.edit { it.copy(apiFlavor = v) } } },
         )
         Hint(settings.apiFlavor.hint)
-
         ClaudeField(
             label = "Base URL",
             value = settings.baseUrl,
@@ -572,7 +684,6 @@ private fun ApiPage(
             secret = true,
             onChange = { v -> scope.launch { container.settings.edit { it.copy(apiKey = v) } } },
         )
-
         GroupLabel("Key 的传递方式")
         ChipRow(
             options = AuthStyle.entries.toList(),
@@ -587,7 +698,12 @@ private fun ApiPage(
                 AuthStyle.BOTH -> "两种头都发；若网关报重复鉴权请只选一种"
             }
         )
+    }
 
+    SettingsSection(
+        "模型",
+        "默认模型会原样传给 --model；想让 CLI 用自身默认模型，请到「模型档位」切换。",
+    ) {
         ClaudeField(
             label = "默认模型",
             value = settings.model,
@@ -600,26 +716,28 @@ private fun ApiPage(
         )
         Hint("想让 CLI 用自身默认模型，请到「模型档位」选「CLI 默认（不指定模型）」：它不传 --model 和 ANTHROPIC_MODEL。")
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 10.dp),
+            Modifier.fillMaxWidth().padding(top = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             GhostButton(
                 text = if (loadingModels) "拉取中…" else "拉取模型列表",
                 onClick = onFetchModels,
                 enabled = !loadingModels,
+                modifier = Modifier.weight(1f),
             )
             GhostButton(
                 text = if (testingConnection) "连接中…" else "测试连接",
                 onClick = onTestConnection,
                 enabled = !loadingModels && !testingConnection,
+                modifier = Modifier.weight(1f),
             )
         }
-        modelError?.let { Note(it, MaterialTheme.appColors.error, MaterialTheme.appColors.error) }
+        modelError?.let { Note(it, colors.error, colors.error) }
         connectionMessage?.let {
             Note(
                 it,
-                if (connectionOk) MaterialTheme.appColors.success else MaterialTheme.appColors.error,
-                if (connectionOk) MaterialTheme.appColors.success else MaterialTheme.appColors.error,
+                if (connectionOk) colors.success else colors.error,
+                if (connectionOk) colors.success else colors.error,
             )
         }
         if (modelList.isNotEmpty()) {
@@ -633,12 +751,11 @@ private fun ApiPage(
             onChange = { v -> scope.launch { container.settings.edit { it.copy(smallModel = v) } } },
         )
         if (modelList.isNotEmpty()) {
-            Row(Modifier.padding(top = 8.dp)) {
+            Row(Modifier.padding(top = 10.dp)) {
                 GhostButton("从列表选择", onPickSmall)
             }
         }
         Hint("小模型留空时，Haiku 映射会作为后台 small fast 模型使用。")
-        Hint("Base URL 只填到网关根路径：CLI 会自动追加 /v1/messages；带了 /v1 会被自动去掉。")
     }
 }
 
@@ -650,8 +767,15 @@ private fun TierPage(
     onSelectAuto: () -> Unit,
     onOpenTier: (ModelTier) -> Unit,
 ) {
-    SettingsSection("模型档位", "像 Magpie 一样先选档位，再由网关把档位映射到具体模型。") {
-        GroupLabel("当前档位")
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "模型档位",
+        intro = "像 Magpie 一样先选档位，再由网关把档位映射到具体模型。",
+    )
+    SettingsSection(
+        "当前档位",
+        "「默认 / 路由组」会把「接口与模型」里填写的模型 ID 原样传给 --model。",
+    ) {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -670,16 +794,17 @@ private fun TierPage(
             else activeTierSummary(settings)
         )
         Note(
-            "「默认 / 路由组」会把「接口与模型」里填写的模型 ID 原样传给 --model；" +
-                "第三方网关的 auto/dfmodel[1m] 这类路由组就填在这里，由网关自行混合调度。" +
-                "「CLI 默认（不指定模型）」则完全不传 --model 与 ANTHROPIC_MODEL，App 不参与选择，" +
+            "「CLI 默认（不指定模型）」完全不传 --model 与 ANTHROPIC_MODEL，App 不参与选择，" +
                 "也不做自动路由或端侧混调。",
-            MaterialTheme.appColors.graphite,
-            MaterialTheme.appColors.surface1,
+            colors.graphite,
+            colors.surface1,
         )
+    }
 
-        Spacer(Modifier.height(4.dp))
-        ClaudeDivider()
+    SettingsSection(
+        "档位映射",
+        "留空 = 官方默认/跟随默认模型。Anthropic 兼容网关会写入 ANTHROPIC_DEFAULT_*_MODEL。",
+    ) {
         ModelTier.entries.forEachIndexed { index, tier ->
             SettingsRow(
                 title = "${tier.label} · ${tier.alias}",
@@ -690,10 +815,7 @@ private fun TierPage(
                 ClaudeDivider()
             }
         }
-        Hint(
-            "留空 = 官方默认/跟随默认模型。Anthropic 兼容网关（如 Magpie）会写入 " +
-                "ANTHROPIC_DEFAULT_OPUS_MODEL 等变量；OpenAI 兼容由内置代理按档位转发。"
-        )
+        Hint("OpenAI 兼容由内置代理按档位转发。")
         Hint("小模型留空时，Haiku 映射同时用于后台 small fast 任务。")
     }
 }
@@ -708,10 +830,17 @@ private fun EnginePage(
     testingEngine: Boolean,
     onTestingChange: (Boolean) -> Unit,
     onUninstall: () -> Unit,
+    onOpenPermissions: () -> Unit,
 ) {
+    val colors = MaterialTheme.appColors
     // Root probe output belongs to this page only; leaving disposes it instead of
     // leaking a stale report into the next visit.
     var rootReport by remember { mutableStateOf<String?>(null) }
+    SettingsPageHeader(
+        title = "引擎与权限",
+        intro = "内置官方 CLI；PRoot 免 root，有 root 时可用 chroot。",
+    )
+
     SettingsSection("Claude Code 引擎", "内置官方二进制，从 npm registry 跟随官方升级。") {
         InfoRow("已安装", engineState.installedVersion ?: "未安装")
         InfoRow("官方最新", engineState.latestVersion ?: "未检查")
@@ -753,23 +882,23 @@ private fun EnginePage(
                     .fillMaxWidth()
                     .height(3.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.appColors.surface2)
+                    .background(colors.surface2)
             ) {
                 Box(
                     Modifier
                         .fillMaxWidth(engineState.fraction.coerceIn(0f, 1f))
                         .fillMaxHeight()
-                        .background(MaterialTheme.appColors.orange)
+                        .background(colors.orange)
                 )
             }
             Spacer(Modifier.height(8.dp))
             Text(
                 "${engineState.stage} ${engineState.detail}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.appColors.graphite,
+                color = colors.graphite,
             )
         }
-        engineState.error?.let { Note(it, MaterialTheme.appColors.error, MaterialTheme.appColors.error) }
+        engineState.error?.let { Note(it, colors.error, colors.error) }
 
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 12.dp),
@@ -832,27 +961,14 @@ private fun EnginePage(
             "Root 模式会把 /system、/data、/sdcard 挂载进 jail；只在需要修改系统时使用。" +
                 "Android 10+ 普通应用不能执行自身目录里的文件，本应用使用 targetSdk 28 + PRoot，" +
                 "因此大多数设备无需 root。",
-            MaterialTheme.appColors.error,
-            MaterialTheme.appColors.error,
+            colors.error,
+            colors.error,
         )
-
-        Spacer(Modifier.height(4.dp))
-        ClaudeDivider()
-        GroupLabel("权限模式（--permission-mode）")
-        ChipRow(
-            options = PermissionMode.entries.toList(),
-            selected = settings.permissionMode,
-            label = { it.label },
-            onSelect = { v -> scope.launch { container.settings.edit { it.copy(permissionMode = v) } } },
-        )
-        Hint(settings.permissionMode.hint)
-        Note(
-            "「自动」是官方 Auto 权限：CLI 用审查分类器判断每次敏感操作，需要网关提供可用的分类器模型；" +
-                "OpenAI 兼容代理与多数第三方网关没有分类器，CLI 会退回只读或拒绝敏感操作。" +
-                "可在「功能与实验 → Auto 权限分类器模型」指定模型；遇到工具被拒时请改用「自动改文件」" +
-                "或「完全放行」。",
-            MaterialTheme.appColors.graphite,
-            MaterialTheme.appColors.surface1,
+        ClaudeDivider(Modifier.padding(top = 4.dp))
+        SettingsRow(
+            title = "权限模式",
+            subtitle = "${settings.permissionMode.label} · 点击选择 CLI 的工具权限",
+            onClick = onOpenPermissions,
         )
     }
 }
@@ -864,7 +980,12 @@ private fun LabsPage(
     scope: kotlinx.coroutines.CoroutineScope,
     container: AppContainer,
 ) {
-    SettingsSection("功能与实验", "这些开关对应 Claude Code 的实验特性；部分在 headless 模式下受限。") {
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "功能与实验",
+        intro = "对应 Claude Code 的实验特性；部分在 headless 模式下受限。",
+    )
+    SettingsSection("实验开关", "写入对应的 CLAUDE_CODE_* 环境变量。") {
         LabSwitch(
             title = "Agent teams（实验）",
             subtitle = "多代理协作。注意：headless -p 下队友无法真正启动，开关仅写入环境变量，效果因版本而异。",
@@ -903,12 +1024,12 @@ private fun LabsPage(
         Note(
             "Agent teams 依赖交互式会话：本 App 每个 turn 都以 headless -p 启动 CLI，" +
                 "队友进程无法真正拉起。这个开关只是实验性标记，不代表队友已可用。",
-            MaterialTheme.appColors.accentInk,
-            MaterialTheme.appColors.orange,
+            colors.accentInk,
+            colors.orange,
         )
     }
 
-    SettingsSection("推理强度（--effort）", "AUTO 时不传该参数，沿用官方默认。") {
+    SettingsSection("推理强度", "AUTO 时不传该参数，沿用官方默认。") {
         GroupLabel("Effort")
         ChipRow(
             options = EffortLevel.entries.toList(),
@@ -941,8 +1062,8 @@ private fun LabsPage(
             "以上开关与模型会写入对应的 CLAUDE_CODE_* 环境变量（如 " +
                 "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS、CLAUDE_CODE_DISABLE_*）；" +
                 "「高级 → 额外环境变量」里写同名 KEY 会覆盖这里的设置。",
-            MaterialTheme.appColors.stone,
-            MaterialTheme.appColors.surface1,
+            colors.stone,
+            colors.surface1,
         )
     }
 }
@@ -969,8 +1090,11 @@ private fun AppearancePage(
     scope: kotlinx.coroutines.CoroutineScope,
     container: AppContainer,
 ) {
-    SettingsSection("外观", "整页跟随系统或固定浅色/深色；没有纯黑和蓝灰。") {
-        GroupLabel("主题")
+    SettingsPageHeader(
+        title = "外观",
+        intro = "整页跟随系统或固定浅色/深色；没有纯黑和蓝灰。",
+    )
+    SettingsSection("主题", "切换后立即生效，不会重建正在进行的对话。") {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -982,7 +1106,7 @@ private fun AppearancePage(
                 }
             }
         }
-        Hint("切换后立即生效，不会重建正在进行的对话。")
+        Hint("当前：${themeLabel(settings.themeMode)}。")
     }
 }
 
@@ -994,7 +1118,12 @@ private fun WorkspacePage(
     onOpenWorkspace: () -> Unit,
     onUninstall: () -> Unit,
 ) {
-    SettingsSection("工作区", "Claude 在 jail 内把这里映射为 /work。") {
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "工作区",
+        intro = "Claude 在 jail 内把这里映射为 /work。",
+    )
+    SettingsSection("存储与清理", "工作区里的文件可以直接预览、分享或交给其他应用打开。") {
         SettingsRow(
             title = "打开工作区",
             subtitle = Paths.workspace(appContext).absolutePath,
@@ -1011,7 +1140,7 @@ private fun WorkspacePage(
                     Text(
                         formatBytes(it.totalBytes),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.appColors.stone,
+                        color = colors.stone,
                     )
                 }
             },
@@ -1022,7 +1151,6 @@ private fun WorkspacePage(
             subtitle = "可仅卸载引擎，或连同工作区与会话一起删除",
             onClick = onUninstall,
         )
-        Hint("工作区里的文件可以直接预览、分享或交给其他应用打开。")
     }
 }
 
@@ -1032,17 +1160,25 @@ private fun AdvancedPage(
     settings: AppSettings,
     scope: kotlinx.coroutines.CoroutineScope,
     container: AppContainer,
+    onOpenEnv: () -> Unit,
 ) {
-    SettingsSection("高级", "一般不需要改动；排障时可用。") {
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "高级",
+        intro = "一般不需要改动；排障时可用。",
+    )
+    SettingsSection("更新", "每次打开 App 查询 npm registry。") {
         SettingsRow(
             title = "启动时自动检查更新",
-            subtitle = "每次打开 App 查询 npm registry",
+            subtitle = "关闭后仍可在「引擎与权限」手动检查",
             trailing = {
                 WarmSwitch(settings.autoUpdate) { on ->
                     scope.launch { container.settings.edit { it.copy(autoUpdate = on) } }
                 }
             },
         )
+    }
+    SettingsSection("系统提示词", "追加到官方系统提示词末尾，下一轮对话生效。") {
         ClaudeField(
             label = "追加系统提示词",
             value = settings.extraSystemPrompt,
@@ -1050,14 +1186,17 @@ private fun AdvancedPage(
             singleLine = false,
             onChange = { v -> scope.launch { container.settings.edit { it.copy(extraSystemPrompt = v) } } },
         )
-        ClaudeField(
-            label = "额外环境变量（每行 KEY=VALUE）",
-            value = settings.extraEnv,
-            placeholder = "ANTHROPIC_CUSTOM_HEADERS=X-Foo: bar",
-            singleLine = false,
-            onChange = { v -> scope.launch { container.settings.edit { it.copy(extraEnv = v) } } },
+    }
+    SettingsSection("环境变量", "每行 KEY=VALUE，写入 CLI 进程环境。") {
+        val lines = settings.extraEnv.lines().count { it.isNotBlank() }
+        SettingsRow(
+            title = "额外环境变量",
+            subtitle = if (lines == 0) "未设置" else "已设置 $lines 条 · 点击编辑",
+            onClick = onOpenEnv,
         )
         Hint("「功能与实验」里的开关会写入对应的 CLAUDE_CODE_* 环境变量；在这里写同名 KEY 可覆盖它们。")
+    }
+    SettingsSection("运行限制", "0 = 使用 Claude Code 默认值。") {
         ClaudeField(
             label = "最大轮数（0 = 默认）",
             value = if (settings.maxTurns == 0) "" else settings.maxTurns.toString(),
@@ -1084,12 +1223,17 @@ private fun AboutPage(
     container: AppContainer,
     onCheckRelease: () -> Unit,
     onTestingChange: (Boolean) -> Unit,
+    onOpenLogs: () -> Unit,
 ) {
-    // Log expansion and the last self-test output are page-local: leaving 关于 discards
-    // them rather than leaking a stale expanded block into the next visit.
-    var showLogs by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.appColors
+    // The last self-test output stays page-local: leaving 关于 discards it rather
+    // than leaking a stale report into the next visit.
     var aboutSelfTest by remember { mutableStateOf<String?>(null) }
-    SettingsSection("关于", null) {
+    SettingsPageHeader(
+        title = "关于",
+        intro = "版本、发布与诊断信息。",
+    )
+    SettingsSection("版本与发布", null) {
         InfoRow("应用版本", "Claudroid ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
         InfoRow("后端", "Claude Code CLI（官方 npm 发布物）")
         ClaudeDivider()
@@ -1109,7 +1253,7 @@ private fun AboutPage(
                     Text(
                         if (status == ReleaseStatus.UPDATE_AVAILABLE) "下载" else "发布页",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.appColors.accentInk,
+                        color = colors.accentInk,
                     )
                 },
             )
@@ -1120,7 +1264,7 @@ private fun AboutPage(
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 1.6.dp,
-                        color = MaterialTheme.appColors.orange,
+                        color = colors.orange,
                     )
                 },
             )
@@ -1133,23 +1277,19 @@ private fun AboutPage(
         releaseError?.let {
             Note(
                 "无法连接 GitHub：$it。可以重试，或手动打开项目的 Release 页。",
-                MaterialTheme.appColors.stone,
-                MaterialTheme.appColors.surface1,
+                colors.stone,
+                colors.surface1,
             )
         }
-        ClaudeDivider()
+    }
+
+    SettingsSection("诊断", "安装、启动与工具调用的原始输出。") {
         SettingsRow(
             title = "引擎日志（${logs.size}）",
-            subtitle = if (showLogs) "点此收起" else "安装、启动与工具调用的原始输出",
-            onClick = { showLogs = !showLogs },
+            subtitle = "完整日志、复制与排查",
+            onClick = onOpenLogs,
         )
-        if (showLogs) {
-            CodeCard(
-                logs.takeLast(120).joinToString("\n").ifBlank { "暂无日志" },
-                label = "ENGINE LOG",
-                maxHeight = 300.dp,
-            )
-        }
+        ClaudeDivider()
         SettingsRow(
             title = "运行自检",
             subtitle = if (testingEngine) "正在检查 CLI、架构与路径…" else "检查 CLI、PRoot/chroot 与工作区",
@@ -1168,7 +1308,7 @@ private fun AboutPage(
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 1.6.dp,
-                        color = MaterialTheme.appColors.orange,
+                        color = colors.orange,
                     )
                 }
             } else null,
@@ -1177,36 +1317,90 @@ private fun AboutPage(
     }
 }
 
-// ---------------------------------------------------------------- shared chrome
+// ---------------------------------------------------------------- third level
 @Composable
-private fun SettingsTopBar(title: String, isRoot: Boolean, onBack: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .height(56.dp)
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
-            Icon(
-                AppIcons.Back,
-                if (isRoot) "返回" else "返回设置",
-                tint = MaterialTheme.appColors.graphite,
-                modifier = Modifier.size(20.dp),
+private fun PermissionsPage(
+    settings: AppSettings,
+    scope: kotlinx.coroutines.CoroutineScope,
+    container: AppContainer,
+) {
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "权限模式",
+        intro = "--permission-mode 决定 Claude 能直接执行哪些工具；修改后下一轮对话生效。",
+    )
+    SettingsSection("模式", "没有交互式宿主时，需要批准的工具调用会被直接拒绝。") {
+        PermissionMode.entries.forEachIndexed { index, mode ->
+            SettingsOptionRow(
+                title = mode.label,
+                description = mode.hint,
+                selected = settings.permissionMode == mode,
+                onClick = {
+                    scope.launch { container.settings.edit { it.copy(permissionMode = mode) } }
+                },
             )
+            if (index != PermissionMode.entries.lastIndex) {
+                ClaudeDivider(Modifier.padding(horizontal = 8.dp))
+            }
         }
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.appColors.ink,
-            textAlign = TextAlign.Start,
-            modifier = Modifier.weight(1f).padding(start = 6.dp),
+    }
+    SettingsSection("关于「自动」", "官方 Auto 权限会用分类器审查每次敏感操作。") {
+        Note(
+            "OpenAI 兼容代理与多数第三方网关没有分类器，CLI 会退回只读或拒绝敏感操作。" +
+                "可在「功能与实验 → Auto 权限分类器模型」指定模型；遇到工具被拒时请改用" +
+                "「自动改文件」或「完全放行」。",
+            colors.graphite,
+            colors.surface1,
         )
-        Spacer(Modifier.size(44.dp))
     }
 }
 
+@Composable
+private fun EngineLogsPage(logs: List<String>) {
+    val text = remember(logs) {
+        logs.joinToString("\n").ifBlank { "暂无日志" }
+    }
+    SettingsPageHeader(
+        title = "引擎日志",
+        intro = "安装、启动与工具调用的原始输出，保留最近 600 行。",
+    )
+    SettingsSection("输出", "点右上角图标复制全部日志。") {
+        CodeCard(text, label = "ENGINE LOG", maxHeight = 460.dp)
+    }
+}
+
+@Composable
+private fun EnvPage(
+    settings: AppSettings,
+    scope: kotlinx.coroutines.CoroutineScope,
+    container: AppContainer,
+) {
+    val colors = MaterialTheme.appColors
+    SettingsPageHeader(
+        title = "环境变量",
+        intro = "每行 KEY=VALUE，写入 CLI 进程环境；修改即时保存，下一轮对话生效。",
+    )
+    SettingsSection("额外环境变量", "示例：CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1") {
+        ClaudeField(
+            label = "KEY=VALUE（每行一条）",
+            value = settings.extraEnv,
+            placeholder = "ANTHROPIC_CUSTOM_HEADERS=X-Foo: bar",
+            singleLine = false,
+            onChange = { v -> scope.launch { container.settings.edit { it.copy(extraEnv = v) } } },
+        )
+        Hint("不要在这里重复填写 API Key；Key 由「接口与模型」单独管理。")
+    }
+    SettingsSection("优先级", null) {
+        Note(
+            "这里写的同名 KEY 会覆盖「功能与实验」自动写入的 CLAUDE_CODE_* 变量。" +
+                "排障时可临时关闭某个实验开关，而不必改动上面的选项。",
+            colors.stone,
+            colors.surface1,
+        )
+    }
+}
+
+// ---------------------------------------------------------------- shared chrome
 @Composable
 private fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
     Row(
@@ -1223,9 +1417,9 @@ private fun <T> ChipRow(options: List<T>, selected: T, label: (T) -> String, onS
 private fun GroupLabel(text: String) {
     Text(
         text,
-        style = MaterialTheme.typography.labelMedium,
+        style = SettingsType.eyebrow,
         color = MaterialTheme.appColors.stone,
-        modifier = Modifier.padding(top = 14.dp, bottom = 7.dp),
+        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
     )
 }
 
@@ -1233,28 +1427,37 @@ private fun GroupLabel(text: String) {
 private fun Hint(text: String) {
     Text(
         text,
-        style = MaterialTheme.typography.bodySmall,
+        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
         color = MaterialTheme.appColors.stone,
         modifier = Modifier.padding(top = 8.dp),
     )
 }
 
+/** Quiet key/value line; deliberately not a [SettingsRow] so values stay secondary. */
 @Composable
 private fun InfoRow(key: String, value: String) {
-    SettingsRow(
-        title = key,
-        trailing = {
-            Text(
-                value,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.appColors.graphite,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End,
-                modifier = Modifier.widthIn(max = 210.dp),
-            )
-        },
-    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            key,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.appColors.graphite,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.appColors.stone,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.widthIn(max = 210.dp),
+        )
+    }
 }
 
 /** Small warm note; tone is used for border/text, with a matching 7% fill. */

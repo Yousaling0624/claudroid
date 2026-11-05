@@ -213,6 +213,7 @@ private fun AppRoot(container: AppContainer) {
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onNewChat = { startNewChat() },
                         onOpenSettings = { push("settings") },
+                        onOpenWorkspace = { push("workspace") },
                         onSend = { sendFromHome(it) },
                     )
                 }

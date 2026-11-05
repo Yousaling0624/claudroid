@@ -42,7 +42,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
@@ -107,6 +106,7 @@ import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.PrimaryButton
 import app.claudroid.ui.md.MarkdownText
 import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.Spacing
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
@@ -299,7 +299,7 @@ private fun Browser(
 private fun EntryCard(entry: WorkspaceEntry, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val shape = RoundedCornerShape(12.dp)
+    val shape = Radii.xsShape
     val background by animateColorAsState(
         targetValue = if (pressed) MaterialTheme.appColors.surface1
         else MaterialTheme.appColors.paper,
@@ -376,9 +376,9 @@ private fun FileIconBlock(entry: WorkspaceEntry) {
     Box(
         Modifier
             .size(36.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(Radii.xsShape)
             .background(fill)
-            .border(1.dp, colors.sand.copy(alpha = 0.55f), RoundedCornerShape(10.dp)),
+            .border(1.dp, colors.sand.copy(alpha = 0.55f), Radii.xsShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -464,7 +464,7 @@ private fun FilePreview(
                 if (kind == FileKind.HTML) {
                     Box(
                         Modifier
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(Radii.xsShape)
                             .clickable { sourceView = !sourceView }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
@@ -613,9 +613,9 @@ private fun TextContent(kind: FileKind, preview: TextPreview, name: String) {
                 Modifier
                     .fillMaxWidth()
                     .padding(bottom = 10.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(Radii.xsShape)
                     .background(MaterialTheme.appColors.surface1)
-                    .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(10.dp))
+                    .border(1.dp, MaterialTheme.appColors.sand, Radii.xsShape)
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -663,7 +663,7 @@ private fun CodePreview(text: String, label: String, modifier: Modifier = Modifi
     }
     Column(
         modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(Radii.xsShape)
             .background(MaterialTheme.appColors.codeBg)
     ) {
         Row(
@@ -797,9 +797,9 @@ private fun BinaryContent(
         Box(
             Modifier
                 .size(56.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(Radii.smShape)
                 .background(MaterialTheme.appColors.surface1)
-                .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(16.dp)),
+                .border(1.dp, MaterialTheme.appColors.sand, Radii.smShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(

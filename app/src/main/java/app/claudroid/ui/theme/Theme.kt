@@ -227,6 +227,27 @@ object AppType {
     val code = base(14f, 21f, family = MonoFamily)
 }
 
+/**
+ * Settings-only type scale. The page title and section headings are deliberately
+ * larger and tighter than the M3 title slots: settings pages are scanned, not read,
+ * so the hierarchy has to survive a glance. Kept out of [AppTypography] so dialogs,
+ * menus and the transcript do not grow with it.
+ */
+object SettingsType {
+    /** Page H1 under the floating bar. */
+    val h1 = base(26f, 33f, family = SansFamily, weight = FontWeight.SemiBold, letterSpacing = -0.6f)
+    /** Section H2 above each paper card. */
+    val h2 = base(17.5f, 23f, family = SansFamily, weight = FontWeight.SemiBold, letterSpacing = -0.25f)
+    /** All-caps-ish group label / eyebrow; CJK still reads as a quiet caption. */
+    val eyebrow = base(10.5f, 14f, family = SansFamily, weight = FontWeight.Medium, letterSpacing = 1.15f)
+    /** Supporting sentence under H1 and H2. */
+    val intro = base(13.5f, 20f, family = SansFamily)
+    /** Row and option titles: heavier than M3 titleMedium, still compact. */
+    val rowTitle = base(15.5f, 21f, family = SansFamily, weight = FontWeight.SemiBold, letterSpacing = -0.1f)
+    /** Root hero headline. */
+    val hero = base(19f, 25f, family = SansFamily, weight = FontWeight.SemiBold, letterSpacing = -0.25f)
+}
+
 private val AppTypography = Typography(
     displaySmall = AppType.greeting,
     headlineMedium = base(24f, 31f, family = DisplayFamily, letterSpacing = -0.2f),

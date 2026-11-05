@@ -5,8 +5,11 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -35,6 +38,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.dp
 import app.claudroid.ui.theme.LocalReduceMotion
+import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -116,12 +120,31 @@ internal fun dragMorphOrigin(target: DragMorphTarget): TransformOrigin {
 }
 
 /**
+ * `clickable` without Material's ripple. The visible feedback is [pressFeedback], so
+ * paper never shows a spreading ink circle underneath the quiet scale/wash.
+ */
+fun Modifier.quietClickable(
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+): Modifier = composed {
+    val interaction = remember { MutableInteractionSource() }
+    clickable(
+        interactionSource = interaction,
+        indication = null,
+        enabled = enabled,
+        onClick = onClick,
+    )
+}
+
+/**
  * One shared "touch physics" modifier for clickable rows, chips, buttons and cards.
  *
- * The default press reads as paper being pushed: scale to 0.96, nudge down ~1dp, and
- * release with [Motion.Release]. It never fires on a scroll: once the finger travels past
- * the view's touch slop the press is cancelled, so swiping a list does not depress every
- * row it crosses.
+ * The default is the quiet layer: scale to 0.98, nudge down half a dp, a faint ink wash
+ * and a short [Motion.PressQuiet] fade. It is for rows, chips, switches and copy
+ * actions; no spring and no deformation. Large actions pass `pressedScale = 0.97f` and
+ * add their own pressed rim/fill at the composable. The press never fires on a scroll:
+ * once the finger travels past the view's touch slop it is cancelled, so swiping a list
+ * does not depress every row it crosses.
  *
  * `dragMorph = true` opts into the 2026 "liquid material" feedback for floating chrome:
  * the capsule stretches along the drag axis, squashes on the cross axis, follows the
@@ -136,9 +159,10 @@ internal fun dragMorphOrigin(target: DragMorphTarget): TransformOrigin {
 fun Modifier.pressFeedback(
     enabled: Boolean = true,
     shape: Shape? = null,
-    pressedScale: Float = 0.96f,
-    pressedTranslationY: Float = 1f,
+    pressedScale: Float = 0.98f,
+    pressedTranslationY: Float = 0.5f,
     dragMorph: Boolean = false,
+    chromeScale: Float = 0.96f,
 ): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
     if (!enabled || reduceMotion) return@composed this
@@ -149,9 +173,10 @@ fun Modifier.pressFeedback(
         var pressed by remember { mutableFloatStateOf(0f) }
         val fraction by animateFloatAsState(
             targetValue = pressed,
-            animationSpec = Motion.Release,
+            animationSpec = Motion.PressQuiet,
             label = "press",
         )
+        val colors = MaterialTheme.appColors
         val clip = if (shape != null) Modifier.clip(shape) else Modifier
         return@composed this
             // Observe only: never consume, so the downstream `clickable` still fires.
@@ -170,6 +195,22 @@ fun Modifier.pressFeedback(
                 scaleX = 1f + (pressedScale - 1f) * fraction
                 scaleY = 1f + (pressedScale - 1f) * fraction
                 translationY = pressedTranslationY * fraction
+            }
+            .drawWithContent {
+                drawContent()
+                if (shape != null && fraction > 0.001f) {
+                    // A wash instead of a spring: the surface darkens slightly on paper
+                    // and brightens slightly in dark mode, so a pressed row reads even
+                    // when its own background is transparent.
+                    val overlay = if (colors.dark) {
+                        Color.White.copy(alpha = 0.055f * fraction)
+                    } else {
+                        colors.ink.copy(alpha = 0.045f * fraction)
+                    }
+                    val outline = shape.createOutline(size, layoutDirection, this)
+                    val path = Path().apply { addOutline(outline) }
+                    clipPath(path) { drawRect(overlay) }
+                }
             }
     }
 
@@ -270,7 +311,7 @@ fun Modifier.pressFeedback(
             }
         }
         .graphicsLayer {
-            val base = 1f + (pressedScale - 1f) * pressFraction
+            val base = 1f + (chromeScale - 1f) * pressFraction
             scaleX = base * (1f + morph.value.x)
             scaleY = base * (1f + morph.value.y)
             translationX = nudge.value.x

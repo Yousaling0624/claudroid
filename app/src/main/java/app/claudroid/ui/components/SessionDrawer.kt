@@ -29,9 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -50,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,6 +56,7 @@ import app.claudroid.AppContainer
 import app.claudroid.data.ChatSession
 import app.claudroid.engine.EngineManager
 import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
@@ -94,7 +94,7 @@ fun AppDrawer(
             .fillMaxHeight()
             .fillMaxWidth(0.88f),
         color = MaterialTheme.appColors.paper,
-        shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+        shape = RoundedCornerShape(topEnd = Radii.xl, bottomEnd = Radii.xl),
     ) {
         Column(
             Modifier
@@ -111,14 +111,15 @@ fun AppDrawer(
             ) {
                 BrandLockup(starSize = 17.dp, textSize = 18.5.sp)
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        AppIcons.Close,
-                        "收起",
-                        tint = MaterialTheme.appColors.graphite,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                // The drawer has no same-window source of its own; the round button
+                // uses the shared glass silhouette with the translucent-paper fallback.
+                GlassIconButton(
+                    icon = AppIcons.Close,
+                    label = "收起",
+                    onClick = onClose,
+                    frostedState = null,
+                    iconSize = 18.dp,
+                )
             }
 
             val newChatShape = CircleShape
@@ -126,11 +127,10 @@ fun AppDrawer(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
-                    .height(48.dp)
+                    .height(52.dp)
                     .pressFeedback(shape = newChatShape, dragMorph = true)
-                    .clip(newChatShape)
-                    .background(MaterialTheme.appColors.surface1)
-                    .clickable {
+                    .glass(null, newChatShape, tintAlpha = 0.72f)
+                    .quietClickable {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onNewChat()
                     }
@@ -146,7 +146,7 @@ fun AppDrawer(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     "新对话",
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.appColors.ink,
                 )
             }
@@ -207,9 +207,15 @@ fun AppDrawer(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.appColors.sand)
-            DrawerActionRow(AppIcons.Folder, "工作区文件", "/work", onWorkspace)
-            DrawerActionRow(AppIcons.Settings, "设置", null, onSettings)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
+            ) {
+                DrawerActionRow(AppIcons.Folder, "工作区文件", "/work", onWorkspace)
+                DrawerActionRow(AppIcons.Settings, "设置", null, onSettings)
+            }
             EngineCard(engineState, onSettings, Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 8.dp))
         }
     }
@@ -385,35 +391,57 @@ private fun DrawerActionRow(
     hint: String?,
     onClick: () -> Unit,
 ) {
+    val colors = MaterialTheme.appColors
+    val haptic = LocalHapticFeedback.current
     Row(
         Modifier
             .fillMaxWidth()
-            .pressFeedback(shape = Radii.lgShape)
-            .clip(Radii.lgShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .height(54.dp)
+            .pressFeedback(shape = CircleShape, dragMorph = true)
+            .glass(null, CircleShape, tintAlpha = 0.72f)
+            .quietClickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
+            .padding(start = 9.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.appColors.graphite,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(11.dp))
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(colors.surface1)
+                .border(1.dp, colors.sand.copy(alpha = 0.55f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = colors.graphite,
+                modifier = Modifier.size(17.dp),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
         Text(
             title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.appColors.ink,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = colors.ink,
             modifier = Modifier.weight(1f),
         )
         if (hint != null) {
             Text(
                 hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.appColors.stone,
+                style = AppType.code.copy(fontSize = 11.sp),
+                color = colors.stone,
             )
+            Spacer(Modifier.width(8.dp))
         }
+        Icon(
+            AppIcons.ChevronRight,
+            contentDescription = null,
+            tint = colors.stone,
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 
@@ -432,7 +460,7 @@ private fun EngineCard(state: EngineManager.State, onClick: () -> Unit, modifier
             .clip(shape)
             .background(MaterialTheme.appColors.surface1)
             .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), shape)
-            .clickable(onClick = onClick)
+            .quietClickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

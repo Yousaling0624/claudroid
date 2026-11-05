@@ -46,6 +46,14 @@ object Motion {
     val Press = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessHigh)
 
     /**
+     * Quiet press used by rows, chips and copy actions: no spring, no deformation,
+     * just a short fade into the pressed scale. Floating chrome keeps its velocity
+     * spring via [Release]; large actions use the same quiet timing plus a color/rim
+     * change so the press reads without a bounce.
+     */
+    val PressQuiet = tween<Float>(FAST, easing = EaseChrome)
+
+    /**
      * Release curve for [pressFeedback]: lower stiffness than [Press] and just-under-
      * critical damping give a soft, slightly springy "Q" settle instead of a hard snap,
      * without the wobble that would read as playful on paper.

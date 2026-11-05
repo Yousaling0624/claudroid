@@ -102,6 +102,7 @@ import app.claudroid.data.AppSettings
 import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.Role
+import app.claudroid.ui.components.BaseSlashCommands
 import app.claudroid.ui.components.ClaudeComposer
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.FloatingMenu
@@ -111,11 +112,15 @@ import app.claudroid.ui.components.FloatingTopBarHeight
 import app.claudroid.ui.components.ModelDropdownMenu
 import app.claudroid.ui.components.OrganicHalo
 import app.claudroid.ui.components.Motion
+import app.claudroid.ui.components.RetrySlashCommand
 import app.claudroid.ui.components.RotatingChevron
+import app.claudroid.ui.components.SlashAction
+import app.claudroid.ui.components.StopSlashCommand
 import app.claudroid.ui.components.TitleMenuWidth
 import app.claudroid.ui.components.chatModelLabel
 import app.claudroid.ui.components.hazeSource
 import app.claudroid.ui.components.pressFeedback
+import app.claudroid.ui.components.quietClickable
 import app.claudroid.ui.components.rememberFrostedState
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.md.MarkdownText
@@ -237,6 +242,13 @@ fun ChatScreen(
     val model = chatModelLabel(settings)
     val statusLine = chatStatusLine(running = running, rawStatus = status, model = model)
     val lastAssistantId = messages.lastOrNull { it.role == Role.ASSISTANT }?.id
+    val slashCommands = remember(running, lastAssistantId) {
+        buildList {
+            addAll(BaseSlashCommands)
+            if (running) add(StopSlashCommand)
+            else if (lastAssistantId != null) add(RetrySlashCommand)
+        }
+    }
 
     val frostedState = rememberFrostedState()
     val headerHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() +
@@ -251,10 +263,16 @@ fun ChatScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .hazeSource(frostedState)
                 .background(MaterialTheme.appColors.canvas)
         ) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                // Keep the composer outside the sampled layer: its slash palette is a
+                // haze child, and Haze forbids a child from living inside its source.
+                .hazeSource(frostedState)
+        ) {
             if (messages.isEmpty()) {
                 EmptyChat(
                     modifier = Modifier.fillMaxSize().padding(top = headerHeight),
@@ -349,6 +367,23 @@ fun ChatScreen(
                 input = ""
             },
             focusRequester = composerFocus,
+            slashCommands = slashCommands,
+            onSlashAction = { action ->
+                when (action) {
+                    SlashAction.NEW_CHAT -> onNewChat()
+                    SlashAction.MODEL -> showModelMenu = true
+                    SlashAction.ATTACH -> filePicker.launch(arrayOf("*/*"))
+                    SlashAction.WORKSPACE -> onOpenWorkspace()
+                    SlashAction.SETTINGS -> onOpenSettings()
+                    SlashAction.STOP -> controller.stop()
+                    SlashAction.RETRY -> lastAssistantId?.let { id ->
+                        followBottom = true
+                        editingId = null
+                        controller.regenerate(id)
+                    }
+                }
+            },
+            frostedState = frostedState,
         )
         }
 
@@ -430,10 +465,11 @@ private fun BackToBottomButton(
         Box(
             Modifier
                 .size(40.dp)
+                .pressFeedback(shape = CircleShape)
                 .clip(CircleShape)
                 .background(MaterialTheme.appColors.paper)
                 .border(1.dp, MaterialTheme.appColors.sand, CircleShape)
-                .clickable(onClick = onClick),
+                .quietClickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -512,10 +548,11 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .pressFeedback(shape = Radii.lgShape)
                     .clip(Radii.lgShape)
                     .background(MaterialTheme.appColors.paper)
                     .border(1.dp, MaterialTheme.appColors.sand, Radii.lgShape)
-                    .clickable { onPick(hint) }
+                    .quietClickable { onPick(hint) }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -771,7 +808,7 @@ private fun MessageAction(
         modifier
             .clip(CircleShape)
             .pressFeedback(shape = CircleShape)
-            .clickable(onClick = onClick)
+            .quietClickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -839,8 +876,9 @@ private fun ThinkingPill(text: String, active: Boolean, placeholder: Boolean = f
         Row(
             Modifier
                 .clip(CircleShape)
+                .pressFeedback(shape = CircleShape)
                 .background(colors.surface1)
-                .clickable(enabled = !placeholder) { expanded = !expanded }
+                .quietClickable(enabled = !placeholder) { expanded = !expanded }
                 .padding(horizontal = 12.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -970,7 +1008,7 @@ private fun WorkDisclosure(
                 .pressFeedback(shape = shape)
                 .fillMaxWidth()
                 .clip(shape)
-                .clickable { expanded = !expanded }
+                .quietClickable { expanded = !expanded }
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1049,7 +1087,7 @@ private fun ThinkingFold(
             Modifier
                 .pressFeedback()
                 .fillMaxWidth()
-                .clickable { expanded = !expanded }
+                .quietClickable { expanded = !expanded }
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1144,7 +1182,7 @@ private fun ToolCard(block: Block.Tool, embedded: Boolean = false) {
                 .pressFeedback(shape = shape)
                 .fillMaxWidth()
                 .clip(shape)
-                .clickable { expanded = !expanded }
+                .quietClickable { expanded = !expanded }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

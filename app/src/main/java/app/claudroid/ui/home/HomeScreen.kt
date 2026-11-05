@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,7 +48,10 @@ import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.FloatingTopBar
 import app.claudroid.ui.components.ModelDropdownMenu
 import app.claudroid.ui.components.OrganicHalo
+import app.claudroid.ui.components.BaseSlashCommands
+import app.claudroid.ui.components.SlashAction
 import app.claudroid.ui.components.pressFeedback
+import app.claudroid.ui.components.quietClickable
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.appColors
@@ -70,6 +72,7 @@ fun HomeScreen(
     onOpenDrawer: () -> Unit,
     onNewChat: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenWorkspace: () -> Unit,
     onSend: (String) -> Unit,
 ) {
     val settings by container.settings.flow.collectAsState(initial = AppSettings())
@@ -205,6 +208,17 @@ fun HomeScreen(
                 onSend = ::submit,
                 onStop = {},
                 onAttach = { filePicker.launch(arrayOf("*/*")) },
+                slashCommands = BaseSlashCommands,
+                onSlashAction = { action ->
+                    when (action) {
+                        SlashAction.NEW_CHAT -> onNewChat()
+                        SlashAction.MODEL -> showModelMenu = true
+                        SlashAction.ATTACH -> filePicker.launch(arrayOf("*/*"))
+                        SlashAction.WORKSPACE -> onOpenWorkspace()
+                        SlashAction.SETTINGS -> onOpenSettings()
+                        SlashAction.STOP, SlashAction.RETRY -> Unit
+                    }
+                },
             )
         }
     }
@@ -225,7 +239,7 @@ private fun SuggestionChip(text: String, onClick: () -> Unit) {
             .clip(shape)
             .background(MaterialTheme.appColors.paper)
             .border(1.dp, MaterialTheme.appColors.sand, shape)
-            .clickable(onClick = onClick)
+            .quietClickable(onClick = onClick)
             .padding(horizontal = 13.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -261,7 +275,7 @@ private fun EngineHint(state: EngineManager.State, onOpenSettings: () -> Unit) {
             .pressFeedback(shape = shape)
             .clip(shape)
             .background(MaterialTheme.appColors.surface1)
-            .clickable(onClick = onOpenSettings)
+            .quietClickable(onClick = onOpenSettings)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

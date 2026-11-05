@@ -1,13 +1,20 @@
 package app.claudroid.ui.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -23,22 +30,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
@@ -48,8 +60,12 @@ import app.claudroid.data.AppSettings
 import app.claudroid.data.ModelTier
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
+import app.claudroid.ui.theme.LocalReduceMotion
 import app.claudroid.ui.theme.Radii
+import app.claudroid.ui.theme.SettingsType
 import app.claudroid.ui.theme.appColors
+import dev.chrisbanes.haze.HazeState
+import kotlinx.coroutines.launch
 
 private @Composable
 fun SheetHandle() {
@@ -59,24 +75,6 @@ fun SheetHandle() {
                 .size(width = 34.dp, height = 4.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.appColors.surface2)
-        )
-    }
-}
-
-private @Composable
-fun SheetTitle(title: String, description: String?) {
-    Text(
-        title,
-        style = MaterialTheme.typography.titleLarge,
-        color = MaterialTheme.appColors.ink,
-        modifier = Modifier.padding(top = 4.dp),
-    )
-    if (description != null) {
-        Text(
-            description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.appColors.stone,
-            modifier = Modifier.padding(top = 4.dp),
         )
     }
 }
@@ -215,8 +213,14 @@ private fun ModelMenuItem(
 /**
  * Searchable model list reused by the default/small model rows and the four tier
  * mappings. Blank writes are meaningful for tiers (official default) and small model.
+ *
+ * This is a tall in-window panel (88% of the viewport) rather than a ModalBottomSheet:
+ * Haze can only sample nodes in the same window, and the point of the card is to blur
+ * the settings page behind it. The scrim, the panel and the page share one HazeState.
+ * The header carries the H1, count and a 46dp close capsule; the list owns the weight,
+ * and the manual-input block stays pinned above the navigation bar. [frostedState] may
+ * be null for previews, in which case the scrim falls back to a translucent canvas.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelListSheet(
     title: String,
@@ -226,155 +230,328 @@ fun ModelListSheet(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
     emptyOption: String? = null,
+    frostedState: HazeState? = null,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val colors = MaterialTheme.appColors
+    val reduceMotion = LocalReduceMotion.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var manual by remember(title, current) { mutableStateOf(current) }
     val filtered = remember(models, query) {
         if (query.isBlank()) models else models.filter { it.contains(query.trim(), ignoreCase = true) }
     }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.appColors.paper,
-        scrimColor = MaterialTheme.appColors.ink.copy(alpha = 0.32f),
-        dragHandle = { SheetHandle() },
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-    ) {
+    var closing by remember { mutableStateOf(false) }
+    val progress = remember { Animatable(0f) }
+
+    fun close() {
+        if (closing) return
+        closing = true
+        scope.launch {
+            if (reduceMotion) progress.snapTo(0f)
+            else progress.animateTo(0f, tween(Motion.MEDIUM, easing = Motion.EaseChrome))
+            onDismiss()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (reduceMotion) progress.snapTo(1f)
+        else progress.animateTo(1f, tween(Motion.SLOW, easing = Motion.EaseOut))
+    }
+    BackHandler { close() }
+
+    BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        val cardShape = RoundedCornerShape(topStart = Radii.xl, topEnd = Radii.xl)
+        val screenHeightPx = with(density) { maxHeight.toPx() }
+        GlassScrim(
+            frostedState = frostedState,
+            onTap = { close() },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = progress.value },
+            blurRadius = 26.dp,
+            tintAlpha = 0.20f,
+            dimAlpha = 0.10f,
+        )
         Column(
             Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .imePadding()
+                .height(maxHeight * 0.88f)
+                .graphicsLayer {
+                    alpha = progress.value
+                    translationY = (1f - progress.value) * screenHeightPx
+                }
+                .shadow(
+                    elevation = 20.dp,
+                    shape = cardShape,
+                    clip = false,
+                    ambientColor = colors.ink.copy(alpha = if (colors.dark) 0.5f else 0.14f),
+                    spotColor = colors.ink.copy(alpha = if (colors.dark) 0.55f else 0.18f),
+                )
+                .clip(cardShape)
+                .background(colors.paper)
+                .border(1.dp, colors.sand.copy(alpha = 0.9f), cardShape)
                 .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                .pointerInput(Unit) { detectTapGestures { } }
         ) {
-            SheetTitle(title, description)
+            SheetHandle()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 14.dp, top = 2.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(Modifier.weight(1f).padding(top = 6.dp)) {
+                    Text(
+                        title,
+                        style = SettingsType.h1.copy(fontSize = 24.sp, lineHeight = 30.sp),
+                        color = colors.ink,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (description != null) {
+                        Text(
+                            description,
+                            style = SettingsType.intro,
+                            color = colors.stone,
+                            modifier = Modifier.padding(top = 6.dp),
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        countLabel(models.size, filtered.size, query),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                        color = colors.stone,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                // The panel is opaque paper, so the close button uses the shared glass
+                // silhouette with its translucent-paper fallback: sampling the page
+                // behind the card would punch a blurry window through the panel.
+                GlassIconButton(
+                    icon = AppIcons.Close,
+                    label = "关闭",
+                    onClick = { close() },
+                    frostedState = null,
+                    iconSize = 18.dp,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                SheetSearch(query) { query = it }
+            }
             Spacer(Modifier.height(10.dp))
 
-            if (emptyOption != null) {
-                val selected = current.isBlank()
-                val shape = Radii.smShape
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .pressFeedback(shape = shape)
-                        .clip(shape)
-                        .background(
-                            if (selected) MaterialTheme.appColors.surface1
-                            else MaterialTheme.appColors.paper
-                        )
-                        .border(
-                            1.dp,
-                            if (selected) MaterialTheme.appColors.ink
-                            else MaterialTheme.appColors.sand,
-                            shape,
-                        )
-                        .clickable {
-                            onSelect("")
-                            onDismiss()
-                        }
-                        .padding(horizontal = 12.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        emptyOption,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (selected) MaterialTheme.appColors.accentInk else MaterialTheme.appColors.ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (selected) {
-                        Icon(
-                            AppIcons.Check,
-                            contentDescription = null,
-                            tint = MaterialTheme.appColors.accentInk,
-                            modifier = Modifier.size(16.dp),
+            LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                if (emptyOption != null) {
+                    item(key = "empty-option") {
+                        ModelOptionRow(
+                            title = emptyOption,
+                            subtitle = "不指定模型",
+                            selected = current.isBlank(),
+                            badge = null,
+                            icon = AppIcons.Layers,
+                            onClick = {
+                                onSelect("")
+                                close()
+                            },
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                items(filtered, key = { it }) { model ->
+                    ModelOptionRow(
+                        title = model,
+                        subtitle = null,
+                        selected = model.trim() == current.trim(),
+                        badge = modelProviderBadge(model),
+                        icon = null,
+                        onClick = {
+                            onSelect(model)
+                            close()
+                        },
+                    )
+                }
+                if (filtered.isEmpty()) {
+                    item(key = "empty-state") {
+                        Text(
+                            when {
+                                models.isEmpty() ->
+                                    "还没有拉取模型列表。回设置页点「拉取模型列表」，或在下方手动输入。"
+                                else ->
+                                    "没有匹配「${query.trim()}」的模型。清空搜索，或在下方手动输入。"
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                            color = colors.stone,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 14.dp),
+                        )
+                    }
+                }
             }
 
-            SheetSearch(query) { query = it }
-            Spacer(Modifier.height(6.dp))
-
-            if (filtered.isEmpty()) {
-                Text(
-                    if (models.isEmpty()) {
-                        "还没有拉取模型列表。可以先回设置页「拉取模型列表」，也可以在下方手动输入。"
-                    } else {
-                        "没有匹配「${query.trim()}」的模型。"
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+            ) {
+                ClaudeDivider(Modifier.padding(top = 8.dp))
+                Spacer(Modifier.height(8.dp))
+                ClaudeField(
+                    label = "手动输入",
+                    value = manual,
+                    placeholder = "例如 claude-sonnet-5-5 或 auto/hy4free",
+                    onChange = { manual = it },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(12.dp))
+                PrimaryButton(
+                    text = "使用此模型",
+                    onClick = {
+                        onSelect(manual.trim())
+                        close()
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.appColors.stone,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+                    enabled = manual.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+private fun countLabel(total: Int, matched: Int, query: String): String = when {
+    total == 0 -> "尚未拉取模型"
+    query.isBlank() -> "已拉取 $total 个模型"
+    else -> "已拉取 $total 个模型 · 匹配 $matched"
+}
+
+/** Short provider badge for the round marker; keeps long prefixes out of the circle. */
+internal fun modelProviderBadge(id: String): String {
+    val prefix = id.substringBefore('/').ifBlank { id }
+    return when {
+        prefix.isBlank() -> "?"
+        prefix.startsWith("auto", ignoreCase = true) -> "A"
+        prefix.startsWith("claude", ignoreCase = true) -> "C"
+        else -> prefix.take(2).uppercase()
+    }
+}
+
+@Composable
+private fun ModelOptionRow(
+    title: String,
+    subtitle: String?,
+    selected: Boolean,
+    badge: String?,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.appColors
+    val shape = CircleShape
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 58.dp)
+            .pressFeedback(shape = shape)
+            .clip(shape)
+            .background(if (selected) colors.surface1 else colors.paper)
+            .border(
+                1.dp,
+                if (selected) colors.ink else colors.sand.copy(alpha = 0.85f),
+                shape,
+            )
+            .quietClickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(if (selected) colors.surface2 else colors.surface1)
+                .border(1.dp, colors.sand.copy(alpha = 0.55f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = colors.graphite,
+                    modifier = Modifier.size(16.dp),
                 )
             } else {
-                LazyColumn(Modifier.heightIn(max = 228.dp)) {
-                    items(filtered, key = { it }) { model ->
-                        val selected = model.trim() == current.trim()
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pressFeedback(shape = Radii.xsShape)
-                                .clip(Radii.xsShape)
-                                .clickable {
-                                    onSelect(model)
-                                    onDismiss()
-                                }
-                                .padding(horizontal = 8.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                model,
-                                style = AppType.code.copy(fontSize = 12.5.sp, lineHeight = 18.sp),
-                                color = if (selected) MaterialTheme.appColors.accentInk
-                                else MaterialTheme.appColors.ink,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (selected) {
-                                Icon(
-                                    AppIcons.Check,
-                                    null,
-                                    tint = MaterialTheme.appColors.accentInk,
-                                    modifier = Modifier.size(15.dp),
-                                )
-                            }
-                        }
-                    }
-                }
+                Text(
+                    badge ?: "?",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = if (selected) colors.ink else colors.graphite,
+                )
             }
-
-            ClaudeDivider(Modifier.padding(top = 8.dp))
-            Spacer(Modifier.height(8.dp))
-            ClaudeField(
-                label = "手动输入",
-                value = manual,
-                placeholder = "例如 claude-sonnet-5-5 或 auto/hy4free",
-                onChange = { manual = it },
-                singleLine = true,
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.5.sp,
+                    lineHeight = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = colors.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(10.dp))
-            PrimaryButton(
-                text = "使用此模型",
-                onClick = {
-                    onSelect(manual.trim())
-                    onDismiss()
-                },
-                enabled = manual.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            )
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                    color = colors.stone,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(if (selected) colors.ink else Color.Transparent)
+                .border(1.dp, if (selected) colors.ink else colors.sand, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                Icon(
+                    AppIcons.Check,
+                    contentDescription = "已选择",
+                    tint = colors.paper,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun SheetSearch(value: String, onValueChange: (String) -> Unit) {
+    val textStyle = MaterialTheme.typography.bodyMedium.copy(
+        fontSize = 13.5.sp,
+        lineHeight = 18.sp,
+        color = MaterialTheme.appColors.ink,
+    )
     Row(
         Modifier
             .fillMaxWidth()
-            .height(42.dp)
+            .height(48.dp)
             .clip(Radii.smShape)
             .background(MaterialTheme.appColors.surface1)
             .border(1.dp, MaterialTheme.appColors.sand, Radii.smShape)
@@ -392,15 +569,14 @@ private fun SheetSearch(value: String, onValueChange: (String) -> Unit) {
             if (value.isEmpty()) {
                 Text(
                     "搜索模型",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.appColors.stone,
+                    style = textStyle.copy(color = MaterialTheme.appColors.stone),
                 )
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.appColors.ink),
+                textStyle = textStyle,
                 cursorBrush = SolidColor(MaterialTheme.appColors.orange),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 modifier = Modifier.fillMaxWidth(),
@@ -412,10 +588,10 @@ private fun SheetSearch(value: String, onValueChange: (String) -> Unit) {
                 "清空",
                 tint = MaterialTheme.appColors.stone,
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
                     .clickable { onValueChange("") }
-                    .padding(4.dp),
+                    .padding(11.dp),
             )
         }
     }
