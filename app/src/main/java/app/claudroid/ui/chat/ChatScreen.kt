@@ -121,7 +121,9 @@ import app.claudroid.ui.components.chatModelLabel
 import app.claudroid.ui.components.hazeSource
 import app.claudroid.ui.components.pressFeedback
 import app.claudroid.ui.components.quietClickable
+import app.claudroid.ui.components.rememberAiSuggestions
 import app.claudroid.ui.components.rememberFrostedState
+import app.claudroid.ui.components.rememberSuggestionSkeletonAlpha
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.md.MarkdownText
 import app.claudroid.ui.theme.AppIcons
@@ -275,6 +277,7 @@ fun ChatScreen(
         ) {
             if (messages.isEmpty()) {
                 EmptyChat(
+                    settings = settings,
                     modifier = Modifier.fillMaxSize().padding(top = headerHeight),
                     onPick = { input = it },
                 )
@@ -407,10 +410,6 @@ fun ChatScreen(
                     width = TitleMenuWidth,
                     offset = offset,
                 ) {
-                    FloatingMenuItem("工作区文件", AppIcons.Folder) {
-                        menuOpen = false
-                        onOpenWorkspace()
-                    }
                     FloatingMenuItem("清空对话上下文", AppIcons.Trash) {
                         menuOpen = false
                         editingId = null
@@ -510,12 +509,12 @@ private suspend fun LazyListState.animateToBottom() {
 }
 
 @Composable
-private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
-    val hints = listOf(
-        "看看工作区里都有什么文件，帮我整理成清单",
-        "写一个脚本：把工作区里的 CSV 转成 Markdown 表格",
-        "看看这台手机哪些文件最占空间",
-    )
+private fun EmptyChat(
+    settings: AppSettings,
+    modifier: Modifier = Modifier,
+    onPick: (String) -> Unit,
+) {
+    val suggestions = rememberAiSuggestions(settings, Unit)
     Column(
         modifier
             .fillMaxWidth()
@@ -544,31 +543,46 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(22.dp))
-        hints.forEach { hint ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .pressFeedback(shape = Radii.lgShape)
-                    .clip(Radii.lgShape)
-                    .background(MaterialTheme.appColors.paper)
-                    .border(1.dp, MaterialTheme.appColors.sand, Radii.lgShape)
-                    .quietClickable { onPick(hint) }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    hint,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.appColors.ink,
-                    modifier = Modifier.weight(1f),
+        if (suggestions.loading) {
+            val alpha = rememberSuggestionSkeletonAlpha()
+            repeat(3) { index ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .graphicsLayer { this.alpha = alpha.value }
+                        .clip(Radii.lgShape)
+                        .background(MaterialTheme.appColors.surface1)
                 )
-                Text(
-                    "↵",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.appColors.stone,
-                )
+                if (index < 2) Spacer(Modifier.height(8.dp))
             }
-            Spacer(Modifier.height(8.dp))
+        } else {
+            suggestions.items.forEach { hint ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pressFeedback(shape = Radii.lgShape)
+                        .clip(Radii.lgShape)
+                        .background(MaterialTheme.appColors.paper)
+                        .border(1.dp, MaterialTheme.appColors.sand, Radii.lgShape)
+                        .quietClickable { onPick(hint) }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        hint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.appColors.ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "↵",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.appColors.stone,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }
@@ -872,7 +886,9 @@ private fun ErrorNotice(text: String) {
 private fun ThinkingPill(text: String, active: Boolean, placeholder: Boolean = false) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val colors = MaterialTheme.appColors
-    Column(Modifier.padding(top = 8.dp)) {
+    // Matches the collapsed disclosure's 12dp gap under the Claude title row (10dp
+    // spacer + 2dp here) so the live and folded pills sit at the same rhythm.
+    Column(Modifier.padding(top = 2.dp)) {
         Row(
             Modifier
                 .clip(CircleShape)
@@ -998,7 +1014,7 @@ private fun WorkDisclosure(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 10.dp)
+            .padding(top = 2.dp, bottom = 12.dp)
             .clip(shape)
             .border(1.dp, colors.sand.copy(alpha = 0.7f), shape)
             .animateContentSize(),

@@ -53,4 +53,34 @@ class TurnScriptsTest {
         assertTrue(script.contains("export SHELL='/bin/bash'"))
         assertTrue(script.contains("exec '/data/adb/magisk/busybox' chroot \"\$R\""))
     }
+
+    @Test
+    fun `chroot shell mounts the workspace and runs the guest script`() {
+        val guestScript = TerminalRunner.buildScript(
+            cwd = "/work/my dir",
+            fallback = "/work",
+            command = "pwd",
+            statusFile = "/root/term.status",
+        )
+        val script = TurnScripts.chrootShell(
+            env = mapOf("PATH" to "/usr/bin:/bin", "HOME" to "/root", "TMPDIR" to "/tmp"),
+            jail = "/data/adb/claudroid",
+            workspace = "/data/user/0/app/files/workspace",
+            home = "/data/user/0/app/files/home",
+            chrootTool = "/data/adb/magisk/busybox",
+            guestScript = guestScript,
+            pidFile = "/data/user/0/app/files/engine/term.pid",
+        )
+
+        assertTrue(script.contains("echo \$\$ > '/data/user/0/app/files/engine/term.pid'"))
+        assertTrue(script.contains("bind_mount '/data/user/0/app/files/workspace' \"\$R/work\""))
+        assertTrue(script.contains("bind_mount '/data/user/0/app/files/home' \"\$R/root\""))
+        // The guest script is one shell word; its own single quotes are escaped.
+        assertTrue(
+            script.contains(
+                "exec '/data/adb/magisk/busybox' chroot \"\$R\" /bin/sh -c " +
+                    TurnScripts.quote(guestScript)
+            )
+        )
+    }
 }

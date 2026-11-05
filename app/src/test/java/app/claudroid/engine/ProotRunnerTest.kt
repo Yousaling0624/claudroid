@@ -96,4 +96,35 @@ class ProotRunnerTest {
         assertTrue(script.indexOf("echo \$\$ > /root/turn-42.pid") < script.indexOf("exec "))
         assertTrue(script.contains("exec /opt/claude/2.1.0/claude \"\$@\""))
     }
+
+    @Test
+    fun `a terminal shell spec uses the requested workdir and a sh entry`() {
+        val script = "cd '/work/my dir' 2>/dev/null || cd '/work'\npwd > '/root/s'\nprintf '%s\\n' \"\$?\" >> '/root/s'\n"
+        val argv = ProotRunner.build(
+            proot = proot,
+            loader = loader,
+            jail = jail,
+            workspace = workspace,
+            home = home,
+            version = "2.1.0",
+            hasBash = true,
+            args = emptyList(),
+            baseEnv = mapOf("PATH" to "/usr/bin:/bin"),
+            binds = listOf(workspace.absolutePath to "/work", home.absolutePath to "/root"),
+            tmpDir = tmp,
+            workDir = "/work/my dir",
+            entry = listOf("/bin/sh", "-c", script),
+        ).argv
+
+        val workAt = argv.indexOf("-w")
+        assertEquals("/work/my dir", argv[workAt + 1])
+        assertEquals(listOf("/bin/sh", "-c", script), argv.takeLast(3))
+        assertFalse(argv.contains("/opt/claude/2.1.0/claude"))
+    }
+
+    @Test
+    fun `the default workdir stays at the workspace root`() {
+        val argv = spec().argv
+        assertEquals("/work", argv[argv.indexOf("-w") + 1])
+    }
 }

@@ -54,20 +54,49 @@ internal object TurnScripts {
         appendLine("export HOME=/root")
         appendLine("export TMPDIR=/tmp")
         appendLine("export SHELL=" + quote(if (hasBash) "/bin/bash" else "/bin/sh"))
-        listOf("work", "proc", "dev", "sys", "system", "data", "sdcard", "tmp", "root").forEach {
-            appendLine("mkdir -p \"\$R/$it\" 2>/dev/null")
-        }
-        appendLine("bind_mount() { grep -qs \" \$2 \" /proc/mounts || mount --bind \"\$1\" \"\$2\" 2>/dev/null; }")
-        listOf(
-            "/proc" to "proc", "/dev" to "dev", "/sys" to "sys", "/system" to "system",
-            "/data" to "data", "/storage/emulated/0" to "sdcard",
-        ).forEach { (src, dst) -> appendLine("bind_mount $src \"\$R/$dst\"") }
-        appendLine("bind_mount ${quote(workspace)} \"\$R/work\"")
-        appendLine("bind_mount ${quote(home)} \"\$R/root\"")
+        appendMounts(this, workspace, home)
         appendLine("cd \"\$R/work\" 2>/dev/null || cd \"\$R\"")
         appendLine(
             "exec ${quote(chrootTool)} chroot \"\$R\" ${quote(loaderName)} ${quote(binary)} " +
                 args.joinToString(" ") { quote(it) }
         )
+    }
+
+    /**
+     * Chroot wrapper for the workspace terminal: same mounts as [chroot], but the
+     * program is the guest's `/bin/sh -c <guestScript>` instead of the CLI.
+     *
+     * The status file lives under the home bind (`/root/...`), so it is visible on
+     * the host without exposing control files in the workspace.
+     */
+    fun chrootShell(
+        env: Map<String, String>,
+        jail: String,
+        workspace: String,
+        home: String,
+        chrootTool: String,
+        guestScript: String,
+        pidFile: String?,
+    ): String = buildString {
+        appendLine("#!/system/bin/sh")
+        appendLine("R=${quote(jail)}")
+        pidFile?.let { appendLine(pidLine(it)) }
+        env.forEach { (k, v) -> appendLine("export $k=${quote(v)}") }
+        appendMounts(this, workspace, home)
+        appendLine("exec ${quote(chrootTool)} chroot \"\$R\" /bin/sh -c ${quote(guestScript)}")
+    }
+
+    /** Shared jail mount setup; order is stable so the generated scripts stay diffable. */
+    private fun appendMounts(out: StringBuilder, workspace: String, home: String) {
+        listOf("work", "proc", "dev", "sys", "system", "data", "sdcard", "tmp", "root").forEach {
+            out.appendLine("mkdir -p \"\$R/$it\" 2>/dev/null")
+        }
+        out.appendLine("bind_mount() { grep -qs \" \$2 \" /proc/mounts || mount --bind \"\$1\" \"\$2\" 2>/dev/null; }")
+        listOf(
+            "/proc" to "proc", "/dev" to "dev", "/sys" to "sys", "/system" to "system",
+            "/data" to "data", "/storage/emulated/0" to "sdcard",
+        ).forEach { (src, dst) -> out.appendLine("bind_mount $src \"\$R/$dst\"") }
+        out.appendLine("bind_mount ${quote(workspace)} \"\$R/work\"")
+        out.appendLine("bind_mount ${quote(home)} \"\$R/root\"")
     }
 }

@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,6 +53,8 @@ import app.claudroid.ui.components.BaseSlashCommands
 import app.claudroid.ui.components.SlashAction
 import app.claudroid.ui.components.pressFeedback
 import app.claudroid.ui.components.quietClickable
+import app.claudroid.ui.components.rememberAiSuggestions
+import app.claudroid.ui.components.rememberSuggestionSkeletonAlpha
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.appColors
@@ -77,6 +80,7 @@ fun HomeScreen(
 ) {
     val settings by container.settings.flow.collectAsState(initial = AppSettings())
     val engineState by container.engine.state.collectAsState()
+    val suggestions = rememberAiSuggestions(settings, resetKey)
     var input by rememberSaveable { mutableStateOf("") }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     var showModelMenu by remember { mutableStateOf(false) }
@@ -185,15 +189,31 @@ fun HomeScreen(
                 )
             }
 
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SUGGESTIONS.forEach { hint ->
-                    SuggestionChip(hint) { input = hint }
+            if (suggestions.loading || suggestions.items.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (suggestions.loading) {
+                        val alpha = rememberSuggestionSkeletonAlpha()
+                        listOf(120.dp, 100.dp, 110.dp).forEach { chipWidth ->
+                            Box(
+                                Modifier
+                                    .width(chipWidth)
+                                    .height(34.dp)
+                                    .graphicsLayer { this.alpha = alpha.value }
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.appColors.surface1)
+                            )
+                        }
+                    } else {
+                        suggestions.items.forEach { hint ->
+                            SuggestionChip(hint) { input = hint }
+                        }
+                    }
                 }
             }
 
@@ -223,12 +243,6 @@ fun HomeScreen(
         }
     }
 }
-
-private val SUGGESTIONS = listOf(
-    "看看工作区里都有什么文件",
-    "整理这台手机的存储空间",
-    "写一个自动化脚本",
-)
 
 @Composable
 private fun SuggestionChip(text: String, onClick: () -> Unit) {

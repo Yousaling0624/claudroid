@@ -48,15 +48,41 @@ class EngineManager(
     ) {
         val ready: Boolean get() = phase == Phase.Ready && installedVersion != null
 
-        /** What the next turn will actually use, for the settings screen. */
+        /**
+         * What the next turn will actually use, for the settings screen.
+         *
+         * The selected mode wins over the detected capabilities: once the user picks
+         * PRoot, a granted root must not make the label claim root/chroot is in use.
+         */
         fun engineLabel(mode: EngineMode): String = when {
-            rootMode && !rootGranted -> "root 目录中的引擎（当前无 root）"
+            mode == EngineMode.PROOT && rootMode -> "PRoot（root 目录引擎，需重装）"
+            mode == EngineMode.PROOT ->
+                if (prootAvailable) "PRoot（免 root）" else "PRoot 组件缺失"
             mode == EngineMode.ROOT && !rootGranted -> "Root（未授权）"
-            mode != EngineMode.PROOT && rootGranted && chrootAvailable -> "root + chroot"
-            mode != EngineMode.PROOT && rootGranted -> "root（加载器直启）"
+            // AUTO + a root-mode installation: PRoot cannot read that jail, so don't
+            // let the capability fallback below claim "PRoot（免 root）".
+            rootMode && !rootGranted -> "root 目录中的引擎（当前无 root）"
+            rootGranted && chrootAvailable -> "root + chroot"
+            rootGranted -> "root（加载器直启）"
             prootAvailable -> "PRoot（免 root）"
             else -> "应用目录直启"
         }
+    }
+
+    /** How the workspace terminal will launch one command. */
+    data class ShellPlan(
+        val installation: Installation,
+        val useRoot: Boolean,
+        val useChroot: Boolean,
+        val useProot: Boolean,
+    ) {
+        val label: String
+            get() = when {
+                useProot -> "PRoot（免 root）"
+                useRoot && useChroot -> "root + chroot"
+                useRoot -> "root（加载器直启）"
+                else -> "应用目录直启"
+            }
     }
 
     @Volatile private var proxy: OpenAiProxy? = null
@@ -252,6 +278,26 @@ class EngineManager(
             useChroot = useChroot,
             useProot = useProot,
             proxyBaseUrl = ensureProxy(settings),
+        )
+    }
+
+    /**
+     * Launch plan for a workspace terminal command.
+     *
+     * Deliberately side-effect free: unlike [plan] it never starts the OpenAI proxy and
+     * never updates [state]. The terminal does not talk to the model, so paying for a
+     * proxy restart just to run `ls` would be wrong.
+     */
+    fun shellPlan(settings: AppSettings): ShellPlan? {
+        val installation = installation() ?: return null
+        val root = wantRoot(settings)
+        val useChroot = root && _state.value.chrootAvailable
+        val useProot = !root && proot.available() && !installation.rootMode
+        return ShellPlan(
+            installation = installation,
+            useRoot = root,
+            useChroot = useChroot,
+            useProot = useProot,
         )
     }
 

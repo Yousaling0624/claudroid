@@ -126,7 +126,7 @@ fun SlashPalette(
     Column(
         modifier
             .fillMaxWidth()
-            .glass(frostedState, Radii.lgShape, blurRadius = 28.dp, tintAlpha = 0.74f)
+            .glass(frostedState, Radii.lgShape, tintAlpha = 0.74f)
             .padding(vertical = 6.dp),
     ) {
         Row(

@@ -145,7 +145,12 @@ private fun AppRoot(container: AppContainer) {
             drawerContent = {
                 AppDrawer(
                     container = container,
-                    currentSessionId = route.removePrefix("chat:").takeIf { route.startsWith("chat:") },
+                    // Keep the active conversation highlighted while settings/workspace
+                    // is pushed on top of it; otherwise the drawer selection fades out
+                    // during the close animation and reads as a stray press feedback.
+                    currentSessionId = stack.asReversed()
+                        .firstOrNull { it.startsWith("chat:") }
+                        ?.removePrefix("chat:"),
                     onOpenSession = { id -> openChat(id) },
                     onNewChat = { startNewChat() },
                     onSettings = {
@@ -190,7 +195,10 @@ private fun AppRoot(container: AppContainer) {
                         onBack = { pop() },
                         onOpenWorkspace = { push("workspace") },
                     )
-                    current == "workspace" -> WorkspaceScreen(onBack = { pop() })
+                    current == "workspace" -> WorkspaceScreen(
+                        container = container,
+                        onBack = { pop() },
+                    )
                     current.startsWith("chat:") -> {
                         val sessionId = current.removePrefix("chat:")
                         ChatScreen(

@@ -61,6 +61,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -93,11 +94,13 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import app.claudroid.AppContainer
 import app.claudroid.core.Paths
 import app.claudroid.core.WorkspaceEntry
 import app.claudroid.core.WorkspaceFiles
 import app.claudroid.core.FileKind
 import app.claudroid.core.TextPreview
+import app.claudroid.data.AppSettings
 import app.claudroid.ui.components.ClaudeDialog
 import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.ClaudeTopBar
@@ -117,19 +120,33 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+/** A sub-page in the workspace stack. Terminal and preview slide in like file previews. */
+private sealed interface WorkspacePage {
+    data object Browser : WorkspacePage
+    data class Preview(val path: String) : WorkspacePage
+    data object Terminal : WorkspacePage
+}
+
 /**
  * Read-only browser for the jail's /work directory. The agent writes files there, so
  * this is the fastest way to look at a generated report, image, or script without
- * pulling the phone out of its cable.
+ * pulling the phone out of its cable. A terminal sub-page runs one-off shell commands
+ * with the engine's frozen shell launch plan.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkspaceScreen(onBack: () -> Unit) {
+fun WorkspaceScreen(container: AppContainer, onBack: () -> Unit) {
     val context = LocalContext.current
     val root = remember(context) { Paths.workspace(context.applicationContext) }
 
+    val settings by container.settings.flow.collectAsState(initial = AppSettings())
+    val engineState by container.engine.state.collectAsState()
+    val plan = remember(settings, engineState) { container.engine.shellPlan(settings) }
+    val issue = remember(settings, engineState) { container.engine.startIssue(settings) }
+
     var currentPath by rememberSaveable { mutableStateOf(root.absolutePath) }
     var previewPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var terminalOpen by rememberSaveable { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
     val currentDir = remember(currentPath, root) {
@@ -138,17 +155,25 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     val previewFile = previewPath?.let { File(it) }
         ?.takeIf { it.isFile && WorkspaceFiles.isInside(root, it) }
 
-    BackHandler(enabled = previewFile != null || currentDir != root) {
+    val page: WorkspacePage = when {
+        terminalOpen -> WorkspacePage.Terminal
+        previewFile != null -> WorkspacePage.Preview(previewFile.absolutePath)
+        else -> WorkspacePage.Browser
+    }
+
+    BackHandler {
         when {
+            terminalOpen -> terminalOpen = false
             previewFile != null -> previewPath = null
-            else -> currentPath = currentDir.parentFile?.absolutePath ?: root.absolutePath
+            currentDir != root -> currentPath = currentDir.parentFile?.absolutePath ?: root.absolutePath
+            else -> onBack()
         }
     }
 
     AnimatedContent(
-        targetState = previewFile,
+        targetState = page,
         transitionSpec = {
-            if (targetState != null) {
+            if (targetState !is WorkspacePage.Browser) {
                 (slideInHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { it / 5 } + fadeIn(tween(Motion.FAST)))
                     .togetherWith(fadeOut(tween(Motion.FAST)))
             } else {
@@ -156,20 +181,45 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     .togetherWith(slideOutHorizontally(tween(Motion.MEDIUM, easing = Motion.EaseOut)) { it / 5 } + fadeOut(tween(Motion.FAST)))
             }
         },
-        label = "workspace-preview",
-    ) { file ->
-        if (file != null) {
-            FilePreview(
-                root = root,
-                file = file,
-                onBack = { previewPath = null },
-                onDeleted = {
-                    previewPath = null
-                    refreshKey += 1
-                },
+        label = "workspace-page",
+    ) { target ->
+        when (target) {
+            is WorkspacePage.Preview -> {
+                val file = File(target.path).takeIf {
+                    it.isFile && WorkspaceFiles.isInside(root, it)
+                }
+                if (file != null) {
+                    FilePreview(
+                        root = root,
+                        file = file,
+                        onBack = { previewPath = null },
+                        onDeleted = {
+                            previewPath = null
+                            refreshKey += 1
+                        },
+                    )
+                } else {
+                    Browser(
+                        root = root,
+                        currentDir = currentDir,
+                        refreshKey = refreshKey,
+                        onRefresh = { refreshKey += 1 },
+                        onEnter = { dir -> currentPath = dir.absolutePath },
+                        onUp = { currentPath = currentDir.parentFile?.absolutePath ?: root.absolutePath },
+                        onRoot = { currentPath = root.absolutePath },
+                        onOpen = { entry -> previewPath = entry.file.absolutePath },
+                        onOpenTerminal = { terminalOpen = true },
+                        onBack = onBack,
+                    )
+                }
+            }
+            WorkspacePage.Terminal -> WorkspaceTerminalScreen(
+                container = container,
+                plan = plan,
+                issue = issue,
+                onBack = { terminalOpen = false },
             )
-        } else {
-            Browser(
+            WorkspacePage.Browser -> Browser(
                 root = root,
                 currentDir = currentDir,
                 refreshKey = refreshKey,
@@ -178,6 +228,7 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                 onUp = { currentPath = currentDir.parentFile?.absolutePath ?: root.absolutePath },
                 onRoot = { currentPath = root.absolutePath },
                 onOpen = { entry -> previewPath = entry.file.absolutePath },
+                onOpenTerminal = { terminalOpen = true },
                 onBack = onBack,
             )
         }
@@ -195,6 +246,7 @@ private fun Browser(
     onUp: () -> Unit,
     onRoot: () -> Unit,
     onOpen: (WorkspaceEntry) -> Unit,
+    onOpenTerminal: () -> Unit,
     onBack: () -> Unit,
 ) {
     var entries by remember { mutableStateOf<List<WorkspaceEntry>>(emptyList()) }
@@ -217,6 +269,14 @@ private fun Browser(
             subtitle = if (loading) "读取中…" else "$path · ${entries.size} 项 · ${WorkspaceFiles.humanSize(totalBytes)}",
             onBack = { if (currentDir == root) onBack() else onUp() },
             actions = {
+                IconButton(onClick = onOpenTerminal, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        AppIcons.Terminal,
+                        "终端",
+                        tint = MaterialTheme.appColors.graphite,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
                 IconButton(onClick = onRefresh, modifier = Modifier.size(44.dp)) {
                     Icon(
                         AppIcons.Refresh,

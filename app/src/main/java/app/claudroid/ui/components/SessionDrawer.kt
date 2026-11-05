@@ -4,11 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -53,10 +53,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.AppContainer
+import app.claudroid.data.AppSettings
 import app.claudroid.data.ChatSession
+import app.claudroid.data.EngineMode
 import app.claudroid.engine.EngineManager
 import app.claudroid.ui.theme.AppIcons
-import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.launch
@@ -79,6 +80,7 @@ fun AppDrawer(
 ) {
     val sessions by container.sessions.sessions.collectAsState()
     val engineState by container.engine.state.collectAsState()
+    val settings by container.settings.flow.collectAsState(initial = AppSettings())
     val haptic = LocalHapticFeedback.current
     var query by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(Unit) { container.sessions.load() }
@@ -159,7 +161,7 @@ fun AppDrawer(
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 36.dp),
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                    verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     ClaudeMark(size = 26.dp, color = MaterialTheme.appColors.bone)
@@ -207,16 +209,37 @@ fun AppDrawer(
                 }
             }
 
-            Column(
+            // One pinned footer line: backend status as the flexible capsule, then the
+            // two round destinations. Keeping all three at 46dp makes the footer read
+            // as a single piece of chrome instead of stacked list rows.
+            Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(9.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                DrawerActionRow(AppIcons.Folder, "工作区文件", "/work", onWorkspace)
-                DrawerActionRow(AppIcons.Settings, "设置", null, onSettings)
+                DrawerEnginePill(
+                    state = engineState,
+                    mode = settings.engineMode,
+                    onClick = onSettings,
+                    modifier = Modifier.weight(1f),
+                )
+                GlassIconButton(
+                    icon = AppIcons.Folder,
+                    label = "工作区文件",
+                    onClick = onWorkspace,
+                    frostedState = null,
+                    iconSize = 18.dp,
+                )
+                GlassIconButton(
+                    icon = AppIcons.Settings,
+                    label = "设置",
+                    onClick = onSettings,
+                    frostedState = null,
+                    iconSize = 18.dp,
+                )
             }
-            EngineCard(engineState, onSettings, Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 8.dp))
         }
     }
 }
@@ -384,120 +407,55 @@ private fun DrawerSessionRow(
     }
 }
 
+/**
+ * Backend status capsule. It reads the *selected* engine mode through
+ * [EngineManager.State.engineLabel] instead of inferring from `rootGranted`: after the
+ * user switches to PRoot, a granted root must no longer make the footer claim that
+ * root/chroot is what the next turn will use.
+ *
+ * Text ellipsizes on narrow drawers; the 46dp height and the horizontal padding keep
+ * the touch target at the same size as the two round buttons beside it.
+ */
 @Composable
-private fun DrawerActionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    hint: String?,
+private fun DrawerEnginePill(
+    state: EngineManager.State,
+    mode: EngineMode,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.appColors
     val haptic = LocalHapticFeedback.current
+    val dotColor = when {
+        state.phase == EngineManager.Phase.Failed -> colors.error
+        state.ready -> colors.success
+        state.phase == EngineManager.Phase.Working -> colors.orange
+        else -> colors.stone
+    }
     Row(
-        Modifier
-            .fillMaxWidth()
-            .height(54.dp)
+        modifier
+            .height(46.dp)
             .pressFeedback(shape = CircleShape, dragMorph = true)
             .glass(null, CircleShape, tintAlpha = 0.72f)
             .quietClickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
             }
-            .padding(start = 9.dp, end = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(colors.surface1)
-                .border(1.dp, colors.sand.copy(alpha = 0.55f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = colors.graphite,
-                modifier = Modifier.size(17.dp),
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = colors.ink,
-            modifier = Modifier.weight(1f),
-        )
-        if (hint != null) {
-            Text(
-                hint,
-                style = AppType.code.copy(fontSize = 11.sp),
-                color = colors.stone,
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        Icon(
-            AppIcons.ChevronRight,
-            contentDescription = null,
-            tint = colors.stone,
-            modifier = Modifier.size(14.dp),
-        )
-    }
-}
-
-@Composable
-private fun EngineCard(state: EngineManager.State, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val statusColor = when {
-        state.ready -> MaterialTheme.appColors.success
-        state.phase == EngineManager.Phase.Failed -> MaterialTheme.appColors.error
-        else -> MaterialTheme.appColors.stone
-    }
-    val shape = Radii.lgShape
-    Row(
-        modifier
-            .fillMaxWidth()
-            .pressFeedback(shape = shape)
-            .clip(shape)
-            .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), shape)
-            .quietClickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(statusColor)
+                .background(dotColor)
         )
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                when {
-                    state.ready -> "Claude Code ${state.installedVersion}"
-                    state.phase == EngineManager.Phase.Working -> "${state.stage}…"
-                    else -> "引擎未就绪"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.appColors.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                when {
-                    state.rootGranted -> "root · ${if (state.chrootAvailable) "chroot" else "直启"}"
-                    state.prootAvailable -> "PRoot · 免 root"
-                    else -> "PRoot 组件缺失"
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.appColors.stone,
-            )
-        }
-        Icon(
-            AppIcons.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.appColors.stone,
-            modifier = Modifier.size(14.dp),
+        Spacer(Modifier.width(9.dp))
+        Text(
+            state.engineLabel(mode),
+            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp),
+            color = colors.graphite,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

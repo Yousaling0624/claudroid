@@ -152,15 +152,16 @@ object TitleGenerator {
     }
 
     /**
-     * Extracts the title text from a raw upstream JSON body. Public to tests via
+     * Extracts the assistant text from a raw upstream JSON body. Public to tests via
      * [internal]; [settings] selects the wire shape. Unknown keys are ignored and any
-     * malformed body yields null rather than an exception.
+     * malformed body yields null rather than an exception. Shared with
+     * [SuggestionGenerator], which reads the same Anthropic/OpenAI envelopes.
      */
-    internal fun parseTitle(raw: String, settings: AppSettings): String? {
+    internal fun responseText(raw: String, settings: AppSettings): String? {
         if (raw.isBlank()) return null
         val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() as? JsonObject
             ?: return null
-        val text = when (settings.apiFlavor) {
+        return when (settings.apiFlavor) {
             ApiFlavor.ANTHROPIC -> {
                 // JsonNull is itself a JsonPrimitive in kotlinx.serialization; exclude it
                 // so `{"content":null}` means "no title" instead of the literal "null".
@@ -203,8 +204,10 @@ object TitleGenerator {
                 }
             }
         }
-        return sanitizeTitle(text)
     }
+
+    internal fun parseTitle(raw: String, settings: AppSettings): String? =
+        sanitizeTitle(responseText(raw, settings))
 
     /**
      * First non-empty line, strip label prefixes / wrapping marks / trailing punctuation,

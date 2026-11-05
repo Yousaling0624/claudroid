@@ -49,10 +49,7 @@ class ProotRunner(private val ctx: Context) {
         baseEnv: Map<String, String>,
         pidFile: String? = null,
     ): Spec {
-        val bundle = bundle()
-        check(bundle.available) {
-            "proot 组件缺失：请用 tools/fetch-proot.py 重新构建 APK（nativeLibraryDir=${bundle.libDir}）"
-        }
+        val bundle = requireBundle()
         val workspace = Paths.workspace(ctx)
         val home = Paths.home(ctx)
         val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
@@ -82,6 +79,45 @@ class ProotRunner(private val ctx: Context) {
         )
     }
 
+    /**
+     * One shell command inside the guest. The terminal is not a persistent PTY: each
+     * command is a fresh `/bin/sh -c` rooted at the requested workspace directory.
+     */
+    fun shellSpec(
+        installation: Installation,
+        workDir: String,
+        script: String,
+        baseEnv: Map<String, String>,
+    ): Spec {
+        val bundle = requireBundle()
+        val workspace = Paths.workspace(ctx)
+        val home = Paths.home(ctx)
+        val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
+        return build(
+            proot = bundle.proot,
+            loader = bundle.loader,
+            jail = File(installation.jailPath),
+            workspace = workspace,
+            home = home,
+            version = installation.version,
+            hasBash = installation.hasBash,
+            args = emptyList(),
+            baseEnv = baseEnv,
+            binds = hostBinds(workspace, home),
+            tmpDir = tmp,
+            workDir = workDir,
+            entry = listOf("/bin/sh", "-c", script),
+        )
+    }
+
+    private fun requireBundle(): Bundle {
+        val bundle = bundle()
+        check(bundle.available) {
+            "proot 组件缺失：请用 tools/fetch-proot.py 重新构建 APK（nativeLibraryDir=${bundle.libDir}）"
+        }
+        return bundle
+    }
+
     data class Spec(val argv: List<String>, val env: Map<String, String>, val cwd: File)
 
     companion object {
@@ -102,6 +138,10 @@ class ProotRunner(private val ctx: Context) {
         /**
          * Pure builder (unit-testable). Binds only host paths that exist, because
          * PRoot exits when a `-b` source is missing.
+         *
+         * [workDir] and [entry] default to the CLI turn shape. The workspace terminal
+         * passes its own guest cwd and `/bin/sh -c <script>` entry; the turn path is
+         * unchanged.
          */
         fun build(
             proot: File,
@@ -116,6 +156,8 @@ class ProotRunner(private val ctx: Context) {
             binds: List<Pair<String, String>>,
             tmpDir: File,
             turnScript: String? = null,
+            workDir: String = "/work",
+            entry: List<String> = listOf("/opt/claude/$version/claude"),
         ): Spec {
             val argv = mutableListOf<String>()
             argv += proot.absolutePath
@@ -123,7 +165,7 @@ class ProotRunner(private val ctx: Context) {
             argv += "-r"
             argv += jail.absolutePath
             argv += "-w"
-            argv += "/work"
+            argv += workDir
             binds.forEach { (host, guest) ->
                 argv += "-b"
                 argv += "$host:$guest"
@@ -142,7 +184,7 @@ class ProotRunner(private val ctx: Context) {
                 argv += "/bin/sh"
                 argv += turnScript
             } else {
-                argv += "/opt/claude/$version/claude"
+                argv += entry
             }
             argv += args
 

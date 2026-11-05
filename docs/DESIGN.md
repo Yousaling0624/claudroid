@@ -69,20 +69,21 @@
 | `sm` | 16dp | 普通行、工具卡、代码块 |
 | `md` | 20dp | 普通按钮、主按钮、折叠披露、代码块头部 |
 | `menu` | 22dp | 顶栏模型 / 标题下拉浮层（`FloatingMenu`） |
-| `lg` | 24dp | 分区卡、用户气泡、设置分类卡、底部弹层、侧边栏会话行 / 引擎卡 / 提示行 |
+| `lg` | 24dp | 分区卡、用户气泡、设置分类卡、底部弹层、侧边栏会话行 / 引擎胶囊 / 提示行 |
 | `xl` | 28dp | 对话框、抽屉右缘 |
 | `xxl` | 32dp | 大弹层 / M3 extraLarge |
 | 胶囊 | `CircleShape` | 顶栏四个气泡、底部输入框、侧边栏新对话 / 搜索、建议 chip |
 
 `Shapes` 把 extraSmall…extraLarge 一一对应上去。卡片比按钮圆一点、按钮比小 chip 圆一点，
 形成"越大的容器越圆"的稳定节奏；需要胶囊时直接用 `CircleShape`，不新增硬编码半径。
-侧边栏的会话行、引擎卡、搜索框、新对话按钮都使用 `lg` 或胶囊，不再使用 `sm` 小圆角。
+侧边栏的会话行、引擎胶囊、搜索框、新对话按钮都使用 `lg` 或胶囊，不再使用 `sm` 小圆角。
 工作区的文件块、缩略图、小按钮也一律取 `Radii` 档位（10/8/14dp 这类散落值已并入 `xs`/`sm`）。
 
 ### 3.1 按钮、胶囊与输入框
 
 - **悬浮 chrome**：46dp 正圆图标键、46–54dp 胶囊；图标 18–20dp。玻璃只用于操作入口
   （顶栏、输入框附件/发送、抽屉 X/新对话/工作区/设置、设置返回键、斜杠卡片），标题不裹气泡。
+  抽屉底部固定为一条行：引擎状态胶囊（weight 1）+ 工作区圆钮 + 设置圆钮，三个控件均 46dp，间距 8dp。
 - **主/次操作**：50dp 高、`CircleShape`。主按钮陶土渐变 + 顶部白色高光 + 橙色 glow；
   次按钮纸面 + 白→沙 rim + 2dp 阴影。disabled 用 `surface2`/`bone`，destructive 用 error 渐变。
 - **设置 / 抽屉大胶囊入口**：52–54dp 高；左侧图标放进 36–42dp 圆容器；标题 15.5sp SemiBold；
@@ -198,6 +199,9 @@
 如「执行」「读取」「搜索」「查看网页」「调用代理」。活动行不显示命令、文件路径、输入/输出 JSON、
 结果细节；运行中用小脉冲点，失败/完成用小标记。`ChatController` 的 `_status` 同样只写中文动词。
 
+**间距节奏**：标题行下方 10dp spacer + 思考胶囊顶部 2dp = 12dp；`WorkDisclosure` 顶部 2dp、
+底部 12dp，折叠与展开都不改变正文上下的 12dp 呼吸。
+
 **正式输出开始或回合结束后**（已有正文，或流式已结束），思考胶囊与活动行一起收起，在**正式
 输出正文上方**换成一个统一的 `WorkDisclosure`：
 
@@ -261,14 +265,16 @@
 内采样；跨 window 的 `Dialog` / `ModalBottomSheet` 会失去真实模糊，改用同窗口 overlay。
 Haze 固定 1.0.1，Android 11 及以下退化为 `fallbackTint` 近不透明表面，文字必须仍然可读。
 
-- **共享玻璃材质**（`ui/components/Glass.kt`）：`Modifier.glass` 默认 `blurRadius = 28dp`；
-  图标型胶囊 tint `0.58–0.66`，文字型胶囊 `0.68–0.74`（保证对比度），`noiseFactor = 0.05`。
-  阴影 9dp 柔光；亮边为白色→沙色的竖向渐变（深色主题白色 0.22、沙色 0.38）。
-  无 Haze 源时退化为 90% 不透明 paper，仍保留同样的阴影和 rim，不能变成一块死白。
+- **共享玻璃材质**（`ui/components/Glass.kt`）：`Modifier.glass` 默认 `blurRadius = 30dp`；
+  图标型胶囊 tint `0.58–0.66`，文字型胶囊 `0.68–0.74`（保证对比度），共享实现再抬 0.04、
+  上限 0.84；`noiseFactor = 0.06`。阴影 12dp 柔光；亮边为白色→沙色的竖向渐变
+  （浅色 0.92/0.80，深色 0.28/0.48）；内部再叠一层顶部高光→中部透明→底部微墨/微纸的
+  sheen，让浅色模式下的胶囊和 canvas 拉开层次。无 Haze 源时退化为 paper 竖向渐变
+  （浅色 0.94→0.86，深色 0.95→0.90），仍保留同样的阴影和 rim，不能变成一块死白。
 - **悬浮顶栏玻璃**（`ui/components/FloatingTopBar.kt` + `Frosted.kt`）：聊天/首页顶栏由四个
   独立胶囊组成——圆形侧栏、标题长胶囊（点按打开菜单）、模型切换胶囊、圆形新会话。聊天页
   滚动内容挂 `Modifier.hazeSource(state)`，每个胶囊挂 `Modifier.frosted(...)`；
-  `HazeStyle` 用 `blurRadius = 26–30dp`、canvas tint、`noiseFactor = 0.05`。首页没有滚动源，
+  `HazeStyle` 用 `blurRadius = 28–30dp`、canvas tint、`noiseFactor = 0.06`。首页没有滚动源，
   胶囊退化为半透明 `paper` + 柔和阴影。顶栏总高 **62dp（不含状态栏）**，
   `LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`，消息从胶囊之间和下方穿过。
 - **设置悬浮返回键**：46dp 正圆，直接复用同一个 `GlassIconButton`（阴影 / Haze / rim /
@@ -278,13 +284,14 @@ Haze 固定 1.0.1，Android 11 及以下退化为 `fallbackTint` 近不透明表
   面板高度约 88%，关闭键用共享玻璃轮廓的 fallback paper 形态（面板不透明，若用 Haze
   会在卡片上开一个透出背景的小窗）。
 - **侧边栏玻璃入口**（`SessionDrawer.kt`）：抽屉是 paper Surface，没有自己的 Haze 源，
-  因此 X 收起键、新对话、工作区、设置两行统一用半透明 paper fallback + 9dp 阴影 + rim；
-  大行高 52–54dp，图标放进圆形容器，行距 9dp。会话行、搜索框仍是安静按压，不加 dragMorph。
+  因此 X 收起键、新对话、底部三个入口统一用半透明 paper fallback + 12dp 阴影 + rim。
+  底部固定为一条行：引擎状态胶囊（weight 1）+ 工作区圆钮 + 设置圆钮，三个控件均 46dp，间距 8dp；
+  会话行、搜索框仍是安静按压，不加 dragMorph。
 - **输入胶囊**（`ui/components/Composer.kt`）：`Radii.mdShape`（20dp）长条包住附件、可增高
   输入框和发送/停止；paper 填充 + 1dp 沙色/橙色边框 + 8dp 柔和阴影。`maxLines = 7` 后内部
   滚动，不再继续撑高。编辑消息时上方出现一条 `orangeSoft` 胶囊提示，不把工具条塞回输入框内部。
-- **斜杠功能卡片**（`ui/components/SlashPalette.kt`）：同窗口玻璃卡（28dp 模糊、tint 0.74、
-  9dp 阴影），悬在输入胶囊上方，向上展开 + 淡入；行高 54dp，图标圆容器 + 14.5sp SemiBold
+- **斜杠功能卡片**（`ui/components/SlashPalette.kt`）：同窗口玻璃卡（共享 30dp 模糊、tint 0.74、
+  12dp 阴影），悬在输入胶囊上方，向上展开 + 淡入；行高 54dp，图标圆容器 + 14.5sp SemiBold
   标题 + 12sp 说明 + 右侧 `/key` 等宽小字；最大高度 300dp（键盘弹出时取可用高度的 55%），
   内部滚动。空草稿输入 `/` 才触发，空格 / 清空 / 选中 / 返回即收起；已有草稿不触发。
   动作只做 App 级操作（新建、模型、附件、工作区、设置、停止、重试），不假装支持 CLI 斜杠命令。
@@ -300,6 +307,14 @@ Haze 固定 1.0.1，Android 11 及以下退化为 `fallbackTint` 近不透明表
   顶栏胶囊、输入框附件/发送、抽屉 X / 新对话 / 工作区 / 设置、设置返回键。
   参数与验收见第 5 节；斜杠卡片按行安静按压，列表行、消息操作、建议 chip、模型行都不启用，
   避免滚动时误触。
+- **工作区终端**（`ui/workspace/WorkspaceTerminal.kt`）：工作区顶栏右侧的 `Terminal` 入口；
+  每次执行一条命令（不是常驻 PTY），`cd` 通过状态文件延续，`clear` 是 UI 内置命令；
+  输出用等宽 12.5/18，命令 accentInk、输出 graphite、错误 error；底部输入胶囊沿用
+  `Radii.mdShape` + 共享玻璃；运行中显示停止键。输出在 UI 保留最近 300 行 / 20 万字符，
+  引擎再以 1 MiB 上限截断并继续 drain，避免 `yes` 之类命令耗尽内存。
+- **AI 输入建议**（`ui/components/AiSuggestions.kt`）：首页与空对话页的 chip 全部由
+  `SuggestionGenerator` 调小模型生成，不保留固定文案；未配置 / 请求失败时整段隐藏，
+  加载中显示 surface1 骨架（呼吸 alpha 0.35–0.65），不伪造建议。
 - **品牌呼吸光环**（`ui/components/OrganicHalo.kt`）：`graphics-shapes` 的
   `Morph(circle → 圆角五角星)` 用 `asCubics(progress)` 生成真实曲线，慢速呼吸 + 42s 自转，
   放在 `ClaudeMark` 后面的低透明度陶土色圆斑里。只在首页问候与空对话页出现，替掉静态装饰；

@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -26,9 +27,23 @@ import app.claudroid.ui.theme.appColors
 import dev.chrisbanes.haze.HazeState
 
 /**
- * The shared liquid-glass surface: soft shadow, a clipped Haze child (or translucent
- * paper when there is no source to blur) and a bright-to-sand rim that catches the
- * light like iOS's floating capsules.
+ * How much denser the shared glass runs than the call site's hint. The lift is applied
+ * in one place so every capsule keeps text contrast while the sheen and rim (not a flat
+ * opaque fill) carry the liquid look.
+ */
+private const val GlassTintLift = 0.04f
+private const val GlassTintMax = 0.84f
+
+/**
+ * The shared liquid-glass surface: warm soft shadow, a clipped Haze child (or a
+ * translucent paper gradient when there is no source to blur), an interior sheen and a
+ * bright-to-sand rim that catches the light like iOS's floating capsules.
+ *
+ * The layering is what separates a glass chip from the near-identical canvas in light
+ * mode: the shadow lifts it off the page, the top-edge white sheen gathers light just
+ * under the rim, and the bottom shade gives the material a little thickness. On dark
+ * mode the same layers stay dim so the capsule does not turn gray or milky. All of it
+ * lives here — call sites only choose shape, tint and blur.
  *
  * Extracted from the chat top bar so the settings chrome can reuse the exact same
  * material instead of growing a second, slightly different glass recipe.
@@ -37,26 +52,48 @@ import dev.chrisbanes.haze.HazeState
 fun Modifier.glass(
     frostedState: HazeState?,
     shape: Shape,
-    blurRadius: Dp = 28.dp,
+    blurRadius: Dp = 30.dp,
     tintAlpha: Float = 0.64f,
 ): Modifier {
     val colors = MaterialTheme.appColors
-    // A brighter top edge and a slightly deeper sand edge separate the capsule from the
-    // paper even when the tint is low; in dark mode the rim is dimmer white but still
-    // visibly catches the light.
+    val dark = colors.dark
+    val tint = (tintAlpha + GlassTintLift).coerceAtMost(GlassTintMax)
+
+    // A bright top edge and a warmer/deeper bottom edge. The contrast is raised from
+    // the old two-stop rim so the 46dp capsules keep an outline even when the canvas
+    // and paper fills are only a few RGB points apart.
     val rim = Brush.verticalGradient(
         listOf(
-            Color.White.copy(alpha = if (colors.dark) 0.22f else 0.78f),
-            colors.sand.copy(alpha = if (colors.dark) 0.38f else 0.55f),
+            Color.White.copy(alpha = if (dark) 0.28f else 0.92f),
+            colors.sand.copy(alpha = if (dark) 0.48f else 0.80f),
         )
     )
+    // Painted above the tint/blur but below the content: a specular top band, a soft
+    // mid falloff and a warm bottom edge. Only the light values are strong; dark mode
+    // gets a faint white kiss and a canvas-colored base so it stays charcoal, not gray.
+    val sheen = Brush.verticalGradient(
+        0f to Color.White.copy(alpha = if (dark) 0.06f else 0.28f),
+        0.32f to Color.White.copy(alpha = if (dark) 0.015f else 0.07f),
+        0.60f to Color.Transparent,
+        1f to (if (dark) colors.canvas.copy(alpha = 0.24f) else colors.ink.copy(alpha = 0.045f)),
+    )
+    // Without a same-window Haze source (home, drawer, model sheet) the fill is still a
+    // slightly translucent paper gradient rather than one flat swatch, so the sheen and
+    // rim have something to sit on.
+    val fallback = Brush.verticalGradient(
+        listOf(
+            colors.paper.copy(alpha = if (dark) 0.95f else 0.94f),
+            colors.paper.copy(alpha = if (dark) 0.90f else 0.86f),
+        )
+    )
+
     return this
         .shadow(
-            elevation = 9.dp,
+            elevation = 12.dp,
             shape = shape,
             clip = false,
-            ambientColor = colors.ink.copy(alpha = if (colors.dark) 0.42f else 0.12f),
-            spotColor = colors.ink.copy(alpha = if (colors.dark) 0.50f else 0.16f),
+            ambientColor = colors.ink.copy(alpha = if (dark) 0.48f else 0.16f),
+            spotColor = colors.ink.copy(alpha = if (dark) 0.58f else 0.22f),
         )
         .clip(shape)
         .then(
@@ -65,14 +102,16 @@ fun Modifier.glass(
                     state = frostedState,
                     surface = colors.canvas,
                     blurRadius = blurRadius,
-                    tintAlpha = tintAlpha,
+                    tintAlpha = tint,
                 )
             } else {
-                // No same-window source (home, drawer): translucent paper plus the rim
-                // and shadow still reads as a floating material, without faking blur.
-                Modifier.background(colors.paper.copy(alpha = if (colors.dark) 0.92f else 0.90f))
+                Modifier.background(fallback)
             }
         )
+        .drawWithContent {
+            drawRect(brush = sheen)
+            drawContent()
+        }
         .border(1.dp, rim, shape)
 }
 
