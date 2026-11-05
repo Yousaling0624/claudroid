@@ -7,6 +7,7 @@ import app.claudroid.core.Paths
 import app.claudroid.data.AppSettings
 import app.claudroid.data.AuthStyle
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns the CLI child process for one conversation turn and turns its stdout into
@@ -36,21 +37,100 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
 
     @Volatile private var process: Process? = null
     @Volatile private var cancelled = false
+    /** Pid file written by the launch wrapper: it holds the real CLI pid after `exec`. */
+    @Volatile private var turnPidFile: File? = null
+    @Volatile private var turnPidNeedsRoot = false
     private val turnLock = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val isRunning: Boolean get() = process?.isAlive == true || turnLock.get()
 
-    fun cancel() {
-        cancelled = true
-        val p = process ?: return
-        runCatching { p.destroy() }
-        Thread {
-            Thread.sleep(700)
-            runCatching { if (p.isAlive) p.destroyForcibly() }
-        }.start()
+    /** Clears a stop left over from the previous turn; a new user turn starts un-cancelled. */
+    fun resetCancel() {
+        // Never clear the stop of a turn that is still winding down: another chat
+        // controller may send while this one is being stopped.
+        if (turnLock.get() || process != null) return
+        cancelled = false
     }
 
-    /** Blocks until the turn finishes. Returns the CLI exit code. */
+    fun cancel() {
+        cancelled = true
+        // The process is set before the cancelled check after start, so either this sees
+        // it, or runTurn sees the flag and kills the process itself. No lost stops.
+        val p = process ?: return
+        reapAsync(p, turnPidFile, turnPidNeedsRoot)
+    }
+
+    private fun reapAsync(p: Process, pidFile: File?, viaRoot: Boolean) {
+        Thread({ killTurn(p, pidFile, viaRoot) }, "claudroid-cancel").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * Ends one turn: the direct child is `su`/proot in most modes, and killing only that
+     * leaves the actual CLI alive with the stdout pipe still open. Signal the pid the
+     * wrapper recorded as well, then fall back to force-killing the wrapper.
+     */
+    private fun killTurn(p: Process, pidFile: File?, viaRoot: Boolean) {
+        runCatching {
+            var pid = readPid(pidFile)
+            pid?.let { signalPid(it, viaRoot, "TERM") }
+            runCatching { p.destroy() }
+            // The wrapper may still be starting and about to publish its pid; give it a
+            // moment instead of assuming it never will.
+            if (pidFile != null) {
+                val deadline = nowMs() + 1_200
+                while (pid == null && nowMs() < deadline) {
+                    Thread.sleep(50)
+                    pid = readPid(pidFile)
+                }
+            }
+            if (!p.waitFor(700, TimeUnit.MILLISECONDS)) {
+                runCatching { p.destroyForcibly() }
+            }
+            // Harmless when the pid is already gone; required when TERM was ignored.
+            pid?.let { signalPid(it, viaRoot, "KILL") }
+            p.waitFor(2_000, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun readPid(file: File?): Int? = runCatching {
+        file?.takeIf { it.isFile }
+            ?.readText()
+            ?.lineSequence()
+            ?.firstOrNull()
+            ?.trim()
+            ?.toIntOrNull()
+    }.getOrNull()?.takeIf { it > 1 && it != android.os.Process.myPid() }
+
+    private fun signalPid(pid: Int, viaRoot: Boolean, signal: String) {
+        runCatching {
+            val command = if (viaRoot) {
+                val su = root.suBinary() ?: return
+                listOf(su, "-c", "kill -s $signal $pid")
+            } else {
+                // Proot tracees and direct launches run with our uid, so no su needed.
+                listOf("/system/bin/kill", "-s", signal, pid.toString())
+            }
+            val killer = ProcessBuilder(command).start()
+            if (!killer.waitFor(5, TimeUnit.SECONDS)) killer.destroyForcibly()
+        }
+    }
+
+    private fun nowMs(): Long = System.nanoTime() / 1_000_000
+
+    /** Pid files are tiny; old ones only matter to a cancel worker that is already done. */
+    private fun cleanStalePidFiles() {
+        val cutoff = System.currentTimeMillis() - 10 * 60_000
+        listOf(Paths.engine(ctx), Paths.home(ctx)).forEach { dir ->
+            dir.listFiles { f -> f.name.startsWith("turn-") && f.name.endsWith(".pid") }
+                ?.filter { it.lastModified() < cutoff }
+                ?.forEach { runCatching { it.delete() } }
+        }
+    }
+
+    /** Blocks until the turn finishes. Returns the exit code, or -2 when the user stopped it. */
     fun runTurn(
         prompt: String,
         resumeSessionId: String?,
@@ -63,7 +143,9 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             return -3
         }
         try {
-            cancelled = false
+            // A stop that arrived before this call (while settings/proxy were prepared)
+            // must win; resetCancel() is called by the controller before a new turn.
+            if (cancelled) return -2
             val inst = plan.installation
             val binary = inst.binary()
             val loader = inst.loader()
@@ -72,6 +154,17 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val workspace = Paths.workspace(ctx)
             val home = Paths.home(ctx)
 
+            cleanStalePidFiles()
+            val pidName = "turn-${System.nanoTime()}.pid"
+            val pidFile: File? = when {
+                plan.useProot -> File(home, pidName)
+                plan.useRoot -> File(Paths.engine(ctx), pidName)
+                else -> null
+            }
+            pidFile?.delete()
+            turnPidFile = pidFile
+            turnPidNeedsRoot = plan.useRoot
+
             var cwd = workspace
             val command: List<String>
             val processEnv = env.toMutableMap()
@@ -79,29 +172,43 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
 
             when {
                 plan.useProot -> {
-                    val spec = ProotRunner(ctx).spec(inst, args, env)
+                    // The wrapper writes its pid to /root (bound to filesDir/home) and
+                    // execs the CLI, so Stop can kill the real process inside proot.
+                    val spec = ProotRunner(ctx).spec(inst, args, env, pidFile = "/root/$pidName")
                     command = spec.argv
                     cwd = spec.cwd
                     processEnv.clear()
                     processEnv.putAll(spec.env)
                 }
                 plan.useRoot && plan.useChroot -> {
-                    script.writeText(chrootScript(inst, args, env))
+                    script.writeText(
+                        TurnScripts.chroot(
+                            env = env,
+                            jail = inst.jailPath,
+                            workspace = workspace.absolutePath,
+                            home = home.absolutePath,
+                            chrootTool = root.busybox() ?: "${inst.jailPath}/bin/busybox",
+                            loaderName = "/lib/ld-musl-${inst.arch}.so.1",
+                            binary = "/opt/claude/${inst.version}/claude",
+                            args = args,
+                            hasBash = inst.hasBash,
+                            pidFile = pidFile?.absolutePath,
+                        )
+                    )
                     command = listOf(root.suBinary() ?: "su", "-c", "sh ${script.absolutePath}")
                     processEnv["HOME"] = "/root"
                     processEnv["TMPDIR"] = "/tmp"
                 }
                 plan.useRoot -> {
                     script.writeText(
-                        buildString {
-                            appendLine("#!/system/bin/sh")
-                            env.forEach { (k, v) -> appendLine("export $k=${root.q(v)}") }
-                            appendLine("cd ${root.q(workspace.absolutePath)}")
-                            appendLine(
-                                "exec ${root.q(loader.absolutePath)} ${root.q(binary.absolutePath)} " +
-                                    args.joinToString(" ") { root.q(it) }
-                            )
-                        }
+                        TurnScripts.rootDirect(
+                            env = env,
+                            cwd = workspace.absolutePath,
+                            loader = loader.absolutePath,
+                            binary = binary.absolutePath,
+                            args = args,
+                            pidFile = pidFile?.absolutePath,
+                        )
                     )
                     command = listOf(root.suBinary() ?: "su", "-c", "sh ${script.absolutePath}")
                     processEnv["HOME"] = home.absolutePath
@@ -126,7 +233,8 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             }
 
             Logx.i(
-                "启动 CLI（${plan.label}, model=${settings.model}, resume=$resumeSessionId）",
+                "启动 CLI（${plan.label}, model=${settings.effectiveModelArg().ifBlank { "默认" }}, " +
+                    "resume=$resumeSessionId）",
                 ctx,
             )
 
@@ -142,32 +250,49 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             // received" grace period before the first request (and a warning on stderr).
             runCatching { p.outputStream.close() }
             if (cancelled) {
-                runCatching { p.destroyForcibly() }
+                // Stop landed while the process was starting: cancel() saw no process, so
+                // this side owns the kill.
+                killTurn(p, pidFile, plan.useRoot)
+                return -2
             }
 
             val stderrThread = Thread {
                 runCatching {
                     p.errorStream.bufferedReader().forEachLine { line ->
-                        if (line.isNotBlank()) onEvent(EngineEvent.Log(line, isError = true))
+                        if (line.isNotBlank() && !cancelled) {
+                            onEvent(EngineEvent.Log(line, isError = true))
+                        }
                     }
                 }
             }.also { it.isDaemon = true; it.start() }
 
             val parser = StreamParser()
-            runCatching {
-                p.inputStream.bufferedReader().forEachLine { line ->
-                    parser.parse(line).forEach(onEvent)
-                }
-            }.onFailure {
-                if (!cancelled) onEvent(EngineEvent.Failed("读取输出失败：${it.message}"))
-            }
+            TurnOutputPump(
+                stream = p.inputStream,
+                isCancelled = { cancelled },
+                isProcessAlive = { p.isAlive },
+                onLine = { line -> parser.parse(line).forEach(onEvent) },
+                onFailure = { t -> onEvent(EngineEvent.Failed("读取输出失败：${t.message}")) },
+            ).run()
 
-            val code = runCatching { p.waitFor() }.getOrDefault(-1)
-            stderrThread.join(1500)
-            process = null
-            onEvent(EngineEvent.Exited(if (cancelled) -2 else code))
+            if (cancelled) {
+                // cancel()'s worker is already killing the pid/wrapper; wait a bounded
+                // amount so a new turn cannot start on top of a still-running CLI.
+                runCatching { p.waitFor(2_500, TimeUnit.MILLISECONDS) }
+            } else {
+                runCatching { p.waitFor() }
+            }
+            stderrThread.join(1_500)
+            val code = if (cancelled) -2 else runCatching { p.exitValue() }.getOrDefault(-1)
+            onEvent(EngineEvent.Exited(code))
             return code
         } finally {
+            // Safety net: whatever ended this turn (including an unexpected throw), never
+            // leave the CLI behind while a new turn can start. Normal exits have already
+            // reaped it, so this only fires on an abnormal path.
+            val p = process
+            if (p != null && p.isAlive) reapAsync(p, turnPidFile, turnPidNeedsRoot)
+            process = null
             turnLock.set(false)
         }
     }
@@ -180,7 +305,10 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             "--include-partial-messages",
             "--permission-mode", s.permissionMode.cli,
         )
-        if (s.model.isNotBlank()) args += listOf("--model", s.model)
+        // With a tier active this is the CLI alias (opus/sonnet/...), which lets the
+        // ANTHROPIC_DEFAULT_*_MODEL mappings resolve it; otherwise it stays the raw model.
+        val model = s.effectiveModelArg()
+        if (model.isNotBlank()) args += listOf("--model", model)
         if (resume != null) args += listOf("--resume", resume)
         if (s.extraSystemPrompt.isNotBlank()) {
             args += listOf("--append-system-prompt", s.extraSystemPrompt)
@@ -235,8 +363,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                 }
             }
         }
-        if (s.model.isNotBlank()) env["ANTHROPIC_MODEL"] = s.model
-        if (s.smallModel.isNotBlank()) env["ANTHROPIC_SMALL_FAST_MODEL"] = s.smallModel
+        EngineEnv.applyModel(env, s)
         // The app owns upgrades and there is no telemetry endpoint we want to reach.
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_TELEMETRY"] = "1"
@@ -256,35 +383,23 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             }
         return env
     }
+}
 
-    private fun chrootScript(inst: Installation, args: List<String>, env: Map<String, String>): String {
-        val q: (String) -> String = { root.q(it) }
-        val jail = inst.jailPath
-        val ws = Paths.workspace(ctx).absolutePath
-        val chrootTool = root.busybox() ?: "${inst.jailPath}/bin/busybox"
-        val jailBinary = "/opt/claude/${inst.version}/claude"
-        val jailLoader = "/lib/ld-musl-${inst.arch}.so.1"
-        val home = Paths.home(ctx).absolutePath
-        val binds = listOf(
-            "/proc" to "proc", "/dev" to "dev", "/sys" to "sys", "/system" to "system",
-            "/data" to "data", "/storage/emulated/0" to "sdcard",
-        )
-        return buildString {
-            appendLine("#!/system/bin/sh")
-            appendLine("R=${q(jail)}")
-            env.forEach { (k, v) -> appendLine("export $k=${q(v)}") }
-            appendLine("export HOME=/root")
-            appendLine("export TMPDIR=/tmp")
-            appendLine("export SHELL=" + q(if (inst.hasBash) "/bin/bash" else "/bin/sh"))
-            listOf("work", "proc", "dev", "sys", "system", "data", "sdcard", "tmp", "root").forEach {
-                appendLine("mkdir -p \"\$R/$it\" 2>/dev/null")
-            }
-            appendLine("bind_mount() { grep -qs \" \$2 \" /proc/mounts || mount --bind \"\$1\" \"\$2\" 2>/dev/null; }")
-            binds.forEach { (src, dst) -> appendLine("bind_mount $src \"\$R/$dst\"") }
-            appendLine("bind_mount ${q(ws)} \"\$R/work\"")
-            appendLine("bind_mount ${q(home)} \"\$R/root\"")
-            appendLine("cd \"\$R/work\" 2>/dev/null || cd \"\$R\"")
-            appendLine("exec ${q(chrootTool)} chroot \"\$R\" $jailLoader $jailBinary " + args.joinToString(" ") { q(it) })
-        }
+/**
+ * Model env shared by the per-turn launch and the self-test. One function keeps both
+ * paths resolving tier aliases identically, so a self-test failure cannot come from a
+ * different model configuration than the real turn.
+ */
+internal object EngineEnv {
+    /**
+     * `--model` and `ANTHROPIC_MODEL` carry the same value: with a tier active both are
+     * the CLI alias, so the `ANTHROPIC_DEFAULT_*_MODEL` entries from
+     * [AppSettings.modelEnv] resolve it to the configured backend. Callers merge
+     * `extraEnv` after this block, so a user override still wins.
+     */
+    fun applyModel(env: MutableMap<String, String>, settings: AppSettings) {
+        val model = settings.effectiveModelArg()
+        if (model.isNotBlank()) env["ANTHROPIC_MODEL"] = model
+        env.putAll(settings.modelEnv())
     }
 }

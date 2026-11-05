@@ -21,6 +21,11 @@ class SettingsRepository(private val context: Context) {
         val authStyle = stringPreferencesKey("auth_style")
         val model = stringPreferencesKey("model")
         val smallModel = stringPreferencesKey("small_model")
+        val activeTier = stringPreferencesKey("active_tier")
+        val opusModel = stringPreferencesKey("opus_model")
+        val fableModel = stringPreferencesKey("fable_model")
+        val sonnetModel = stringPreferencesKey("sonnet_model")
+        val haikuModel = stringPreferencesKey("haiku_model")
         val permissionMode = stringPreferencesKey("permission_mode")
         val engineMode = stringPreferencesKey("engine_mode")
         // Replaced by engine_mode; read only to migrate existing installs.
@@ -45,6 +50,12 @@ class SettingsRepository(private val context: Context) {
             authStyle = p[K.authStyle]?.let { runCatching { AuthStyle.valueOf(it) }.getOrNull() } ?: d.authStyle,
             model = p[K.model] ?: d.model,
             smallModel = p[K.smallModel] ?: d.smallModel,
+            // Missing keys are normal for installs created before tier mapping existed.
+            activeTier = p[K.activeTier] ?: d.activeTier,
+            opusModel = p[K.opusModel] ?: d.opusModel,
+            fableModel = p[K.fableModel] ?: d.fableModel,
+            sonnetModel = p[K.sonnetModel] ?: d.sonnetModel,
+            haikuModel = p[K.haikuModel] ?: d.haikuModel,
             permissionMode = p[K.permissionMode]?.let { runCatching { PermissionMode.valueOf(it) }.getOrNull() }
                 ?: d.permissionMode,
             engineMode = p[K.engineMode]?.let { runCatching { EngineMode.valueOf(it) }.getOrNull() }
@@ -77,6 +88,11 @@ class SettingsRepository(private val context: Context) {
             p[K.authStyle] = next.authStyle.name
             p[K.model] = next.model
             p[K.smallModel] = next.smallModel
+            p[K.activeTier] = next.activeTier
+            p[K.opusModel] = next.opusModel
+            p[K.fableModel] = next.fableModel
+            p[K.sonnetModel] = next.sonnetModel
+            p[K.haikuModel] = next.haikuModel
             p[K.permissionMode] = next.permissionMode.name
             p[K.engineMode] = next.engineMode.name
             p[K.autoUpdate] = next.autoUpdate

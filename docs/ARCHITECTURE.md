@@ -116,6 +116,7 @@ jail 会退回 `/bin/sh`，`Installation.hasBash` 记录实际状态。
 ```sh
 #!/system/bin/sh
 export ANTHROPIC_BASE_URL='…' ANTHROPIC_AUTH_TOKEN='…' …
+echo $$ > '<filesDir>/engine/turn-<n>.pid'   # exec 之后仍然指向 CLI 本身
 export HOME=/root TMPDIR=/tmp
 R=/data/adb/claudroid
 bind_mount() { grep -qs " $2 " /proc/mounts || mount --bind "$1" "$2" 2>/dev/null; }
@@ -138,6 +139,9 @@ exec /data/adb/magisk/busybox chroot "$R" \
 - **用 `grep /proc/mounts` 而不是 `mountpoint`**：toybox 不保证有 `mountpoint`。
 - **每个 turn 一个进程 + `--resume <session_id>`**：CLI 自己保存会话，我们不维护 PTY；
   崩溃或切后台都不会污染下一次对话，代价是每轮约 100 ms 启动。
+- **脚本先写 pid 再 `exec`**：我们持有的直接子进程只是 `su`（或 proot），杀掉它并不会
+  带走真正写 stdout 的 CLI。停止时按 pid 精确结束 CLI，否则读循环会一直等不到 EOF，
+  UI 就卡在「正在停止…」。proot 模式同理，通过 jail 的 `/tmp` 里的包装脚本记录 pid。
 - **只给 `--permission-mode`，不给 `--dangerously-skip-permissions`**：语义更明确，
   也让"默认（只读）/ 只读规划"这些模式真的可用（headless 下需要批准的工具会被直接拒绝）。
 
@@ -146,7 +150,10 @@ exec /data/adb/magisk/busybox chroot "$R" \
 `EngineManager.probeRoot()` 决定 `rootGranted` / `chrootAvailable`，`ClaudeEngine` 据此选路径：
 
 1. **PRoot**（无 root，默认）
-   `exec libproot.so -0 -r <filesDir jail> -w /work … /opt/claude/<ver>/claude`
+   `exec libproot.so -0 -r <filesDir jail> -w /work … /bin/sh /tmp/.claudroid-turn.sh <args>`
+
+   包装脚本只做两件事：把 `$$` 写到 `/root/turn-<n>.pid`，然后 `exec` CLI。PRoot 的
+   `--kill-on-exit` 负责正常清场，pid 文件则保证「停止」在极端情况下也能击中真正的 CLI。
 
    直接 exec CLI，不要让 musl loader 作为程序参数：PRoot 已经用 `PROOT_LOADER`
    解析 `PT_INTERP`；再手动启动 loader 会与它抢 `0x200000` 固定映射，报

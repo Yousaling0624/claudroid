@@ -100,7 +100,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
      */
     fun dismiss() {
         dismissed = true
-        container.engine.cancel()
+        // The engine is app-wide: deleting an idle conversation must not cancel a turn
+        // that belongs to another controller.
+        if (_running.value) container.engine.cancel()
         job?.cancel()
         loaded = true
         container.forgetChat(sessionId)
@@ -111,6 +113,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         if (text.isEmpty()) return
         // Claim the turn synchronously; the Flow check alone races with a fast double tap.
         if (!_running.compareAndSet(false, true)) return
+        // A stop from the previous turn must not leak into this one.
+        container.engine.resetCancel()
         job = scope.launch {
             try {
                 sendLocked(text)
@@ -243,7 +247,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 joined.contains("Invalid session", ignoreCase = true) ||
                 joined.contains("requires a valid session ID", ignoreCase = true) ||
                 (joined.contains("session", ignoreCase = true) && joined.contains("not found", ignoreCase = true))
-            if (exitCode != 0 && resumeAttempted && resumeMissing) {
+            if (exitCode != 0 && exitCode != -2 && resumeAttempted && resumeMissing) {
                 // The CLI stores transcripts inside the jail. A reinstall or a cleared app
                 // wipes them while the chat still points at the old session id; retry once
                 // without --resume instead of leaving the conversation permanently broken.
@@ -264,6 +268,24 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         }
 
         if (turnGeneration != generation) return
+
+        if (exitCode == -2) {
+            // Stop pressed: keep whatever the model produced, but close the message and
+            // any tool card so nothing keeps spinning after the turn is over.
+            mutateAssistant(assistant.id) {
+                it.copy(
+                    streaming = false,
+                    blocks = it.blocks.map { b ->
+                        if (b is Block.Tool && b.running) {
+                            b.copy(running = false, isError = true, output = b.output ?: "（已停止）")
+                        } else {
+                            b
+                        }
+                    },
+                )
+            }
+            return
+        }
 
         // If the backend never streamed deltas (older CLI), fall back to the final text.
         val hasText = _messages.value.firstOrNull { it.id == assistant.id }

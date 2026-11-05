@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -5,60 +6,52 @@
     android:viewportHeight="108">
     <!-- warm paper tile -->
     <path
-        android:fillColor="#00FFFFFF"
+        android:fillColor="#00000000"
         android:pathData="M0,0h108v108h-108z" />
-    <!-- Claude-style sunburst mark, simplified -->
-    <group android:translateX="54" android:translateY="54">
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M0,-15L0,-23" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M0,15L0,23" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M-15,0L-23,0" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M15,0L23,0" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M-10.6,-10.6L-16.3,-16.3" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M10.6,10.6L16.3,16.3" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M-10.6,10.6L-16.3,16.3" />
-        <path
-            android:strokeColor="#FFD97757"
-            android:strokeWidth="4.2"
-            android:strokeLineCap="round"
-            android:fillColor="#00000000"
-            android:pathData="M10.6,-10.6L16.3,-16.3" />
-        <path
-            android:fillColor="#FFD97757"
-            android:pathData="M0,0m-9,0a9,9 0 1,0 18,0a9,9 0 1,0 -18,0" />
+    <!-- Claude-style starburst: eight tapered petals, no outer ring.
+         Each rotated group needs its own pivot: VectorDrawable groups do not
+         inherit the parent's pivot, and the default (0,0) would swing every
+         petal but the first off the canvas. -->
+    <group android:pivotX="54" android:pivotY="54">
+        <group>
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="45" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="90" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="135" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="180" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="225" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="270" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
+        <group android:rotation="315" android:pivotX="54" android:pivotY="54">
+            <path
+                android:fillColor="#FFD97757"
+                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
+        </group>
     </group>
 </vector>

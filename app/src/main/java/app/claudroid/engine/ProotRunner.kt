@@ -36,11 +36,18 @@ class ProotRunner(private val ctx: Context) {
 
     fun available(): Boolean = bundle().available
 
-    /** Everything PRoot needs for one turn. Returned command is fully quoted-free (argv). */
+    /**
+     * Everything PRoot needs for one turn. Returned command is fully quoted-free (argv).
+     *
+     * When [pidFile] is set, the CLI is launched through a tiny wrapper in the jail's
+     * /tmp that records its pid first. Stop uses that pid to kill the actual CLI;
+     * killing PRoot alone is not guaranteed to take the CLI down with it.
+     */
     fun spec(
         installation: Installation,
         args: List<String>,
         baseEnv: Map<String, String>,
+        pidFile: String? = null,
     ): Spec {
         val bundle = bundle()
         check(bundle.available) {
@@ -50,6 +57,15 @@ class ProotRunner(private val ctx: Context) {
         val home = Paths.home(ctx)
         val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
         val binds = hostBinds(workspace, home)
+        val guestScript = pidFile?.let { guestPid ->
+            // The jail's /tmp already exists and is writable by the app. The workspace
+            // bind is visible in the UI (and to the agent), so do not put control files
+            // there.
+            val host = File(installation.jail(), "tmp/$TURN_SCRIPT_NAME")
+            host.parentFile?.mkdirs()
+            host.writeText(wrapperScript(installation.version, guestPid))
+            GUEST_TURN_SCRIPT
+        }
         return build(
             proot = bundle.proot,
             loader = bundle.loader,
@@ -62,12 +78,26 @@ class ProotRunner(private val ctx: Context) {
             baseEnv = baseEnv,
             binds = binds,
             tmpDir = tmp,
+            turnScript = guestScript,
         )
     }
 
     data class Spec(val argv: List<String>, val env: Map<String, String>, val cwd: File)
 
     companion object {
+
+        const val TURN_SCRIPT_NAME = ".claudroid-turn.sh"
+        const val GUEST_TURN_SCRIPT = "/tmp/$TURN_SCRIPT_NAME"
+
+        /**
+         * Wrapper run inside the guest: record the pid (kept by `exec` below) and forward
+         * every argument verbatim. Stop kills that pid when PRoot's own cleanup is not
+         * enough.
+         */
+        fun wrapperScript(version: String, guestPidFile: String): String =
+            "#!/bin/sh\n" +
+                "echo \$\$ > $guestPidFile\n" +
+                "exec /opt/claude/$version/claude \"\$@\"\n"
 
         /**
          * Pure builder (unit-testable). Binds only host paths that exist, because
@@ -85,6 +115,7 @@ class ProotRunner(private val ctx: Context) {
             baseEnv: Map<String, String>,
             binds: List<Pair<String, String>>,
             tmpDir: File,
+            turnScript: String? = null,
         ): Spec {
             val argv = mutableListOf<String>()
             argv += proot.absolutePath
@@ -104,7 +135,15 @@ class ProotRunner(private val ctx: Context) {
             // loader as a program fails for ET_EXEC binaries ("Not a valid dynamic
             // program") because the loader must map the program at its fixed address
             // (0x200000), which PRoot's own loader mapping already occupies.
-            argv += "/opt/claude/$version/claude"
+            //
+            // A wrapper is only used to report the CLI pid for Stop. It execs the CLI
+            // in place, so the pid it writes stays valid.
+            if (turnScript != null) {
+                argv += "/bin/sh"
+                argv += turnScript
+            } else {
+                argv += "/opt/claude/$version/claude"
+            }
             argv += args
 
             val env = linkedMapOf<String, String>()

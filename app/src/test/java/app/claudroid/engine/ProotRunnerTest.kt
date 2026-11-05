@@ -64,4 +64,36 @@ class ProotRunnerTest {
     fun `falls back to sh when bash was not provisioned`() {
         assertEquals("/bin/sh", spec(hasBash = false).env["SHELL"])
     }
+
+    @Test
+    fun `launches through the pid-reporting wrapper when a pid file is given`() {
+        val argv = ProotRunner.build(
+            proot = proot,
+            loader = loader,
+            jail = jail,
+            workspace = workspace,
+            home = home,
+            version = "2.1.0",
+            hasBash = true,
+            args = listOf("-p", "hello"),
+            baseEnv = emptyMap(),
+            binds = listOf(workspace.absolutePath to "/work"),
+            tmpDir = tmp,
+            turnScript = ProotRunner.GUEST_TURN_SCRIPT,
+        ).argv
+        // The CLI is exec'd by the wrapper, so the wrapper (not the CLI) is the entry.
+        assertEquals(
+            listOf("/bin/sh", "/tmp/.claudroid-turn.sh", "-p", "hello"),
+            argv.takeLast(4),
+        )
+        assertFalse(argv.contains("/opt/claude/2.1.0/claude"))
+    }
+
+    @Test
+    fun `wrapper records its pid before execing the cli`() {
+        val script = ProotRunner.wrapperScript("2.1.0", "/root/turn-42.pid")
+        assertTrue(script.startsWith("#!/bin/sh\n"))
+        assertTrue(script.indexOf("echo \$\$ > /root/turn-42.pid") < script.indexOf("exec "))
+        assertTrue(script.contains("exec /opt/claude/2.1.0/claude \"\$@\""))
+    }
 }

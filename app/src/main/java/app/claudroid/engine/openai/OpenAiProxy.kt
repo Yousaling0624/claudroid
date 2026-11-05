@@ -3,6 +3,7 @@ package app.claudroid.engine.openai
 import app.claudroid.core.Logx
 import app.claudroid.data.AppSettings
 import app.claudroid.data.AuthStyle
+import app.claudroid.data.ModelTier
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -11,6 +12,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.io.BufferedWriter
@@ -78,9 +80,13 @@ class OpenAiProxy(
             )
         }
         val wantsStream = (request["stream"] as? JsonPrimitive)?.booleanOrNull != false
+        // Claude Code sends either a tier alias (`opus`) or a concrete id that contains the
+        // tier segment (`claude-opus-5-5`). Resolve it here so each tier can point at a
+        // different upstream model, the same way Magpie maps ANTHROPIC_DEFAULT_<TIER>_MODEL.
+        val resolvedModel = upstreamModel(request, settings)
         val payload = OpenAiMapping.toChatRequest(
             request,
-            settings.model.ifBlank { null },
+            resolvedModel.ifBlank { null },
             stream = wantsStream,
         ).toString()
 
@@ -110,7 +116,7 @@ class OpenAiProxy(
             kotlin.concurrent.thread(name = "openai-proxy-stream", isDaemon = true) {
                 try {
                     BufferedWriter(OutputStreamWriter(pipeOut, Charsets.UTF_8)).use { writer ->
-                        relayStream(connection, writer)
+                        relayStream(connection, writer, resolvedModel)
                     }
                 } catch (t: Throwable) {
                     Logx.e("OpenAI 流式转发中断: ${t.message}")
@@ -139,7 +145,7 @@ class OpenAiProxy(
             val text = connection.inputStream.bufferedReader().use { it.readText() }
             connection.disconnect()
             val mapped = runCatching {
-                OpenAiMapping.nonStreamResponse(json.parseToJsonElement(text).jsonObject, settings.model)
+                OpenAiMapping.nonStreamResponse(json.parseToJsonElement(text).jsonObject, resolvedModel)
             }.getOrNull()
             if (mapped == null) {
                 newFixedLengthResponse(
@@ -157,8 +163,10 @@ class OpenAiProxy(
         }
     }
 
-    private fun relayStream(connection: HttpURLConnection, writer: BufferedWriter) {
-        val translator = OpenAiMapping.StreamTranslator(settings.model)
+    private fun relayStream(connection: HttpURLConnection, writer: BufferedWriter, model: String) {
+        // Report the model we actually asked the upstream for, matching what the proxy
+        // already did with the single configured model before tier routing existed.
+        val translator = OpenAiMapping.StreamTranslator(model)
         writer.write(translator.start())
         writer.flush()
 
@@ -279,6 +287,42 @@ class OpenAiProxy(
     }
 
     companion object {
+        /**
+         * The concrete model to send upstream for an Anthropic Messages request.
+         *
+         * Three cases, in order:
+         *  1. The request names a tier (bare `opus`/`fable`/`sonnet`/`haiku`, or an id with
+         *     that segment such as `claude-opus-5-5` / `anthropic/claude-sonnet-4.5`):
+         *     use that tier's mapping. An unmapped tier falls back to [AppSettings.model],
+         *     which is the pre-tier behavior every existing install relies on.
+         *  2. The request names a concrete model that is already one of the tier mappings:
+         *     the CLI resolved the alias before calling the proxy, so forward it as-is.
+         *  3. The request names an ordinary model: [AppSettings.model] still wins,
+         *     preserving the "point the app at one gateway model" behavior.
+         *  4. Both would be blank (local gateways often start with an empty model field):
+         *     echo the requested value instead of sending an empty `model`.
+         */
+        internal fun upstreamModel(request: JsonObject, settings: AppSettings): String {
+            val requested = (request["model"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val tier = ModelTier.fromAliasOrId(requested)
+            if (tier != null) {
+                // modelForTier already falls back to settings.model when the tier is unmapped.
+                return settings.modelForTier(tier).trim().ifBlank { requested }
+            }
+            // With OpenAI flavor the CLI also receives ANTHROPIC_DEFAULT_*_MODEL, so the
+            // request can already contain the mapped id (which no longer has a tier
+            // segment). Replacing it with the global model would silently ignore the tier.
+            if (settings.isConfiguredTierModel(requested)) return requested
+            // An explicit small/fast model is equally provider-specific. Without this the
+            // CLI's background request would be rewritten to the large default model.
+            if (requested.isNotEmpty() &&
+                requested.equals(settings.smallModel.trim(), ignoreCase = true)
+            ) {
+                return requested
+            }
+            return settings.model.trim().ifBlank { requested }
+        }
+
         /** OpenAI 的 base 通常已经带 /v1；不带就补上。 */
         fun chatCompletionsUrl(settings: AppSettings): String {
             val base = settings.baseUrl.trim().trimEnd('/')

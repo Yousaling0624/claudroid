@@ -2,6 +2,7 @@ package app.claudroid.ui.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -23,48 +24,87 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 /**
- * Visual language borrowed from Claude's own product surfaces: warm ivory paper,
- * one terracotta accent, hairline rules instead of drop shadows, and a serif voice
- * for headings. The chrome stays quiet so the conversation is the loudest thing.
+ * The app's visual vocabulary: flat warm paper, one terracotta accent, hairline
+ * borders instead of drop shadows, and a serif voice for the conversation.
  *
- * The Material scheme only models part of that vocabulary. [AppColors] carries the
- * rest: a text-safe accent (the bright terracotta is decorative, not readable at
- * small sizes), a tertiary text color that still clears 4.5:1, and the paper tint
- * used by the root gradient.
+ * Material's scheme has no slot for paper tints, sand borders or a text-safe accent,
+ * so those live in [AppColors]; everything else is mapped onto the M3 scheme so stock
+ * components (menus, dialogs, switches) inherit the same palette.
  */
-private val Terracotta = Color(0xFFD97757)
-private val TerracottaDeep = Color(0xFFB8573A)
-private val TerracottaText = Color(0xFFA64C2F)
-private val Ink = Color(0xFF1F1E1D)
-
 @Immutable
 data class AppColors(
-    /** Accent for small text, links and filled controls; readable on paper. */
+    /** Page background. Flat, no gradient. */
+    val canvas: Color,
+    /** Cards, composer, drawer surface. */
+    val paper: Color,
+    /** User bubbles, drawer selection, quiet fills. */
+    val surface1: Color,
+    /** Pressed states and disabled send button. */
+    val surface2: Color,
+    /** 1dp hairline borders. */
+    val sand: Color,
+    /** Primary text. */
+    val ink: Color,
+    /** Secondary text. */
+    val graphite: Color,
+    /** Tertiary text: timestamps, captions. */
+    val stone: Color,
+    /** Disabled-only text; never use for content. */
+    val bone: Color,
+    /** Decorative brand terracotta: marks, dots, filled buttons. */
+    val orange: Color,
+    val orangePressed: Color,
+    /** Thin warm fill for thinking pills and notices. */
+    val orangeSoft: Color,
+    /** Text-safe terracotta for links and small labels. */
     val accentInk: Color,
-    /** Decorative brand terracotta for marks and dots. */
-    val brand: Color,
-    /** Tertiary text (timestamps, placeholders, disclaimers); >= 4.5:1. */
-    val faintText: Color,
-    /** Slightly lifted paper used at the top of the root gradient. */
-    val paperTop: Color,
-    /** Raised card fill. */
-    val card: Color,
+    val codeBg: Color,
+    val codeFg: Color,
+    val error: Color,
+    val success: Color,
+    val dark: Boolean,
 )
 
 private val LightAppColors = AppColors(
-    accentInk = TerracottaText,
-    brand = Color(0xFFC4623F),
-    faintText = Color(0xFF746E64),
-    paperTop = Color(0xFFFAF7EF),
-    card = Color(0xFFFBF9F4),
+    canvas = Color(0xFFF8F4ED),
+    paper = Color(0xFFFBF9F4),
+    surface1 = Color(0xFFF0EAE0),
+    surface2 = Color(0xFFE8E0D2),
+    sand = Color(0xFFDDD2BD),
+    ink = Color(0xFF2D2520),
+    graphite = Color(0xFF5A4F44),
+    stone = Color(0xFF74695E),
+    bone = Color(0xFFB5AB9E),
+    orange = Color(0xFFD97757),
+    orangePressed = Color(0xFFBE6242),
+    orangeSoft = Color(0xFFF2DDD0),
+    accentInk = Color(0xFFA64C2F),
+    codeBg = Color(0xFF1F1B16),
+    codeFg = Color(0xFFE8E0D2),
+    error = Color(0xFFA8412F),
+    success = Color(0xFF5F8F53),
+    dark = false,
 )
 
 private val DarkAppColors = AppColors(
+    canvas = Color(0xFF1F1E1D),
+    paper = Color(0xFF2C2C2A),
+    surface1 = Color(0xFF2C2C2A),
+    surface2 = Color(0xFF3A3936),
+    sand = Color(0xFF45443F),
+    ink = Color(0xFFF5F4EF),
+    graphite = Color(0xFFC3C2B7),
+    stone = Color(0xFF97958A),
+    bone = Color(0xFF6A675F),
+    orange = Color(0xFFD97757),
+    orangePressed = Color(0xFFE08A6D),
+    orangeSoft = Color(0xFF4A352A),
     accentInk = Color(0xFFE89577),
-    brand = Terracotta,
-    faintText = Color(0xFF918C83),
-    paperTop = Color(0xFF2B2B29),
-    card = Color(0xFF2C2C2A),
+    codeBg = Color(0xFF14130F),
+    codeFg = Color(0xFFE8E0D2),
+    error = Color(0xFFE9A08F),
+    success = Color(0xFF8FBF83),
+    dark = true,
 )
 
 private val LocalAppColors = staticCompositionLocalOf { LightAppColors }
@@ -76,68 +116,81 @@ val MaterialTheme.appColors: AppColors
     get() = LocalAppColors.current
 
 private val Light = lightColorScheme(
-    primary = TerracottaDeep,
-    onPrimary = Color(0xFFFFF9F4),
-    primaryContainer = Color(0xFFF3DFD3),
+    primary = LightAppColors.orange,
+    onPrimary = Color(0xFFFFFBF7),
+    primaryContainer = LightAppColors.orangeSoft,
     onPrimaryContainer = Color(0xFF4E2414),
-    secondary = Color(0xFF5E5951),
-    onSecondary = Color(0xFFFFF9F4),
-    secondaryContainer = Color(0xFFEDE8DC),
-    onSecondaryContainer = Ink,
-    background = Color(0xFFF5F2EA),
-    onBackground = Ink,
-    surface = Color(0xFFFBF9F4),
-    onSurface = Ink,
-    surfaceVariant = Color(0xFFE9E3D6),
-    onSurfaceVariant = Color(0xFF5F5A52),
-    surfaceContainerLowest = Color(0xFFFFFDF9),
-    surfaceContainerLow = Color(0xFFF8F5EE),
-    surfaceContainer = Color(0xFFF1EDE3),
-    surfaceContainerHigh = Color(0xFFEAE4D8),
-    surfaceContainerHighest = Color(0xFFE2DCCD),
-    outline = Color(0xFFC9C2B3),
-    outlineVariant = Color(0xFFDCD5C7),
-    error = Color(0xFFA33A28),
+    secondary = LightAppColors.graphite,
+    onSecondary = Color(0xFFFFFBF7),
+    secondaryContainer = LightAppColors.surface1,
+    onSecondaryContainer = LightAppColors.ink,
+    tertiary = LightAppColors.accentInk,
+    onTertiary = Color(0xFFFFFBF7),
+    background = LightAppColors.canvas,
+    onBackground = LightAppColors.ink,
+    surface = LightAppColors.paper,
+    onSurface = LightAppColors.ink,
+    surfaceVariant = LightAppColors.surface1,
+    onSurfaceVariant = LightAppColors.graphite,
+    surfaceTint = Color.Transparent,
+    surfaceContainerLowest = LightAppColors.paper,
+    surfaceContainerLow = LightAppColors.paper,
+    surfaceContainer = LightAppColors.surface1,
+    surfaceContainerHigh = LightAppColors.surface2,
+    surfaceContainerHighest = LightAppColors.surface2,
+    outline = LightAppColors.sand,
+    outlineVariant = LightAppColors.sand,
+    error = LightAppColors.error,
     onError = Color(0xFFFFF8F4),
-    errorContainer = Color(0xFFF7DAD3),
-    onErrorContainer = Color(0xFF4A1108),
+    errorContainer = Color(0xFFF6DED7),
+    onErrorContainer = Color(0xFF47130A),
+    inverseSurface = LightAppColors.ink,
+    inverseOnSurface = LightAppColors.paper,
+    inversePrimary = Color(0xFFE89577),
 )
 
 private val Dark = darkColorScheme(
-    primary = Terracotta,
+    primary = DarkAppColors.orange,
     onPrimary = Color(0xFF2A1209),
-    primaryContainer = Color(0xFF4A2416),
+    primaryContainer = DarkAppColors.orangeSoft,
     onPrimaryContainer = Color(0xFFF8DDD2),
-    secondary = Color(0xFFC9C4B8),
+    secondary = DarkAppColors.graphite,
     onSecondary = Color(0xFF22211F),
-    secondaryContainer = Color(0xFF3A3936),
-    onSecondaryContainer = Color(0xFFF0EEE6),
-    background = Color(0xFF262624),
-    onBackground = Color(0xFFF0EEE6),
-    surface = Color(0xFF2C2C2A),
-    onSurface = Color(0xFFF0EEE6),
-    surfaceVariant = Color(0xFF3A3936),
-    onSurfaceVariant = Color(0xFFA5A199),
-    surfaceContainerLowest = Color(0xFF1F1F1D),
-    surfaceContainerLow = Color(0xFF292927),
-    surfaceContainer = Color(0xFF30302E),
-    surfaceContainerHigh = Color(0xFF383836),
-    surfaceContainerHighest = Color(0xFF424240),
-    outline = Color(0xFF565650),
-    outlineVariant = Color(0xFF414140),
-    error = Color(0xFFE9A08F),
+    secondaryContainer = DarkAppColors.surface2,
+    onSecondaryContainer = DarkAppColors.ink,
+    tertiary = DarkAppColors.accentInk,
+    onTertiary = Color(0xFF2A1209),
+    background = DarkAppColors.canvas,
+    onBackground = DarkAppColors.ink,
+    surface = DarkAppColors.paper,
+    onSurface = DarkAppColors.ink,
+    surfaceVariant = DarkAppColors.surface2,
+    onSurfaceVariant = DarkAppColors.graphite,
+    surfaceTint = Color.Transparent,
+    surfaceContainerLowest = Color(0xFF1A1918),
+    surfaceContainerLow = Color(0xFF242422),
+    surfaceContainer = DarkAppColors.surface1,
+    surfaceContainerHigh = DarkAppColors.surface2,
+    surfaceContainerHighest = Color(0xFF45443F),
+    outline = DarkAppColors.sand,
+    outlineVariant = DarkAppColors.sand,
+    error = DarkAppColors.error,
     onError = Color(0xFF2A0D06),
     errorContainer = Color(0xFF5C2116),
     onErrorContainer = Color(0xFFFFDAD1),
+    inverseSurface = DarkAppColors.ink,
+    inverseOnSurface = DarkAppColors.canvas,
+    inversePrimary = Color(0xFFA64C2F),
 )
 
-/** Serif for display text: the closest system stand-in for Claude's Copernicus. */
+/** Serif for the assistant voice and greetings; system CJK falls back to Noto Serif. */
 val DisplayFamily = FontFamily.Serif
+val SansFamily = FontFamily.SansSerif
 val MonoFamily = FontFamily.Monospace
 
 // includeFontPadding = false tightens the vertical rhythm; Android's default font
 // padding makes serif headings sit visibly low inside their line box.
-private fun base(
+internal fun base(
     size: Float,
     lineHeight: Float,
     weight: FontWeight = FontWeight.Normal,
@@ -152,27 +205,45 @@ private fun base(
     platformStyle = PlatformTextStyle(includeFontPadding = false),
 )
 
+/**
+ * Typography for the transcript. Kept out of Material's [Typography] so the settings
+ * and workspace screens do not accidentally become serif.
+ */
+object AppType {
+    val greeting = base(32f, 38f, family = DisplayFamily, letterSpacing = -0.4f)
+    val assistantBody = base(16f, 25f, family = DisplayFamily)
+    val assistantHeadingLarge = base(24f, 31f, family = DisplayFamily, letterSpacing = -0.2f)
+    val assistantHeading = base(20f, 26f, family = DisplayFamily)
+    val assistantHeadingSmall = base(17f, 23f, family = DisplayFamily, weight = FontWeight.Medium)
+    val assistantHeadingTiny = base(16f, 22f, family = DisplayFamily, weight = FontWeight.Medium)
+    val userBody = base(16f, 24f, family = SansFamily)
+    val caption = base(11f, 14f, family = SansFamily)
+    val captionMedium = base(11f, 14f, family = SansFamily, weight = FontWeight.Medium)
+    val code = base(14f, 21f, family = MonoFamily)
+}
+
 private val AppTypography = Typography(
-    displaySmall = base(31f, 38f, family = DisplayFamily),
-    headlineMedium = base(24f, 31f, family = DisplayFamily),
+    displaySmall = AppType.greeting,
+    headlineMedium = base(24f, 31f, family = DisplayFamily, letterSpacing = -0.2f),
     headlineSmall = base(20f, 26f, family = DisplayFamily),
-    titleLarge = base(18f, 24f, weight = FontWeight.Medium, letterSpacing = -0.1f),
-    titleMedium = base(15f, 20f, weight = FontWeight.Medium),
-    titleSmall = base(13.5f, 18f, weight = FontWeight.Medium),
-    bodyLarge = base(15.5f, 24f),
-    bodyMedium = base(14f, 21f),
-    bodySmall = base(12.5f, 18f),
-    labelLarge = base(13.5f, 18f, weight = FontWeight.Medium),
-    labelMedium = base(12f, 16f, weight = FontWeight.Medium),
-    labelSmall = base(11f, 15f, weight = FontWeight.Medium, letterSpacing = 0.3f),
+    titleLarge = base(17f, 24f, family = SansFamily, weight = FontWeight.SemiBold, letterSpacing = -0.1f),
+    titleMedium = base(15f, 20f, family = SansFamily, weight = FontWeight.Medium),
+    titleSmall = base(13f, 18f, family = SansFamily, weight = FontWeight.Medium),
+    bodyLarge = AppType.userBody,
+    bodyMedium = base(14f, 21f, family = SansFamily),
+    bodySmall = base(12.5f, 18f, family = SansFamily),
+    labelLarge = base(14f, 18f, family = SansFamily, weight = FontWeight.Medium),
+    labelMedium = base(12f, 16f, family = SansFamily, weight = FontWeight.Medium),
+    labelSmall = AppType.captionMedium,
 )
 
+/** 10 / 12 / 16 / 18 / 24: soft paper corners, never full-screen pills. */
 private val AppShapes = Shapes(
-    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
-    small = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-    medium = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
-    large = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+    extraSmall = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(18.dp),
+    extraLarge = RoundedCornerShape(24.dp),
 )
 
 /** Page rhythm shared by every screen. */

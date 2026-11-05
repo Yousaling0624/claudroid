@@ -10,6 +10,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URL
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
@@ -97,6 +98,83 @@ class OpenAiProxyTest {
             assertTrue("missing second delta: $response", response.contains("\"text\":\"lo\""))
             assertTrue("missing message_stop: $response", response.contains("event: message_stop"))
             assertTrue("missing stop reason", response.contains("\"stop_reason\":\"end_turn\""))
+        } finally {
+            runCatching { proxy.stop() }
+            runCatching { upstream.close() }
+        }
+    }
+
+    @Test
+    fun `tier request is sent upstream with the mapped model`() {
+        val seenBody = AtomicReference("")
+        val upstream = ServerSocket(0, 20, InetAddress.getByName("127.0.0.1"))
+        val upstreamPort = upstream.localPort
+
+        thread(isDaemon = true, name = "fake-openai-tier") {
+            while (!upstream.isClosed) {
+                val socket = runCatching { upstream.accept() }.getOrNull() ?: break
+                runCatching {
+                    socket.use { s ->
+                        val reader = s.getInputStream().bufferedReader()
+                        var contentLength = 0
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (line.isEmpty()) break
+                            if (line.startsWith("Content-Length:", ignoreCase = true)) {
+                                contentLength = line.substringAfter(":").trim().toIntOrNull() ?: 0
+                            }
+                        }
+                        val body = CharArray(contentLength)
+                        var read = 0
+                        while (read < contentLength) {
+                            val n = reader.read(body, read, contentLength - read)
+                            if (n <= 0) break
+                            read += n
+                        }
+                        seenBody.set(String(body, 0, read))
+                        val payload = """{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"""
+                        val bytes = payload.toByteArray()
+                        val head = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/json\r\n" +
+                            "Content-Length: ${bytes.size}\r\n" +
+                            "Connection: close\r\n\r\n"
+                        s.getOutputStream().apply {
+                            write(head.toByteArray())
+                            write(bytes)
+                            flush()
+                        }
+                    }
+                }
+            }
+        }
+
+        val settings = AppSettings(
+            apiFlavor = ApiFlavor.OPENAI,
+            baseUrl = "http://127.0.0.1:$upstreamPort",
+            apiKey = "sk-test",
+            model = "gateway-fallback",
+            opusModel = "gateway-opus",
+        )
+        val proxy = OpenAiProxy(settings)
+        proxy.start()
+        try {
+            val conn = (URL("${proxy.baseUrl}/v1/messages").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 5_000
+                readTimeout = 20_000
+                setRequestProperty("Content-Type", "application/json")
+            }
+            val request = """
+                {"model":"claude-opus-5-5","max_tokens":64,"stream":false,
+                 "messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}
+            """.trimIndent()
+            conn.outputStream.use { it.write(request.toByteArray()) }
+
+            val response = conn.inputStream.bufferedReader().use { it.readText() }
+            assertTrue("upstream saw: ${seenBody.get()}", seenBody.get().contains("\"model\":\"gateway-opus\""))
+            assertTrue("response was: $response", response.contains("\"model\":\"gateway-opus\""))
+            assertTrue("response was: $response", response.contains("\"type\":\"message\""))
         } finally {
             runCatching { proxy.stop() }
             runCatching { upstream.close() }

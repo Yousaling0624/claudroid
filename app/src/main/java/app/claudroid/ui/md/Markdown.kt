@@ -1,10 +1,14 @@
 package app.claudroid.ui.md
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,16 +18,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,10 +41,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
@@ -47,6 +63,8 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -63,6 +81,7 @@ sealed interface MdBlock {
         val style: TextStyle,
         val quote: Boolean = false,
         val indent: Int = 0,
+        val heading: Boolean = false,
     ) : MdBlock
 
     data class Code(val code: String, val lang: String?) : MdBlock
@@ -101,7 +120,7 @@ object Markdown {
                 if (text.isNotEmpty()) {
                     blocks += MdBlock.Text(
                         content = inline(text, accent, codeBackground, codeColor),
-                        style = TextStyle(fontSize = 15.5f.sp, lineHeight = 24.sp),
+                        style = AppType.assistantBody,
                     )
                 }
                 paragraph.setLength(0)
@@ -168,23 +187,16 @@ object Markdown {
                     if (content.isEmpty()) {
                         paragraph.appendLine(line)
                     } else {
-                        val size = when (level) {
-                            1 -> 21.sp
-                            2 -> 18.5.sp
-                            3 -> 15.5.sp
-                            else -> 15.sp
+                        val style = when (level) {
+                            1 -> AppType.assistantHeadingLarge
+                            2 -> AppType.assistantHeading
+                            3 -> AppType.assistantHeadingSmall
+                            else -> AppType.assistantHeadingTiny
                         }
-                        // Chat headings share the serif voice of the app's display type;
-                        // the rest of the transcript stays in the UI sans.
-                        val serif = level <= 2
                         blocks += MdBlock.Text(
                             content = inline(content, accent, codeBackground, codeColor),
-                            style = TextStyle(
-                                fontFamily = if (serif) FontFamily.Serif else null,
-                                fontSize = size,
-                                fontWeight = if (serif) FontWeight.Normal else FontWeight.SemiBold,
-                                lineHeight = size * 1.4f,
-                            ),
+                            style = style,
+                            heading = true,
                         )
                     }
                     i++
@@ -202,7 +214,11 @@ object Markdown {
                     if (text.isNotEmpty()) {
                         blocks += MdBlock.Text(
                             content = inline(text, accent, codeBackground, codeColor),
-                            style = TextStyle(fontSize = 14.sp, fontStyle = FontStyle.Italic, lineHeight = 21.sp),
+                            style = AppType.assistantBody.copy(
+                                fontSize = 15.5.sp,
+                                lineHeight = 24.sp,
+                                fontStyle = FontStyle.Italic,
+                            ),
                             quote = true,
                         )
                     }
@@ -235,7 +251,7 @@ object Markdown {
                                 append("  ")
                                 append(inline(body, accent, codeBackground, codeColor))
                             },
-                            style = TextStyle(fontSize = 15.5f.sp, lineHeight = 24.sp),
+                            style = AppType.assistantBody,
                             indent = depth.coerceIn(0, 4),
                         )
                         i++
@@ -275,6 +291,7 @@ object Markdown {
                         withStyle(
                             SpanStyle(
                                 fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp,
                                 background = codeBackground,
                                 color = codeColor,
                             )
@@ -394,73 +411,108 @@ object Markdown {
     }
 }
 
+private const val CARET_ID = "streaming-caret"
+
 @Composable
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
-    baseStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    baseStyle: TextStyle = AppType.assistantBody,
     streaming: Boolean = false,
 ) {
     val accent = MaterialTheme.appColors.accentInk
-    val codeBg = MaterialTheme.colorScheme.surfaceContainer
-    val codeColor = MaterialTheme.colorScheme.onSurface
+    val codeBg = MaterialTheme.appColors.surface1
+    val codeColor = MaterialTheme.appColors.ink
+    val sand = MaterialTheme.appColors.sand
     val blocks = remember(text, accent, codeBg, codeColor) {
         Markdown.parse(text, accent, codeBg, codeColor)
     }
-    // A blinking terracotta caret at the true end of the stream: the message keeps
-    // feeling alive while the top-level dots already show the turn is running.
-    val caretAlpha = if (streaming) {
+
+    // A blinking terracotta block at the true end of the stream. The animation state
+    // is only read inside the inline composable so the transcript does not recompose
+    // on every frame.
+    val caretAlpha: State<Float>? = if (streaming) {
         val transition = rememberInfiniteTransition(label = "caret")
         transition.animateFloat(
             initialValue = 1f,
-            targetValue = 0.15f,
+            targetValue = 0.12f,
             animationSpec = infiniteRepeatable(
                 animation = tween(520),
                 repeatMode = RepeatMode.Reverse,
             ),
             label = "caret-alpha",
-        ).value
-    } else 0f
+        )
+    } else {
+        null
+    }
     val lastTextIndex = remember(blocks) { blocks.indexOfLast { it is MdBlock.Text } }
 
     Column(modifier.fillMaxWidth()) {
         blocks.forEachIndexed { index, block ->
             when (block) {
                 is MdBlock.Text -> {
-                    val content = if (streaming && index == lastTextIndex) {
+                    val showCaret = streaming && caretAlpha != null && index == lastTextIndex
+                    val content = if (showCaret) {
                         buildAnnotatedString {
                             append(block.content)
-                            withStyle(SpanStyle(color = accent.copy(alpha = caretAlpha))) {
-                                append(" ▍")
-                            }
+                            append(" ")
+                            appendInlineContent(CARET_ID, " ")
                         }
-                    } else block.content
+                    } else {
+                        block.content
+                    }
+                    val inlineContent = if (showCaret) {
+                        mapOf(
+                            CARET_ID to InlineTextContent(
+                                Placeholder(8.sp, 18.sp, PlaceholderVerticalAlign.TextCenter),
+                            ) {
+                                StreamingCaret(caretAlpha!!)
+                            }
+                        )
+                    } else {
+                        emptyMap()
+                    }
                     Text(
                         text = content,
                         style = baseStyle.merge(block.style),
+                        color = MaterialTheme.appColors.ink,
+                        inlineContent = inlineContent,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(start = (block.indent * 16).dp)
                             .then(
                                 if (block.quote) Modifier
-                                    .background(
-                                        MaterialTheme.colorScheme.surfaceContainer,
-                                        RoundedCornerShape(8.dp),
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .drawBehind {
+                                        drawRect(
+                                            color = sand,
+                                            topLeft = Offset.Zero,
+                                            size = Size(2.dp.toPx(), size.height),
+                                        )
+                                    }
+                                    .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
                                 else Modifier
                             )
-                            .padding(top = if (index == 0) 0.dp else 8.dp),
+                            .padding(
+                                top = when {
+                                    index == 0 -> 0.dp
+                                    block.heading -> 18.dp
+                                    else -> 8.dp
+                                }
+                            ),
                     )
                 }
 
-                is MdBlock.Code -> CodeBlock(block.code, block.lang)
+                is MdBlock.Code -> CodeBlock(
+                    code = block.code,
+                    lang = block.lang,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
 
                 is MdBlock.Table -> TableBlock(block)
 
                 MdBlock.Rule -> HorizontalDivider(
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                    color = sand,
                 )
             }
         }
@@ -468,25 +520,37 @@ fun MarkdownText(
 }
 
 @Composable
+private fun StreamingCaret(alpha: State<Float>) {
+    val value by alpha
+    Box(
+        Modifier
+            .size(8.dp, 18.dp)
+            .graphicsLayer { this.alpha = value }
+            .background(MaterialTheme.appColors.orange, RoundedCornerShape(1.dp))
+    )
+}
+
+@Composable
 private fun TableBlock(table: MdBlock.Table) {
+    val shape = RoundedCornerShape(10.dp)
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+            .padding(top = 12.dp)
+            .clip(shape)
+            .border(1.dp, MaterialTheme.appColors.sand, shape)
             .horizontalScroll(rememberScrollState()),
     ) {
         Row(
             Modifier
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.appColors.surface1)
                 .padding(horizontal = 4.dp),
         ) {
             table.headers.forEachIndexed { column, cell ->
                 Text(
                     cell,
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.appColors.ink,
                     modifier = Modifier
                         .width(table.widths.getOrElse(column) { 120 }.dp)
                         .padding(horizontal = 10.dp, vertical = 9.dp),
@@ -494,13 +558,13 @@ private fun TableBlock(table: MdBlock.Table) {
             }
         }
         table.rows.forEach { row ->
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = MaterialTheme.appColors.sand)
             Row(Modifier.padding(horizontal = 4.dp)) {
                 table.headers.indices.forEach { column ->
                     Text(
                         row.getOrElse(column) { AnnotatedString("") },
                         style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.appColors.graphite,
                         modifier = Modifier
                             .width(table.widths.getOrElse(column) { 120 }.dp)
                             .padding(horizontal = 10.dp, vertical = 9.dp),
@@ -512,9 +576,10 @@ private fun TableBlock(table: MdBlock.Table) {
 }
 
 @Composable
-fun CodeBlock(code: String, lang: String?) {
+fun CodeBlock(code: String, lang: String?, modifier: Modifier = Modifier) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(code) { mutableStateOf(false) }
+    val colors = MaterialTheme.appColors
     LaunchedEffect(copied) {
         if (copied) {
             delay(1_500)
@@ -522,54 +587,69 @@ fun CodeBlock(code: String, lang: String?) {
         }
     }
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .padding(top = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-            .padding(vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.codeBg)
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, end = 8.dp, bottom = 4.dp),
+                .background(colors.codeFg.copy(alpha = 0.045f))
+                .padding(start = 14.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = lang?.lowercase()?.ifBlank { null } ?: "代码",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.appColors.faintText,
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.2.sp),
+                color = colors.codeFg.copy(alpha = 0.55f),
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                text = if (copied) "已复制" else "复制",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (copied) MaterialTheme.appColors.accentInk
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
+            Row(
+                Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .clickable {
                         clipboard.setText(AnnotatedString(code))
                         copied = true
                     }
-                    .padding(horizontal = 7.dp, vertical = 3.dp),
-            )
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AnimatedContent(
+                    targetState = copied,
+                    transitionSpec = {
+                        fadeIn(tween(150)) togetherWith fadeOut(tween(150))
+                    },
+                    label = "copy-state",
+                ) { isCopied ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (isCopied) AppIcons.Check else AppIcons.Copy,
+                            contentDescription = null,
+                            tint = if (isCopied) colors.codeFg else colors.codeFg.copy(alpha = 0.62f),
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (isCopied) "已复制" else "复制",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isCopied) colors.codeFg else colors.codeFg.copy(alpha = 0.62f),
+                        )
+                    }
+                }
+            }
         }
         Box(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             SelectionContainer {
                 Text(
                     text = code,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 19.sp,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    style = AppType.code,
+                    color = colors.codeFg,
                 )
             }
         }

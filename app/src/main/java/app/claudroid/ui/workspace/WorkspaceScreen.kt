@@ -32,12 +32,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -74,7 +78,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -93,8 +99,12 @@ import app.claudroid.core.WorkspaceEntry
 import app.claudroid.core.WorkspaceFiles
 import app.claudroid.core.FileKind
 import app.claudroid.core.TextPreview
+import app.claudroid.ui.components.ClaudeDialog
 import app.claudroid.ui.components.ClaudeMark
+import app.claudroid.ui.components.ClaudeTopBar
+import app.claudroid.ui.components.GhostButton
 import app.claudroid.ui.components.Motion
+import app.claudroid.ui.components.PrimaryButton
 import app.claudroid.ui.md.MarkdownText
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.Spacing
@@ -189,6 +199,7 @@ private fun Browser(
 ) {
     var entries by remember { mutableStateOf<List<WorkspaceEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var browserMenu by remember { mutableStateOf(false) }
     LaunchedEffect(currentDir, refreshKey) {
         loading = true
         entries = withContext(Dispatchers.IO) { WorkspaceFiles.list(currentDir) }
@@ -198,98 +209,85 @@ private fun Browser(
     val relative = remember(root, currentDir) {
         WorkspaceFiles.relativePath(root, currentDir).ifBlank { "" }
     }
+    val path = if (relative.isEmpty()) "/work" else "/work/$relative"
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = if (currentDir == root) onBack else onUp) {
+    Column(Modifier.fillMaxSize()) {
+        ClaudeTopBar(
+            title = if (currentDir == root) "工作区" else currentDir.name,
+            subtitle = if (loading) "读取中…" else "$path · ${entries.size} 项 · ${WorkspaceFiles.humanSize(totalBytes)}",
+            onBack = { if (currentDir == root) onBack() else onUp() },
+            actions = {
+                IconButton(onClick = onRefresh, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        AppIcons.Refresh,
+                        "刷新",
+                        tint = MaterialTheme.appColors.graphite,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+                Box {
+                    IconButton(onClick = { browserMenu = true }, modifier = Modifier.size(44.dp)) {
                         Icon(
-                            AppIcons.Back,
-                            "返回",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            AppIcons.More,
+                            "更多",
+                            tint = MaterialTheme.appColors.graphite,
                             modifier = Modifier.size(20.dp),
                         )
                     }
-                },
-                title = {
-                    Column {
-                        Text(
-                            if (currentDir == root) "工作区" else currentDir.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = if (loading) "读取中…" else {
-                                val count = entries.size
-                                val prefix = if (relative.isEmpty()) "/work" else "/work/$relative"
-                                "$prefix · $count 项 · ${WorkspaceFiles.humanSize(totalBytes)}"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
-                actions = {
-                    if (currentDir != root) {
-                        TextButton(onClick = onRoot) {
-                            Text(
-                                "根目录",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.appColors.accentInk,
+                    DropdownMenu(expanded = browserMenu, onDismissRequest = { browserMenu = false }) {
+                        if (currentDir != root) {
+                            DropdownMenuItem(
+                                text = { Text("回到 /work") },
+                                leadingIcon = { Icon(AppIcons.Folder, null) },
+                                onClick = {
+                                    browserMenu = false
+                                    onRoot()
+                                },
                             )
                         }
-                    }
-                    IconButton(onClick = onRefresh) {
-                        Icon(
-                            AppIcons.Refresh,
-                            "刷新",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
+                        DropdownMenuItem(
+                            text = { Text("刷新列表") },
+                            leadingIcon = { Icon(AppIcons.Refresh, null) },
+                            onClick = {
+                                browserMenu = false
+                                onRefresh()
+                            },
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-            )
-        },
-    ) { padding ->
+                }
+            },
+        )
+
         Box(
             Modifier
-                .fillMaxSize()
-                .padding(padding)
+                .weight(1f)
+                .fillMaxWidth()
+                .navigationBarsPadding()
         ) {
             when {
                 loading -> CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(24.dp),
+                    modifier = Modifier.align(Alignment.Center).size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.appColors.accentInk,
+                    color = MaterialTheme.appColors.orange,
                 )
                 entries.isEmpty() -> EmptyWorkspace(Modifier.align(Alignment.Center))
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        start = Spacing.page - 6.dp,
-                        end = Spacing.page - 6.dp,
-                        top = 4.dp,
+                        start = Spacing.page - 4.dp,
+                        end = Spacing.page - 4.dp,
+                        top = 6.dp,
                         bottom = 30.dp,
                     ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(entries, key = { it.file.absolutePath }) { entry ->
-                        EntryRow(entry = entry, onClick = {
-                            if (entry.isDirectory) onEnter(entry.file) else onOpen(entry)
-                        })
-                        if (entry != entries.last()) {
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                modifier = Modifier.padding(start = 54.dp),
-                            )
-                        }
+                        EntryCard(
+                            entry = entry,
+                            onClick = {
+                                if (entry.isDirectory) onEnter(entry.file) else onOpen(entry)
+                            },
+                        )
                     }
                 }
             }
@@ -298,39 +296,38 @@ private fun Browser(
 }
 
 @Composable
-private fun EntryRow(entry: WorkspaceEntry, onClick: () -> Unit) {
+private fun EntryCard(entry: WorkspaceEntry, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val shape = RoundedCornerShape(12.dp)
     val background by animateColorAsState(
-        targetValue = if (pressed) MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)
-        else Color.Transparent,
+        targetValue = if (pressed) MaterialTheme.appColors.surface1
+        else MaterialTheme.appColors.paper,
         animationSpec = tween(Motion.FAST),
         label = "entry-press",
     )
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .heightIn(min = 60.dp)
+            .clip(shape)
             .background(background)
+            .border(1.dp, MaterialTheme.appColors.sand, shape)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 6.dp, vertical = 11.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (entry.kind == FileKind.IMAGE) {
-            ImageThumbnail(entry)
-        } else {
-            KindBadge(entry)
-        }
+        FileIconBlock(entry)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 entry.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.appColors.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -339,75 +336,69 @@ private fun EntryRow(entry: WorkspaceEntry, onClick: () -> Unit) {
                 if (entry.isDirectory) "文件夹"
                 else "${WorkspaceFiles.humanSize(entry.size)} · ${fileTime(entry.modifiedAt)}",
                 style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
-                color = MaterialTheme.appColors.faintText,
+                color = MaterialTheme.appColors.stone,
+                maxLines = 1,
             )
         }
-        if (entry.isDirectory) {
-            Text(
-                "›",
-                style = TextStyle(fontSize = 20.sp),
-                color = MaterialTheme.appColors.faintText,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun KindBadge(entry: WorkspaceEntry) {
-    val label = when {
-        entry.isDirectory -> "DIR"
-        entry.name.contains('.') -> entry.name.substringAfterLast('.').uppercase(Locale.ROOT).take(4)
-        else -> "FILE"
-    }
-    Box(
-        Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = TextStyle(
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.3.sp,
-            ),
-            color = MaterialTheme.appColors.faintText,
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            AppIcons.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.appColors.bone,
+            modifier = Modifier.size(15.dp),
         )
     }
 }
 
 @Composable
-private fun ImageThumbnail(entry: WorkspaceEntry) {
+private fun FileIconBlock(entry: WorkspaceEntry) {
+    val colors = MaterialTheme.appColors
+    val icon = when {
+        entry.isDirectory -> AppIcons.Folder
+        entry.kind == FileKind.IMAGE -> AppIcons.Image
+        entry.kind == FileKind.MARKDOWN || entry.kind == FileKind.HTML -> AppIcons.TextFile
+        isCodeName(entry.name) -> AppIcons.Code
+        entry.kind == FileKind.TEXT -> AppIcons.TextFile
+        else -> AppIcons.File
+    }
+    val tint = when {
+        entry.isDirectory -> colors.orange
+        entry.kind == FileKind.IMAGE -> colors.graphite
+        isCodeName(entry.name) -> colors.accentInk
+        entry.kind == FileKind.TEXT -> colors.graphite
+        else -> colors.stone
+    }
+    val fill = when {
+        entry.isDirectory -> colors.orangeSoft
+        entry.kind == FileKind.IMAGE -> colors.surface2
+        else -> colors.surface1
+    }
     Box(
         Modifier
-            .size(40.dp)
+            .size(36.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp)),
+            .background(fill)
+            .border(1.dp, colors.sand.copy(alpha = 0.55f), RoundedCornerShape(10.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        // Stays visible while Coil decodes, and remains as the fallback for a corrupt file.
-        Text(
-            "IMG",
-            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 9.sp),
-            color = MaterialTheme.appColors.faintText,
-        )
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(entry.file)
-                .size(120)
-                .crossfade(140)
-                .build(),
-            contentDescription = entry.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(17.dp),
         )
     }
+}
+
+private val CODE_EXTENSIONS = setOf(
+    "kt", "kts", "java", "py", "rb", "go", "rs", "c", "h", "cpp", "hpp",
+    "js", "mjs", "ts", "jsx", "tsx", "sh", "bash", "zsh", "sql",
+    "json", "jsonl", "yaml", "yml", "toml", "xml", "css", "scss", "gradle",
+)
+
+private fun isCodeName(name: String): Boolean {
+    val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    return extension in CODE_EXTENSIONS
 }
 
 @Composable
@@ -416,18 +407,19 @@ private fun EmptyWorkspace(modifier: Modifier = Modifier) {
         modifier.padding(horizontal = 38.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 34.dp, color = MaterialTheme.appColors.brand.copy(alpha = 0.65f))
+        ClaudeMark(size = 34.dp, color = MaterialTheme.appColors.orange.copy(alpha = 0.7f))
         Spacer(Modifier.height(16.dp))
         Text(
             "工作区还是空的",
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = MaterialTheme.appColors.ink,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "Claude 在 /work 里生成的文件会出现在这里。也可以从对话输入框的 + 导入手机文件。",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.stone,
             textAlign = TextAlign.Center,
         )
     }
@@ -463,60 +455,33 @@ private fun FilePreview(
         loading = false
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            AppIcons.Back,
-                            "返回",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                },
-                title = {
-                    Column {
+    Column(Modifier.fillMaxSize()) {
+        ClaudeTopBar(
+            title = file.name,
+            subtitle = "/work/$relative · ${WorkspaceFiles.humanSize(file.length())}",
+            onBack = onBack,
+            actions = {
+                if (kind == FileKind.HTML) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { sourceView = !sourceView }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
                         Text(
-                            file.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            "/work/$relative · ${WorkspaceFiles.humanSize(file.length())}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            if (sourceView) "预览" else "源码",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.appColors.accentInk,
                         )
                     }
-                },
-                actions = {
-                    if (kind == FileKind.HTML) {
-                        TextButton(onClick = { sourceView = !sourceView }) {
-                            Text(
-                                if (sourceView) "预览" else "源码",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.appColors.accentInk,
-                            )
-                        }
-                    }
-                    IconButton(onClick = { reload += 1 }) {
-                        Icon(
-                            AppIcons.Refresh,
-                            "重新加载",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(19.dp),
-                        )
-                    }
-                    IconButton(onClick = { menuOpen = true }) {
+                    Spacer(Modifier.width(2.dp))
+                }
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
                         Icon(
                             AppIcons.More,
                             "更多",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = MaterialTheme.appColors.graphite,
                             modifier = Modifier.size(20.dp),
                         )
                     }
@@ -537,14 +502,22 @@ private fun FilePreview(
                             },
                         )
                         DropdownMenuItem(
+                            text = { Text("重新加载") },
+                            leadingIcon = { Icon(AppIcons.Refresh, null) },
+                            onClick = {
+                                menuOpen = false
+                                reload += 1
+                            },
+                        )
+                        DropdownMenuItem(
                             text = {
-                                Text("删除文件", color = MaterialTheme.colorScheme.error)
+                                Text("删除文件", color = MaterialTheme.appColors.error)
                             },
                             leadingIcon = {
                                 Icon(
                                     AppIcons.Trash,
                                     null,
-                                    tint = MaterialTheme.colorScheme.error,
+                                    tint = MaterialTheme.appColors.error,
                                 )
                             },
                             onClick = {
@@ -553,15 +526,15 @@ private fun FilePreview(
                             },
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-            )
-        },
-    ) { padding ->
+                }
+            },
+        )
+
         Box(
             Modifier
-                .fillMaxSize()
-                .padding(padding)
+                .weight(1f)
+                .fillMaxWidth()
+                .navigationBarsPadding()
         ) {
             when {
                 loading -> CircularProgressIndicator(
@@ -569,7 +542,7 @@ private fun FilePreview(
                         .align(Alignment.Center)
                         .size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.appColors.accentInk,
+                    color = MaterialTheme.appColors.orange,
                 )
                 kind == FileKind.IMAGE -> ImagePreview(
                     file = file,
@@ -579,7 +552,7 @@ private fun FilePreview(
                 )
                 kind == FileKind.HTML && !sourceView && textPreview != null ->
                     HtmlPreview(textPreview!!.text, reload)
-                textPreview != null -> TextContent(kind, textPreview!!)
+                textPreview != null -> TextContent(kind, textPreview!!, file.name)
                 else -> BinaryContent(
                     file = entry,
                     onOpen = { openFile(context, entry) },
@@ -590,79 +563,165 @@ private fun FilePreview(
     }
 
     if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("删除文件") },
-            text = { Text("将永久删除「${file.name}」。此操作无法撤销。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    val deleted = runCatching { file.delete() }.getOrDefault(false)
-                    if (deleted) {
-                        Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
-                        onDeleted()
-                    } else {
-                        Toast.makeText(context, "删除失败，文件可能仍被占用", Toast.LENGTH_SHORT).show()
-                    }
-                }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
-            },
-            containerColor = MaterialTheme.colorScheme.surface,
-        )
+        ClaudeDialog(
+            title = "删除文件",
+            message = "将永久删除「${file.name}」。此操作无法撤销。",
+            onDismiss = { confirmDelete = false },
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                GhostButton(
+                    "取消",
+                    { confirmDelete = false },
+                    modifier = Modifier.weight(1f),
+                )
+                PrimaryButton(
+                    "删除",
+                    {
+                        confirmDelete = false
+                        val deleted = runCatching { file.delete() }.getOrDefault(false)
+                        if (deleted) {
+                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                            onDeleted()
+                        } else {
+                            Toast.makeText(context, "删除失败，文件可能仍被占用", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    destructive = true,
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun TextContent(kind: FileKind, preview: TextPreview) {
+private fun TextContent(kind: FileKind, preview: TextPreview, name: String) {
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.page, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         AnimatedVisibility(
             visible = preview.truncated,
             enter = expandVertically(tween(Motion.MEDIUM)) + fadeIn(tween(Motion.FAST)),
             exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
         ) {
-            Column {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "文件较大，仅预览前 ${WorkspaceFiles.humanSize(WorkspaceFiles.PREVIEW_LIMIT.toLong())}；可分享或导出后查看完整内容。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 10.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.appColors.surface1)
+                    .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    "文件较大，仅预览前 ${WorkspaceFiles.humanSize(WorkspaceFiles.PREVIEW_LIMIT.toLong())}；" +
+                        "可分享或导出后查看完整内容。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.appColors.graphite,
+                )
             }
         }
-        SelectionContainer {
-            if (kind == FileKind.MARKDOWN) {
-                MarkdownText(preview.text, Modifier.fillMaxWidth())
-            } else {
+        if (kind == FileKind.MARKDOWN) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                SelectionContainer {
+                    MarkdownText(preview.text, Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(30.dp))
+            }
+        } else {
+            val extension = if (kind == FileKind.HTML) "HTML"
+            else name.substringAfterLast('.', "").uppercase(Locale.ROOT).take(8).ifBlank { "TEXT" }
+            CodePreview(
+                text = preview.text.ifBlank { "（空文件）" },
+                label = extension,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** Dark mono surface for source/log previews, with horizontal scroll and copy. */
+@Composable
+private fun CodePreview(text: String, label: String, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(text) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1200)
+            copied = false
+        }
+    }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.appColors.codeBg)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .padding(start = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.5.sp,
+                    letterSpacing = 0.6.sp,
+                ),
+                color = MaterialTheme.appColors.codeFg.copy(alpha = 0.55f),
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable {
+                        clipboard.setText(AnnotatedString(text))
+                        copied = true
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (copied) AppIcons.Check else AppIcons.Copy,
+                    contentDescription = "复制",
+                    tint = MaterialTheme.appColors.codeFg.copy(alpha = 0.7f),
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.appColors.codeFg.copy(alpha = 0.08f))
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 11.dp)
+        ) {
+            SelectionContainer {
                 Text(
-                    preview.text.ifBlank { "（空文件）" },
+                    text,
                     style = TextStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.5.sp,
                         lineHeight = 19.sp,
                     ),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.appColors.codeFg,
                 )
             }
         }
-        Spacer(Modifier.height(30.dp))
     }
 }
 
@@ -716,7 +775,7 @@ private fun HtmlPreview(html: String, reload: Int) {
             CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
                 strokeWidth = 2.dp,
-                color = MaterialTheme.appColors.accentInk,
+                color = MaterialTheme.appColors.orange,
             )
         }
     }
@@ -735,50 +794,40 @@ private fun BinaryContent(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        KindBadge(file)
-        Spacer(Modifier.height(16.dp))
+        Box(
+            Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.appColors.surface1)
+                .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(16.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                AppIcons.File,
+                contentDescription = null,
+                tint = MaterialTheme.appColors.stone,
+                modifier = Modifier.size(24.dp),
+            )
+        }
+        Spacer(Modifier.height(18.dp))
         Text(
             "无法在应用内预览",
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = MaterialTheme.appColors.ink,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "二进制或超大文件可以交给其他应用打开，或直接分享。",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.appColors.stone,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(22.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PreviewAction("打开", primary = true, onClick = onOpen)
-            PreviewAction("分享", primary = false, onClick = onShare)
+            PrimaryButton("打开", onOpen)
+            GhostButton("分享", onShare)
         }
-    }
-}
-
-@Composable
-private fun PreviewAction(text: String, primary: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(
-                if (primary) MaterialTheme.appColors.accentInk
-                else MaterialTheme.colorScheme.surfaceContainer
-            )
-            .border(
-                1.dp,
-                if (primary) MaterialTheme.appColors.accentInk else MaterialTheme.colorScheme.outlineVariant,
-                RoundedCornerShape(22.dp),
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp)
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (primary) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        )
     }
 }
 
@@ -795,7 +844,7 @@ private fun ImagePreview(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .background(MaterialTheme.appColors.canvas)
             .clipToBounds()
             .onSizeChanged { bounds = it }
             .pointerInput(file) {
@@ -834,7 +883,7 @@ private fun ImagePreview(
                 CircularProgressIndicator(
                     modifier = Modifier.size(24.dp),
                     strokeWidth = 2.dp,
-                    color = MaterialTheme.appColors.accentInk,
+                    color = MaterialTheme.appColors.orange,
                 )
             },
             error = { BinaryContent(entry, onOpen, onShare) },

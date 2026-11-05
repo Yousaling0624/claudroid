@@ -268,6 +268,10 @@ class EngineManager(
         }
         val signature = listOf(
             settings.baseUrl, settings.apiKey, settings.authStyle.name, settings.model,
+            // The proxy resolves tier aliases from a settings snapshot taken at start, so
+            // every field that changes that resolution must force a rebuild.
+            settings.activeTier, settings.opusModel, settings.fableModel,
+            settings.sonnetModel, settings.haikuModel, settings.smallModel,
         ).joinToString("|")
         val current = proxy
         if (current != null && proxySignature == signature) {
@@ -482,7 +486,7 @@ class EngineManager(
                 }
             }
         }
-        if (s.model.isNotBlank()) env["ANTHROPIC_MODEL"] = s.model
+        EngineEnv.applyModel(env, s)
         env["DISABLE_TELEMETRY"] = "1"
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_AUTOUPDATER"] = "1"
@@ -491,4 +495,7 @@ class EngineManager(
     }
 
     fun cancel() = engine.cancel()
+
+    /** Clears a stop from the previous turn before a new one starts. */
+    fun resetCancel() = engine.resetCancel()
 }

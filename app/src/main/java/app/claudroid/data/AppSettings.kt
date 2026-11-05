@@ -36,8 +36,19 @@ data class AppSettings(
     val apiKey: String = "",
     // Anthropic's public API authenticates with x-api-key; most gateways want Bearer.
     val authStyle: AuthStyle = AuthStyle.API_KEY,
-    val model: String = "claude-sonnet-4-5",
+    val model: String = "claude-sonnet-5-5",
     val smallModel: String = "",
+    /**
+     * Which Claude Code tier the next turn should request. Empty keeps the legacy
+     * behavior: [model] is passed to `--model` as-is. A non-empty value is an
+     * [ModelTier.name] and is passed as a CLI alias so per-tier mappings apply.
+     */
+    val activeTier: String = "",
+    /** Concrete backend model for each tier; blank means "official/CLI default". */
+    val opusModel: String = "",
+    val fableModel: String = "",
+    val sonnetModel: String = "",
+    val haikuModel: String = "",
     val permissionMode: PermissionMode = PermissionMode.BYPASS,
     val engineMode: EngineMode = EngineMode.AUTO,
     val autoUpdate: Boolean = true,
@@ -81,6 +92,72 @@ data class AppSettings(
         if (url.endsWith("/v1")) url = url.removeSuffix("/v1")
         return url.ifBlank { "https://api.anthropic.com" }
     }
+
+    /** Null means "no tier selected"; callers should fall back to [model]. */
+    val resolvedActiveTier: ModelTier?
+        get() = ModelTier.fromStored(activeTier)
+
+    fun tierModel(tier: ModelTier): String = when (tier) {
+        ModelTier.OPUS -> opusModel
+        ModelTier.FABLE -> fableModel
+        ModelTier.SONNET -> sonnetModel
+        ModelTier.HAIKU -> haikuModel
+    }.trim()
+
+    /** Keeps the per-tier mapping update in one place for the settings UI. */
+    fun withTierModel(tier: ModelTier, value: String): AppSettings {
+        val clean = value.trim()
+        return when (tier) {
+            ModelTier.OPUS -> copy(opusModel = clean)
+            ModelTier.FABLE -> copy(fableModel = clean)
+            ModelTier.SONNET -> copy(sonnetModel = clean)
+            ModelTier.HAIKU -> copy(haikuModel = clean)
+        }
+    }
+
+    /**
+     * A concrete model for gateways that cannot understand tier aliases. An unmapped
+     * tier falls back to [model], which is also what existing installs already use.
+     */
+    fun modelForTier(tier: ModelTier): String = tierModel(tier).ifBlank { model.trim() }
+
+    /**
+     * True when [candidate] already is one of the concrete models configured for a tier.
+     * The CLI may resolve an alias against `ANTHROPIC_DEFAULT_*_MODEL` before it reaches
+     * the local OpenAI proxy, so the proxy must recognize that mapped id and forward it
+     * instead of replacing it with the global default model.
+     */
+    fun isConfiguredTierModel(candidate: String): Boolean {
+        val value = candidate.trim()
+        if (value.isEmpty()) return false
+        return ModelTier.entries.any { tierModel(it).equals(value, ignoreCase = true) }
+    }
+
+    /**
+     * What `--model` receives. A tier alias keeps the CLI's own prompt/model routing
+     * intact and is what makes the per-tier env mappings take effect.
+     */
+    fun effectiveModelArg(): String = resolvedActiveTier?.alias ?: model.trim()
+
+    /**
+     * Env overrides understood by Claude Code. Empty tiers are omitted so the CLI's
+     * built-in defaults still apply; user-supplied `extraEnv` is merged later and wins.
+     *
+     * Haiku doubles as the small/fast model unless an explicit small model is set, the
+     * same fallback Magpie uses for `ANTHROPIC_SMALL_FAST_MODEL`.
+     */
+    fun modelEnv(): Map<String, String> = buildMap {
+        tierModel(ModelTier.OPUS).takeIf { it.isNotBlank() }
+            ?.let { put("ANTHROPIC_DEFAULT_OPUS_MODEL", it) }
+        tierModel(ModelTier.FABLE).takeIf { it.isNotBlank() }
+            ?.let { put("ANTHROPIC_DEFAULT_FABLE_MODEL", it) }
+        tierModel(ModelTier.SONNET).takeIf { it.isNotBlank() }
+            ?.let { put("ANTHROPIC_DEFAULT_SONNET_MODEL", it) }
+        tierModel(ModelTier.HAIKU).takeIf { it.isNotBlank() }
+            ?.let { put("ANTHROPIC_DEFAULT_HAIKU_MODEL", it) }
+        val small = smallModel.trim().ifBlank { tierModel(ModelTier.HAIKU) }
+        if (small.isNotBlank()) put("ANTHROPIC_SMALL_FAST_MODEL", small)
+    }
 }
 
 /** One-tap provider setup. Keeps the existing API key when applied. */
@@ -102,8 +179,8 @@ object Providers {
             flavor = ApiFlavor.ANTHROPIC,
             baseUrl = "https://api.anthropic.com",
             authStyle = AuthStyle.API_KEY,
-            model = "claude-sonnet-4-5",
-            hint = "官方 Messages API，需要 x-api-key",
+            model = "claude-sonnet-5-5",
+            hint = "官方 Messages API，需要 x-api-key；可在模型档位里映射 Opus/Fable/Sonnet/Haiku",
         ),
         ProviderPreset(
             id = "deepseek-anthropic",
@@ -148,5 +225,13 @@ object Providers {
         baseUrl = preset.baseUrl,
         authStyle = preset.authStyle,
         model = preset.model,
+        // Mappings name concrete models on the old backend. Carrying them over would
+        // silently override the preset model (and often point at ids that do not exist).
+        activeTier = "",
+        smallModel = "",
+        opusModel = "",
+        fableModel = "",
+        sonnetModel = "",
+        haikuModel = "",
     )
 }

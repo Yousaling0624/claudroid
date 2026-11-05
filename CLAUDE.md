@@ -16,3 +16,11 @@
 - 签名密钥只放 GitHub Secrets；仓库和日志里绝不能出现 API Key / 密码。
 - commit 标题使用 `Android：一句话总结`，正文用列表写具体改动（Release notes 会直接使用）。
 - 提交/推送遵循用户当次指示；push `main` 后 CI 自动构建并发布 APK。
+
+## Agent team
+
+`.claude/agents/` 定义了按模块划分的 subagent。主会话作为 team lead 自动分派，用户不需要点名：
+
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`；`engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；验证与提交前审查 → `qa-reviewer`。
+- 跨领域任务并行分派互不重叠的部分，由主会话汇总；小改动或纯问答直接处理，不必强开 subagent。
+- commit/push 仍由主会话按用户当次指示执行，subagent 不自行提交。

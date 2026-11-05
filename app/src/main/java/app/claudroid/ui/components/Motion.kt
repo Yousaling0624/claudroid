@@ -19,7 +19,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -29,15 +28,17 @@ import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.appColors
 
 /**
- * One place for the app's motion vocabulary. Claude's own UI moves in short,
- * decelerating fades rather than bouncy springs; keeping the curves here avoids
- * every screen inventing its own timing.
+ * One place for the app's motion vocabulary. Chrome moves in short, decelerating
+ * fades rather than bouncy springs; keeping the curves here avoids every screen
+ * inventing its own timing.
  */
 object Motion {
-    const val FAST = 150
-    const val MEDIUM = 260
-    const val SLOW = 420
+    const val FAST = 120
+    const val MEDIUM = 180
+    const val SLOW = 240
 
+    /** Material's standard deceleration curve: quick out, soft landing. */
+    val EaseChrome = CubicBezierEasing(0f, 0f, 0.2f, 1f)
     val EaseOut = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
     val EaseInOut = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)
 
@@ -52,7 +53,7 @@ object Motion {
 @Composable
 fun TypingDots(
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.primary,
+    color: Color = MaterialTheme.appColors.orange,
     dotSize: Dp = 3.5.dp,
 ) {
     val transition = rememberInfiniteTransition(label = "typing")
@@ -85,12 +86,12 @@ fun TypingDots(
 fun RotatingChevron(
     expanded: Boolean,
     modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.appColors.faintText,
+    tint: Color = MaterialTheme.appColors.stone,
     size: Dp = 16.dp,
 ) {
     val rotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
+        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseChrome),
         label = "chevron",
     )
     Icon(

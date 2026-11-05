@@ -55,4 +55,94 @@ class AppSettingsTest {
         assertEquals("deepseek-chat", next.model)
         assertEquals("sk-secret", next.apiKey)
     }
+
+    @Test
+    fun `switching providers clears tier routing and the small model`() {
+        val current = AppSettings(
+            apiKey = "sk-secret",
+            model = "old-default",
+            activeTier = ModelTier.OPUS.name,
+            opusModel = "old-opus",
+            fableModel = "old-fable",
+            sonnetModel = "old-sonnet",
+            haikuModel = "old-haiku",
+            smallModel = "old-small",
+        )
+        val next = Providers.apply(current, Providers.all.first { it.id == "deepseek" })
+
+        assertEquals("", next.activeTier)
+        assertEquals("", next.opusModel)
+        assertEquals("", next.fableModel)
+        assertEquals("", next.sonnetModel)
+        assertEquals("", next.haikuModel)
+        assertEquals("", next.smallModel)
+        assertEquals("sk-secret", next.apiKey)
+        assertEquals("deepseek-chat", next.model)
+    }
+
+    @Test
+    fun `an active tier is passed as an alias but keeps mapped models in env`() {
+        val settings = AppSettings(
+            model = "deepseek-chat",
+            activeTier = ModelTier.OPUS.name,
+            opusModel = "deepseek-reasoner",
+            fableModel = "fable-pro",
+            sonnetModel = "",
+            haikuModel = "deepseek-flash",
+        )
+
+        assertEquals("opus", settings.effectiveModelArg())
+        assertEquals("deepseek-reasoner", settings.modelForTier(ModelTier.OPUS))
+        assertEquals(
+            mapOf(
+                "ANTHROPIC_DEFAULT_OPUS_MODEL" to "deepseek-reasoner",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL" to "fable-pro",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL" to "deepseek-flash",
+                "ANTHROPIC_SMALL_FAST_MODEL" to "deepseek-flash",
+            ),
+            settings.modelEnv(),
+        )
+    }
+
+    @Test
+    fun `no active tier keeps the raw model and explicit small model wins`() {
+        val settings = AppSettings(
+            model = "deepseek-chat",
+            smallModel = "small-explicit",
+            haikuModel = "haiku-mapped",
+        )
+
+        assertEquals("deepseek-chat", settings.effectiveModelArg())
+        assertEquals("deepseek-chat", settings.modelForTier(ModelTier.SONNET))
+        assertEquals(
+            mapOf(
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL" to "haiku-mapped",
+                "ANTHROPIC_SMALL_FAST_MODEL" to "small-explicit",
+            ),
+            settings.modelEnv(),
+        )
+    }
+
+    @Test
+    fun `tier mapping updates only the selected tier and trims input`() {
+        val updated = AppSettings()
+            .withTierModel(ModelTier.FABLE, "  fable-pro  ")
+            .withTierModel(ModelTier.HAIKU, "fast")
+
+        assertEquals("fable-pro", updated.fableModel)
+        assertEquals("fast", updated.haikuModel)
+        assertEquals("", updated.opusModel)
+        assertEquals("", updated.sonnetModel)
+    }
+
+    @Test
+    fun `tier aliases match bare names and official model ids`() {
+        assertEquals(ModelTier.OPUS, ModelTier.fromAliasOrId("opus"))
+        assertEquals(ModelTier.OPUS, ModelTier.fromAliasOrId("claude-opus-5-5"))
+        assertEquals(ModelTier.SONNET, ModelTier.fromAliasOrId("anthropic/claude-sonnet-4.5"))
+        assertEquals(ModelTier.HAIKU, ModelTier.fromAliasOrId("claude-3-5-haiku-20241022"))
+        assertEquals(ModelTier.FABLE, ModelTier.fromStored("fable"))
+        assertEquals(null, ModelTier.fromAliasOrId("gpt-4o"))
+        assertEquals(null, ModelTier.fromAliasOrId("deepseek-chat"))
+    }
 }

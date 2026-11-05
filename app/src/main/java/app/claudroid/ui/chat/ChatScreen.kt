@@ -10,7 +10,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -28,11 +27,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -45,6 +43,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -54,23 +53,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -85,9 +76,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -96,47 +88,66 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.AppContainer
 import app.claudroid.core.Attachments
 import app.claudroid.core.WebSource
 import app.claudroid.core.WebSources
+import app.claudroid.data.AppSettings
 import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.Role
+import app.claudroid.ui.components.ClaudeComposer
 import app.claudroid.ui.components.ClaudeMark
+import app.claudroid.ui.components.ModelPickerSheet
 import app.claudroid.ui.components.Motion
 import app.claudroid.ui.components.RotatingChevron
 import app.claudroid.ui.components.TypingDots
+import app.claudroid.ui.components.chatModelLabel
+import app.claudroid.ui.components.composerModelLabel
 import app.claudroid.ui.md.MarkdownText
 import app.claudroid.ui.theme.AppIcons
-import app.claudroid.ui.theme.Spacing
+import app.claudroid.ui.theme.AppType
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     container: AppContainer,
     sessionId: String,
-    onBack: () -> Unit,
+    initialPrompt: String?,
+    onInitialPromptConsumed: () -> Unit,
+    onOpenDrawer: () -> Unit,
     onOpenWorkspace: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onBack: () -> Unit,
 ) {
     val controller = remember(sessionId) { container.chat(sessionId) }
-    LaunchedEffect(sessionId) { controller.load() }
+    // Loading must complete before a handed-off first prompt is sent; doing both in
+    // one effect avoids the MainActivity/session-load race entirely.
+    LaunchedEffect(sessionId, initialPrompt) {
+        controller.load()
+        if (initialPrompt != null) {
+            controller.send(initialPrompt)
+            onInitialPromptConsumed()
+        }
+    }
 
     val messages by controller.messages.collectAsState()
     val running by controller.running.collectAsState()
     val status by controller.status.collectAsState()
     val title by controller.title.collectAsState()
+    val settings by container.settings.flow.collectAsState(initial = AppSettings())
 
     var input by rememberSaveable(sessionId) { mutableStateOf("") }
     var menuOpen by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -193,149 +204,176 @@ fun ChatScreen(
         scope.launch { listState.animateToBottom() }
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            AppIcons.Back,
-                            "返回",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
+    val model = chatModelLabel(settings)
+    val statusLine = chatStatusLine(running = running, rawStatus = status, model = model)
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .navigationBarsPadding()
+            .imePadding()
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(56.dp)
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onOpenDrawer, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    AppIcons.Menu,
+                    "会话记录",
+                    tint = MaterialTheme.appColors.graphite,
+                    modifier = Modifier.size(21.dp),
+                )
+            }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(horizontal = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.appColors.ink,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (running) {
+                        TypingDots(dotSize = 2.6.dp)
+                        Spacer(Modifier.width(5.dp))
                     }
-                },
-                title = {
-                    Column {
+                    AnimatedContent(
+                        targetState = statusLine,
+                        transitionSpec = {
+                            fadeIn(tween(Motion.FAST)) togetherWith fadeOut(tween(Motion.FAST))
+                        },
+                        label = "status",
+                    ) { line ->
                         Text(
-                            title,
+                            line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.appColors.stone,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (running) {
-                                TypingDots(dotSize = 3.dp)
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            AnimatedContent(
-                                targetState = status.ifBlank { if (running) "正在思考…" else "Claude Code" },
-                                transitionSpec = {
-                                    fadeIn(tween(Motion.FAST)) togetherWith fadeOut(tween(Motion.FAST))
-                                },
-                                label = "status",
-                            ) { line ->
-                                Text(
-                                    line,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.appColors.faintText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(
-                            AppIcons.More,
-                            "更多",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
                         )
                     }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text("工作区文件") },
-                            leadingIcon = { Icon(AppIcons.Workspace, null) },
-                            onClick = {
-                                menuOpen = false
-                                onOpenWorkspace()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("清空对话上下文") },
-                            leadingIcon = { Icon(AppIcons.Trash, null) },
-                            onClick = {
-                                menuOpen = false
-                                controller.clear()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("返回对话列表") },
-                            onClick = {
-                                menuOpen = false
-                                onBack()
-                            },
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .imePadding()
-        ) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (messages.isEmpty()) {
-                    EmptyChat(
-                        modifier = Modifier.fillMaxSize(),
-                        onPick = { input = it },
+                }
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        AppIcons.More,
+                        "更多",
+                        tint = MaterialTheme.appColors.graphite,
+                        modifier = Modifier.size(20.dp),
                     )
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(22.dp),
-                    ) {
-                        items(messages, key = { it.id }) { message ->
-                            Box(
-                                Modifier.animateItem(
-                                    fadeInSpec = tween(240),
-                                    fadeOutSpec = tween(140),
-                                    placementSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow,
-                                    ),
-                                )
-                            ) {
-                                MessageRow(message)
-                            }
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("工作区文件") },
+                        leadingIcon = { Icon(AppIcons.Folder, null) },
+                        onClick = {
+                            menuOpen = false
+                            onOpenWorkspace()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("清空对话上下文") },
+                        leadingIcon = { Icon(AppIcons.Trash, null) },
+                        onClick = {
+                            menuOpen = false
+                            controller.clear()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("返回首页") },
+                        leadingIcon = { Icon(AppIcons.Back, null) },
+                        onClick = {
+                            menuOpen = false
+                            onBack()
+                        },
+                    )
+                }
+            }
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (messages.isEmpty()) {
+                EmptyChat(
+                    modifier = Modifier.fillMaxSize(),
+                    onPick = { input = it },
+                )
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(32.dp),
+                ) {
+                    items(messages, key = { it.id }) { message ->
+                        Box(
+                            Modifier.animateItem(
+                                fadeInSpec = tween(240),
+                                fadeOutSpec = tween(140),
+                                placementSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                ),
+                            )
+                        ) {
+                            MessageRow(
+                                message = message,
+                                model = model,
+                                statusLine = statusLine,
+                            )
                         }
                     }
                 }
-
-                BackToBottomButton(
-                    visible = messages.isNotEmpty() && !followBottom,
-                    onClick = { jumpToBottom() },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 10.dp),
-                )
             }
 
-            Composer(
-                value = input,
-                onValueChange = { input = it },
-                running = running,
-                onSend = {
-                    val text = input
-                    input = ""
-                    followBottom = true
-                    controller.send(text)
-                },
-                onStop = { controller.stop() },
-                onAttach = { filePicker.launch(arrayOf("*/*")) },
+            BackToBottomButton(
+                visible = messages.isNotEmpty() && !followBottom,
+                onClick = { jumpToBottom() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 10.dp),
             )
         }
+
+        ClaudeComposer(
+            value = input,
+            onValueChange = { input = it },
+            placeholder = "回复 Claude…",
+            model = composerModelLabel(settings),
+            running = running,
+            onSend = {
+                val text = input
+                input = ""
+                followBottom = true
+                controller.send(text)
+            },
+            onStop = { controller.stop() },
+            onAttach = { filePicker.launch(arrayOf("*/*")) },
+            onModelClick = { showModelPicker = true },
+        )
+    }
+
+    if (showModelPicker) {
+        ModelPickerSheet(
+            settings = settings,
+            onSelectTier = { tier ->
+                scope.launch {
+                    container.settings.edit { it.copy(activeTier = tier?.name ?: "") }
+                }
+            },
+            onManageTiers = onOpenSettings,
+            onDismiss = { showModelPicker = false },
+        )
     }
 }
 
@@ -351,27 +389,21 @@ private fun BackToBottomButton(
         exit = fadeOut(tween(Motion.FAST)) + scaleOut(tween(Motion.FAST), targetScale = 0.8f),
         modifier = modifier,
     ) {
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 2.dp,
-            border = androidx.compose.foundation.BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outline,
-            ),
-            modifier = Modifier
+        Box(
+            Modifier
                 .size(40.dp)
                 .clip(CircleShape)
+                .background(MaterialTheme.appColors.paper)
+                .border(1.dp, MaterialTheme.appColors.sand, CircleShape)
                 .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    AppIcons.ChevronDown,
-                    "回到底部",
-                    tint = MaterialTheme.appColors.faintText,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+            Icon(
+                AppIcons.ChevronDown,
+                "回到底部",
+                tint = MaterialTheme.appColors.stone,
+                modifier = Modifier.size(19.dp),
+            )
         }
     }
 }
@@ -399,7 +431,7 @@ private suspend fun LazyListState.animateToBottom() {
     val tail = layoutInfo.visibleItemsInfo.lastOrNull() ?: return
     val overflow = tail.offset + tail.size - layoutInfo.viewportEndOffset
     if (overflow > 0) {
-        animateScrollBy(overflow.toFloat(), tween(Motion.MEDIUM, easing = Motion.EaseOut))
+        animateScrollBy(overflow.toFloat(), tween(Motion.MEDIUM, easing = Motion.EaseChrome))
     }
 }
 
@@ -417,28 +449,28 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ClaudeMark(size = 34.dp, color = MaterialTheme.appColors.brand)
-        Spacer(Modifier.height(20.dp))
+        ClaudeMark(size = 30.dp)
+        Spacer(Modifier.height(18.dp))
         Text(
-            "今天想做什么？",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
+            "开始对话",
+            style = AppType.assistantHeadingLarge,
+            color = MaterialTheme.appColors.ink,
         )
         Spacer(Modifier.height(8.dp))
         Text(
             "它跑在你手机里的 Claude Code：PRoot 免 root 就能读写工作区，root 模式下还能改系统、刷 Magisk 模块。",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            color = MaterialTheme.appColors.graphite,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(22.dp))
         hints.forEach { hint ->
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.appColors.paper)
+                    .border(1.dp, MaterialTheme.appColors.sand, RoundedCornerShape(12.dp))
                     .clickable { onPick(hint) }
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -446,13 +478,13 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
                 Text(
                     hint,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.appColors.ink,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     "↵",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.appColors.faintText,
+                    color = MaterialTheme.appColors.stone,
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -461,162 +493,184 @@ private fun EmptyChat(modifier: Modifier = Modifier, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun MessageRow(message: ChatMessage) {
+private fun MessageRow(message: ChatMessage, model: String, statusLine: String) {
     when (message.role) {
-        Role.USER -> Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp),
-                modifier = Modifier.widthIn(max = 320.dp),
+        Role.USER -> UserBubble(message)
+
+        Role.ASSISTANT -> AssistantMessage(message, model, statusLine)
+
+        Role.SYSTEM -> message.blocks.forEach { block ->
+            if (block is Block.Error) ErrorNotice(block.text)
+        }
+    }
+}
+
+@Composable
+private fun UserBubble(message: ChatMessage) {
+    val text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n") { it.text }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val maxBubbleWidth = maxWidth * 0.8f
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Box(
+                Modifier
+                    .widthIn(max = maxBubbleWidth)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(MaterialTheme.appColors.surface1)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 SelectionContainer {
                     Text(
-                        text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n") { it.text },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
+                        text = text,
+                        style = AppType.userBody,
+                        color = MaterialTheme.appColors.ink,
                     )
                 }
             }
-        }
-
-        Role.ASSISTANT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-            ClaudeMark(
-                size = 18.dp,
-                pulse = message.streaming,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
-                if (message.streaming) {
-                    Row(
-                        Modifier.padding(bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TypingDots(dotSize = 3.dp)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "正在回复",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.appColors.faintText,
-                        )
-                    }
-                }
-                val lastTextIndex = message.blocks.indexOfLast { it is Block.Text }
-                message.blocks.forEachIndexed { index, block ->
-                    when (block) {
-                        is Block.Text -> SelectionContainer {
-                            MarkdownText(
-                                block.text,
-                                Modifier.fillMaxWidth(),
-                                streaming = message.streaming && index == lastTextIndex,
-                            )
-                        }
-                        is Block.Thinking -> ThinkingRow(block.text)
-                        is Block.Tool -> ToolCard(block)
-                        is Block.Error -> ErrorText(block.text)
-                    }
-                }
-                if (!message.streaming) {
-                    val meta = buildList {
-                        message.costUsd?.takeIf { it > 0 }?.let { add("≈$" + "%.4f".format(it)) }
-                        message.durationMs?.takeIf { it > 0 }?.let {
-                            add(if (it >= 60_000) "${it / 60_000}m ${(it % 60_000) / 1000}s"
-                            else "%.1fs".format(it / 1000.0))
-                        }
-                    }
-                    if (meta.isNotEmpty()) {
-                        Text(
-                            meta.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall.merge(
-                                TextStyle(fontFeatureSettings = "tnum")
-                            ),
-                            color = MaterialTheme.appColors.faintText,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        Role.SYSTEM -> message.blocks.forEach { block ->
-            if (block is Block.Error) ErrorText(block.text)
         }
     }
 }
 
 @Composable
-private fun ErrorText(text: String) {
-    Row(
+private fun AssistantMessage(message: ChatMessage, model: String, statusLine: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ClaudeMark(size = 18.dp, pulse = message.streaming)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Claude",
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+                color = MaterialTheme.appColors.ink,
+            )
+            Spacer(Modifier.width(7.dp))
+            Text(
+                if (message.streaming) statusLine else model,
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.Normal),
+                color = MaterialTheme.appColors.stone,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+
+        if (message.streaming && message.blocks.isEmpty()) {
+            ThinkingPill(text = "", active = true, placeholder = true)
+        }
+
+        val lastTextIndex = message.blocks.indexOfLast { it is Block.Text }
+        message.blocks.forEachIndexed { index, block ->
+            when (block) {
+                is Block.Text -> SelectionContainer {
+                    MarkdownText(
+                        block.text,
+                        Modifier.fillMaxWidth(),
+                        streaming = message.streaming && index == lastTextIndex,
+                    )
+                }
+                is Block.Thinking -> ThinkingPill(
+                    text = block.text,
+                    active = message.streaming && index == message.blocks.lastIndex,
+                )
+                is Block.Tool -> ToolCard(block)
+                is Block.Error -> ErrorNotice(block.text)
+            }
+        }
+
+        if (!message.streaming) {
+            val meta = buildList {
+                message.costUsd?.takeIf { it > 0 }?.let { add("≈$" + "%.4f".format(it)) }
+                message.durationMs?.takeIf { it > 0 }?.let {
+                    add(
+                        if (it >= 60_000) "${it / 60_000}m ${(it % 60_000) / 1000}s"
+                        else "%.1fs".format(it / 1000.0)
+                    )
+                }
+            }
+            if (meta.isNotEmpty()) {
+                Text(
+                    meta.joinToString(" · "),
+                    style = AppType.caption.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.appColors.stone,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ErrorNotice(text: String) {
+    val error = MaterialTheme.appColors.error
+    Column(
         Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(error.copy(alpha = 0.06f))
+            .border(1.dp, error.copy(alpha = 0.28f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        Box(
-            Modifier
-                .padding(top = 3.dp)
-                .size(2.dp, 16.dp)
-                .background(MaterialTheme.colorScheme.error, RoundedCornerShape(1.dp))
-        )
-        Spacer(Modifier.width(10.dp))
         SelectionContainer {
             Text(
                 text,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 19.sp),
+                color = error,
             )
         }
     }
 }
 
 @Composable
-private fun ThinkingRow(text: String) {
+private fun ThinkingPill(text: String, active: Boolean, placeholder: Boolean = false) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+    val colors = MaterialTheme.appColors
     Column(Modifier.padding(top = 10.dp)) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(9.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .clickable { expanded = !expanded }
+                .clip(RoundedCornerShape(14.dp))
+                .background(colors.orangeSoft)
+                .clickable(enabled = !placeholder) { expanded = !expanded }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            ClaudeMark(size = 14.dp, pulse = active)
+            Spacer(Modifier.width(6.dp))
             Text(
-                if (expanded) "思考过程" else "思考过程 · ${text.length} 字",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                when {
+                    active -> "思考中…"
+                    else -> "思考过程 · ${text.length} 字"
+                },
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                color = colors.accentInk,
             )
-            Spacer(Modifier.width(4.dp))
-            RotatingChevron(
-                expanded = expanded,
-                tint = MaterialTheme.appColors.faintText,
-                size = 15.dp,
-            )
+            if (!placeholder) {
+                Spacer(Modifier.width(3.dp))
+                RotatingChevron(expanded = expanded, tint = colors.accentInk, size = 14.dp)
+            }
         }
         AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseOut)) + fadeIn(tween(Motion.FAST)),
+            visible = expanded && !placeholder,
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
             exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
         ) {
-            Row(Modifier.padding(top = 6.dp)) {
-                Box(
-                    Modifier
-                        .width(2.dp)
-                        .heightIn(min = 18.dp)
-                        .background(MaterialTheme.colorScheme.outline, RoundedCornerShape(1.dp))
+            SelectionContainer {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                    ),
+                    color = colors.graphite,
+                    modifier = Modifier
+                        .padding(top = 8.dp, start = 13.dp, end = 4.dp)
+                        .drawBehind {
+                            drawRect(
+                                color = colors.sand,
+                                topLeft = Offset.Zero,
+                                size = Size(2.dp.toPx(), size.height),
+                            )
+                        }
+                        .padding(start = 10.dp),
                 )
-                Spacer(Modifier.width(10.dp))
-                SelectionContainer {
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
         }
     }
@@ -625,6 +679,7 @@ private fun ThinkingRow(text: String) {
 @Composable
 private fun ToolCard(block: Block.Tool) {
     var expanded by rememberSaveable(block.id) { mutableStateOf(false) }
+    val colors = MaterialTheme.appColors
     val detail = toolDetail(block)
     val sources = remember(block.name, block.output) {
         val isSearch = block.name.equals("WebSearch", ignoreCase = true) ||
@@ -635,8 +690,8 @@ private fun ToolCard(block: Block.Tool) {
     val pulseAlpha = if (block.running) {
         val pulse = rememberInfiniteTransition(label = "tool-pulse")
         pulse.animateFloat(
-            initialValue = 0.35f,
-            targetValue = 0.9f,
+            initialValue = 0.3f,
+            targetValue = 0.75f,
             animationSpec = infiniteRepeatable(
                 animation = tween(1000, easing = Motion.EaseInOut),
                 repeatMode = RepeatMode.Reverse,
@@ -645,88 +700,97 @@ private fun ToolCard(block: Block.Tool) {
         ).value
     } else 0f
     val borderColor by animateColorAsState(
-        targetValue = if (block.running) MaterialTheme.colorScheme.primary.copy(alpha = pulseAlpha)
-        else MaterialTheme.colorScheme.outlineVariant,
+        targetValue = if (block.running) colors.orange.copy(alpha = pulseAlpha) else colors.sand,
         animationSpec = tween(Motion.FAST),
         label = "tool-border-color",
     )
+    val shape = RoundedCornerShape(12.dp)
     Column(
         Modifier
             .fillMaxWidth()
             .padding(top = 10.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .clip(shape)
+            .background(colors.paper)
+            .border(1.dp, borderColor, shape)
             .animateContentSize(),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 11.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 Modifier
-                    .size(20.dp)
+                    .size(22.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    .background(colors.surface1),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     "›_",
                     fontSize = 8.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.stone,
                 )
             }
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f)) {
-                Text(block.name, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    block.name,
+                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+                    color = colors.ink,
+                )
                 if (detail.isNotBlank()) {
                     Text(
                         detail,
-                        style = MaterialTheme.typography.bodySmall.copy(
+                        style = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
+                            lineHeight = 15.sp,
                         ),
-                        color = MaterialTheme.appColors.faintText,
+                        color = colors.stone,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
             when {
-                block.running -> CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    strokeWidth = 1.6.dp,
-                    color = MaterialTheme.appColors.accentInk,
-                )
+                block.running -> {
+                    PulsingDot(colors.orange, size = 5.dp)
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        "运行中",
+                        style = AppType.caption,
+                        color = colors.accentInk,
+                    )
+                }
                 block.isError -> Text(
                     "失败",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
+                    style = AppType.caption,
+                    color = colors.error,
                 )
                 else -> Text(
                     "完成",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.appColors.faintText,
+                    style = AppType.caption,
+                    color = colors.stone,
                 )
             }
-            Spacer(Modifier.width(6.dp))
-            RotatingChevron(expanded = expanded, size = 16.dp)
+            Spacer(Modifier.width(5.dp))
+            RotatingChevron(expanded = expanded, size = 15.dp)
         }
         if (sources.isNotEmpty()) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = colors.sand)
             SourcesSection(sources)
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseOut)) + fadeIn(tween(Motion.FAST)),
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
             exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
         ) {
             Column {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = colors.sand)
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -735,15 +799,36 @@ private fun ToolCard(block: Block.Tool) {
                         .padding(12.dp)
                 ) {
                     MonoLabel("入参")
-                    MonoBlockText(block.input)
+                    MonoCodeBlock(block.input)
                     block.output?.let {
+                        Spacer(Modifier.height(10.dp))
                         MonoLabel("输出")
-                        MonoBlockText(it)
+                        MonoCodeBlock(it, error = block.isError)
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun PulsingDot(color: Color, size: Dp = 5.dp) {
+    val transition = rememberInfiniteTransition(label = "dot")
+    val alpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = Motion.EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "dot-alpha",
+    )
+    Box(
+        Modifier
+            .size(size)
+            .graphicsLayer { this.alpha = alpha }
+            .background(color, CircleShape)
+    )
 }
 
 /**
@@ -753,6 +838,7 @@ private fun ToolCard(block: Block.Tool) {
 @Composable
 private fun SourcesSection(sources: List<WebSource>) {
     val uriHandler = LocalUriHandler.current
+    val colors = MaterialTheme.appColors
     var showAll by rememberSaveable { mutableStateOf(false) }
     val visible = if (showAll) sources else sources.take(4)
     Column(
@@ -762,8 +848,8 @@ private fun SourcesSection(sources: List<WebSource>) {
     ) {
         Text(
             "来源 · ${sources.size}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.appColors.faintText,
+            style = AppType.caption,
+            color = colors.stone,
             modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
         )
         visible.forEachIndexed { index, source ->
@@ -771,39 +857,39 @@ private fun SourcesSection(sources: List<WebSource>) {
                 Modifier
                     .fillMaxWidth()
                     .padding(vertical = 2.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(colors.surface1)
                     .clickable { runCatching { uriHandler.openUri(source.url) } }
                     .padding(horizontal = 9.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     Modifier
-                        .size(20.dp)
+                        .size(18.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.appColors.accentInk.copy(alpha = 0.12f)),
+                        .background(colors.orangeSoft),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         "${index + 1}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.appColors.accentInk,
+                        style = AppType.caption.copy(fontSize = 10.sp),
+                        color = colors.accentInk,
                     )
                 }
                 Spacer(Modifier.width(9.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         source.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                        color = colors.graphite,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (source.host.isNotBlank()) {
                         Text(
                             source.host,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.appColors.faintText,
+                            style = AppType.caption,
+                            color = colors.stone,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -813,15 +899,15 @@ private fun SourcesSection(sources: List<WebSource>) {
                 Text(
                     "↗",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.appColors.faintText,
+                    color = colors.stone,
                 )
             }
         }
         if (sources.size > 4) {
             Text(
                 if (showAll) "收起" else "展开全部 ${sources.size} 个来源",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.appColors.accentInk,
+                style = AppType.caption,
+                color = colors.accentInk,
                 modifier = Modifier
                     .padding(top = 6.dp)
                     .clip(RoundedCornerShape(6.dp))
@@ -836,159 +922,34 @@ private fun SourcesSection(sources: List<WebSource>) {
 private fun MonoLabel(label: String) {
     Text(
         label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.appColors.faintText,
-        modifier = Modifier.padding(bottom = 4.dp),
+        style = AppType.caption.copy(letterSpacing = 0.3.sp),
+        color = MaterialTheme.appColors.stone,
+        modifier = Modifier.padding(bottom = 5.dp),
     )
 }
 
 @Composable
-private fun MonoBlockText(text: String) {
+private fun MonoCodeBlock(text: String, error: Boolean = false) {
+    val colors = MaterialTheme.appColors
     Box(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .background(colors.codeBg)
             .horizontalScroll(rememberScrollState())
-            .padding(9.dp)
+            .padding(10.dp)
     ) {
         SelectionContainer {
             Text(
                 text.ifBlank { "（空）" },
-                style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.5.sp, lineHeight = 17.sp),
-                color = MaterialTheme.colorScheme.onSurface,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.5.sp,
+                    lineHeight = 17.sp,
+                ),
+                color = if (error) colors.error else colors.codeFg,
             )
         }
-    }
-}
-
-@Composable
-private fun Composer(
-    value: String,
-    onValueChange: (String) -> Unit,
-    running: Boolean,
-    onSend: () -> Unit,
-    onStop: () -> Unit,
-    onAttach: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val haptic = LocalHapticFeedback.current
-    val borderColor by animateColorAsState(
-        targetValue = if (focused) MaterialTheme.appColors.accentInk.copy(alpha = 0.6f)
-        else MaterialTheme.colorScheme.outlineVariant,
-        animationSpec = tween(Motion.FAST),
-        label = "composer-border",
-    )
-    val sendEnabled = running || value.isNotBlank()
-    val sendColor by animateColorAsState(
-        targetValue = if (sendEnabled) MaterialTheme.appColors.accentInk
-        else MaterialTheme.colorScheme.surfaceContainerHighest,
-        animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseOut),
-        label = "send-color",
-    )
-    val sendInteraction = remember { MutableInteractionSource() }
-    val sendPressed by sendInteraction.collectIsPressedAsState()
-    val sendScale by animateFloatAsState(
-        targetValue = if (sendPressed) 0.94f else 1f,
-        animationSpec = Motion.Press,
-        label = "send-scale",
-    )
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(1.dp, borderColor, RoundedCornerShape(22.dp))
-                .animateContentSize()
-                .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onAttach),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    AppIcons.Plus,
-                    "添加附件",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(2.dp))
-            Box(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                if (value.isEmpty()) {
-                    Text(
-                        "回复 Claudroid…",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.appColors.faintText,
-                    )
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.appColors.accentInk),
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { focused = it.isFocused },
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .size(40.dp)
-                    .graphicsLayer {
-                        scaleX = sendScale
-                        scaleY = sendScale
-                    }
-                    .clip(CircleShape)
-                    .background(sendColor)
-                    .clickable(
-                        interactionSource = sendInteraction,
-                        indication = null,
-                        enabled = sendEnabled,
-                    ) {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (running) onStop() else onSend()
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (running) {
-                    Box(
-                        Modifier
-                            .size(9.dp)
-                            .background(MaterialTheme.colorScheme.onPrimary, RoundedCornerShape(2.dp))
-                    )
-                } else {
-                    Text(
-                        "↑",
-                        style = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Medium),
-                        color = if (value.isNotBlank()) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Agent 可能修改系统文件，请确认它执行的命令。",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.appColors.faintText,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
     }
 }
 
