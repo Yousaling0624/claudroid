@@ -190,7 +190,7 @@ object TarGz {
                     '0', '\u0000', '7' -> {
                         val dest = resolve(relative, "file")
                         dest.parentFile?.mkdirs()
-                        if (dest.isDirectory) dest.deleteRecursively() else dest.delete()
+                        removeExisting(dest)
                         FileOutputStream(dest).buffered(256 * 1024).use { out ->
                             copyExactly(input, out, size)
                         }
@@ -202,7 +202,7 @@ object TarGz {
                     '2' -> {
                         val dest = resolve(relative, "symlink")
                         dest.parentFile?.mkdirs()
-                        if (dest.isDirectory) dest.deleteRecursively() else dest.delete()
+                        removeExisting(dest)
                         Files.createSymbolicLink(dest.toPath(), File(fullLink).toPath())
                         skipEntry(input, size)
                         count++
@@ -238,6 +238,20 @@ object TarGz {
             runCatching { applyMode(dir, mode) }
         }
         return count
+    }
+
+    /**
+     * Replaces whatever occupies [dest] before writing the new entry.
+     *
+     * `File.isDirectory` follows symlinks, so a plain `isDirectory -> deleteRecursively`
+     * on an existing link would delete the *link target* (e.g. `usr/bin` when replacing
+     * `bin -> usr/bin`). A link must only be unlinked.
+     */
+    private fun removeExisting(dest: File) {
+        // Files.isSymbolicLink does not follow the link, unlike File.isDirectory.
+        if (Files.isSymbolicLink(dest.toPath())) dest.delete()
+        else if (dest.isDirectory) dest.deleteRecursively()
+        else dest.delete()
     }
 
     private fun readPax(input: InputStream, size: Long): Map<String, String> {
@@ -367,7 +381,10 @@ object TarGz {
         while (remaining > 0) {
             val want = minOf(remaining, buf.size.toLong()).toInt()
             val n = input.read(buf, 0, want)
-            if (n <= 0) break
+            // EOF before the declared size means the stream was truncated (broken
+            // download / short tarball). Silently keeping the short file is worse: the
+            // CLI would later die with SIGBUS far from the real cause.
+            if (n <= 0) error("tar 流被截断（还差 $remaining 字节）")
             out.write(buf, 0, n)
             remaining -= n
         }
@@ -387,7 +404,9 @@ object TarGz {
         val buf = ByteArray(8192)
         while (remaining > 0) {
             val n = input.read(buf, 0, minOf(remaining, buf.size.toLong()).toInt())
-            if (n <= 0) return
+            // A stream that ends inside an entry is truncated, not finished: the next
+            // header would be garbage, so fail here while the cause is still obvious.
+            if (n <= 0) error("tar 流被截断（还差 $remaining 字节）")
             remaining -= n
         }
     }

@@ -369,10 +369,17 @@ object HttpUtil {
         return Base64.getEncoder().encodeToString(digest.digest())
     }
 
-    /** npm publishes `sha512-<base64>`; compare against what we computed. */
+    /**
+     * npm publishes `sha512-<base64>`; compare against what we computed.
+     *
+     * Fail-closed: a missing or blank integrity means the registry gave us nothing to
+     * verify against, so the download is refused. Returning `true` here would let an
+     * unverified (or truncated/poisoned) CLI binary into the jail.
+     */
     fun matchesIntegrity(computedBase64Sha512: String, integrity: String?): Boolean {
-        if (integrity.isNullOrBlank()) return true
+        if (integrity.isNullOrBlank()) return false
         val expected = integrity.substringAfter("sha512-", "")
+        if (expected.isBlank()) return false
         return expected.equals(computedBase64Sha512, ignoreCase = true)
     }
 }

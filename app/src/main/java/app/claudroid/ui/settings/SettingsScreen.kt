@@ -906,6 +906,16 @@ private fun EnginePage(
     // Root probe output belongs to this page only; leaving disposes it instead of
     // leaking a stale report into the next visit.
     var rootReport by remember { mutableStateOf<String?>(null) }
+    // A chat turn never moves `engineState.phase` to Working, and `busy` is a plain
+    // field, so it has to be sampled while this page is visible — a one-shot read
+    // would leave the uninstall button enabled during a turn.
+    var turnBusy by remember { mutableStateOf(container.engine.busy) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            turnBusy = container.engine.busy
+            kotlinx.coroutines.delay(500)
+        }
+    }
     SettingsPageHeader(
         title = "引擎与权限",
         intro = "内置官方 CLI；PRoot 免 root，有 root 时可用 chroot。",
@@ -1003,8 +1013,11 @@ private fun EnginePage(
             GhostButton(
                 "卸载",
                 onUninstall,
+                // A chat turn does not move `phase` to Working, so it must be checked
+                // separately: uninstall would otherwise delete the jail under a live CLI.
                 enabled = engineState.installedVersion != null &&
-                    engineState.phase != EngineManager.Phase.Working,
+                    engineState.phase != EngineManager.Phase.Working &&
+                    !turnBusy,
             )
         }
         engineState.selfTest?.let { CodeCard(it, label = "SELFTEST", maxHeight = 240.dp) }

@@ -118,6 +118,11 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         }
 
         Paths.saveInstallation(ctx, activated)
+        // Only now may the superseded locations be reclaimed: until the line above,
+        // install.json still pointed at the *previous* install, which may be exactly one
+        // of these trees. Deleting it first and dying before the save would leave a
+        // dangling pointer (next launch: full reinstall) and an orphaned new jail.
+        reclaimSuperseded(activated)
         cleanupStaging(claude)
         onProgress(Progress("就绪", 1f, latest))
         Logx.i("Debian ${spec.version} + CLI $latest 已激活（jail=${activated.jailPath}, root=$useRoot）", ctx)
@@ -168,6 +173,16 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                     it,
                 )
             }
+        // Fail closed *before* the 150 MB download: without a published sha512 there is
+        // nothing to verify the binary against, and an unverified ELF in the jail is
+        // worse than no install at all.
+        val integrity = info.integrity
+        if (integrity.isNullOrBlank()) {
+            error(
+                "镜像未提供 sha512 摘要（${target.npmPackage} $version 的 dist.integrity 为空），" +
+                    "已拒绝安装。请检查网络（可能是代理改写了 registry 响应）后重试。",
+            )
+        }
         val tgz = File(staging, "claude-$version.tgz")
         val out = File(staging, "claude")
         val marker = File(staging, "claude-$version.ok")
@@ -178,7 +193,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             ?.forEach { it.delete() }
 
         // Reuse only an extraction produced from a verified archive.
-        if (out.isFile && marker.isFile && marker.readText().trim() == info.integrity &&
+        if (out.isFile && marker.isFile && marker.readText().trim() == integrity &&
             out.length() > MIN_BINARY_BYTES
         ) {
             onProgress(Progress("复用已校验的安装包", 0.42f, humanBytes(out.length())))
@@ -190,7 +205,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         var cachedOk = false
         if (tgz.isFile) {
             onProgress(Progress("校验本地缓存", 0.06f))
-            cachedOk = HttpUtil.matchesIntegrity(HttpUtil.sha512Base64(tgz), info.integrity)
+            cachedOk = HttpUtil.matchesIntegrity(HttpUtil.sha512Base64(tgz), integrity)
             if (!cachedOk) {
                 Logx.e("本地缓存已损坏（sha512 不匹配），重新下载", ctx)
                 tgz.delete()
@@ -201,7 +216,9 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                 val frac = if (total > 0) read.toFloat() / total else 0f
                 onProgress(Progress("下载 CLI $version", 0.05f + 0.30f * frac, humanBytes(read)))
             }
-            if (!HttpUtil.matchesIntegrity(digest, info.integrity)) {
+            // A missing integrity was already rejected above, so reaching this branch
+            // always means the bytes really differ from the published digest.
+            if (!HttpUtil.matchesIntegrity(digest, integrity)) {
                 tgz.delete()
                 error("下载校验失败（sha512 与 npm 公布值不符），已删除缓存，请重试")
             }
@@ -222,7 +239,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             error("解包结果不完整（$got 字节，期望约 300MB）。很可能是下载被中断，已清理缓存，请重试。")
         }
         out.setExecutable(true, false)
-        marker.writeText(info.integrity ?: "none")
+        marker.writeText(integrity)
         // Keep the verified archive: rebuilding the jail (root <-> proot) must not
         // download another 150 MB.
         return out
@@ -358,11 +375,12 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     }
 
     /**
-     * Swaps the verified `.new` tree into the official path and drops the old one.
+     * Swaps the verified `.new` tree into the official path.
      *
-     * Both names are siblings, so the rename is atomic; the old tree is only deleted
-     * after the new one is visible. `install.json` is written by the caller afterwards,
-     * which keeps a failed swap pointing at a still-existing install.
+     * Both names are siblings, so the rename is atomic; `install.json` is written by the
+     * caller afterwards, which keeps a failed swap pointing at a still-existing install.
+     * Reclaiming the *previous* install location is deliberately not part of this step:
+     * the caller does it only after the new pointer is on disk (see [reclaimSuperseded]).
      */
     private fun activate(installation: Installation, version: String): Installation {
         val newPath = installation.jailPath
@@ -374,16 +392,26 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         } else {
             swapLocal(basePath, newPath)
         }
+        return installation.copy(jailPath = basePath)
+    }
 
-        // Only now may the previous location be reclaimed: a PRoot-era tree under app
-        // data (unreachable in root mode) or a root-era tree (unreadable without root).
-        // Doing it after the swap means a failed reinstall can still fall back to it.
-        if (installation.rootMode) {
+    /**
+     * Deletes the locations the just-activated install superseded: a PRoot-era tree under
+     * app data (unreachable in root mode), the other root candidate, and a root-era tree
+     * (unreadable without root) after a switch to PRoot.
+     *
+     * Runs *after* `Paths.saveInstallation`, so a crash in between can only leave a stale
+     * tree behind, never a pointer at a deleted one. Failures are logged with the path
+     * (the delete helpers already refuse rather than risk walking into a mount); a
+     * leftover tree costs disk space but breaks nothing, so the install still succeeds.
+     */
+    private fun reclaimSuperseded(activated: Installation) {
+        if (activated.rootMode) {
             discardTree(File(Paths.engine(ctx), "jail").absolutePath, useRoot = false)
             // The other root candidate may hold an install from a previous run (e.g.
             // /data/local/tmp before /data/adb became writable).
             listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
-                .filter { it != basePath }
+                .filter { it != activated.jailPath }
                 .forEach { discardTree(it, useRoot = true) }
         } else if (rootExec.isGranted()) {
             // Switching root -> PRoot: the root jail is no longer used. deleteJail re-reads
@@ -392,7 +420,6 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
                 .forEach { discardTree(it, useRoot = true) }
         }
-        return installation.copy(jailPath = basePath)
     }
 
     private fun swapLocal(basePath: String, newPath: String) {
@@ -417,28 +444,28 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     private fun swapAsRoot(basePath: String, newPath: String, version: String) {
         val q = rootExec::q
         // A `.old` left by an interrupted swap must be gone before `mv "$J" "$O"`, or the
-        // move would nest the live jail inside it. Its own mounts are swept first.
-        discardTree(basePath + OLD_SUFFIX, useRoot = true)
-        val script = buildString {
-            appendLine("set -e")
-            appendLine("J=${q(basePath)}")
-            appendLine("N=${q(newPath)}")
-            appendLine("O=${q(basePath + OLD_SUFFIX)}")
-            appendLine("test -f \"\$N/etc/debian_version\"")
-            appendLine("test -x \"\$N/bin/bash\"")
-            appendLine("test -x \"\$N/opt/claude/$version/claude\"")
-            appendLine("if [ -e \"\$J\" ]; then mv \"\$J\" \"\$O\"; fi")
-            appendLine("if ! mv \"\$N\" \"\$J\"; then")
-            appendLine("  if [ -e \"\$O\" ] && [ ! -e \"\$J\" ]; then mv \"\$O\" \"\$J\" || true; fi")
-            appendLine("  echo SWAP_FAILED")
-            appendLine("  exit 1")
-            appendLine("fi")
-            appendLine("echo SWAP_OK")
+        // move would nest the live jail inside it. If the sweep is refused (a live chroot
+        // session, or a mount it could not detach) the swap must not run at all: `mv` into
+        // a non-empty `.old` would silently bury the current jail and still print SWAP_OK.
+        if (!discardTree(basePath + OLD_SUFFIX, useRoot = true)) {
+            error(
+                "无法清理上一代 jail（${basePath + OLD_SUFFIX}）：仍有 chroot 会话或挂载在使用它。" +
+                    "请先关闭「终端」里正在运行的命令，稍后重试。旧安装保持不变。",
+            )
         }
+        val script = swapScript(
+            jail = q(basePath),
+            next = q(newPath),
+            old = q(basePath + OLD_SUFFIX),
+            version = version,
+        )
         val result = rootExec.run(script, 300_000)
         if (!result.ok || !result.out.contains("SWAP_OK")) {
             error("启用新 jail 失败（exit=${result.code}）：${result.combined.takeLast(400)}")
         }
+        // Best-effort: the swap already succeeded and install.json is about to point at
+        // the new jail, so a refused delete only costs disk space. [discardTree] already
+        // logged the path and the cause, so the result is only consumed, not re-logged.
         discardTree(basePath + OLD_SUFFIX, useRoot = true)
         Logx.i("新 jail 已启用：$basePath", ctx)
     }
@@ -451,22 +478,31 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
      * left below the tree before deleting. Deleting a mountpoint directly descends into
      * the host directory behind it (that wiped `/data` on a real device), so this is not
      * a place for a plain `deleteRecursively`.
+     *
+     * Returns true when the tree is gone (or never existed). False means the delete was
+     * refused — mounts left, unreadable mount table, or a live chroot session — so a
+     * caller whose next step depends on the path being free must abort instead of
+     * carrying on. Most call sites only log, because a leftover tree is harmless there.
      */
-    private fun discardTree(path: String, useRoot: Boolean) {
+    private fun discardTree(path: String, useRoot: Boolean): Boolean {
         if (useRoot) {
             val result = runCatching { rootExec.deleteJail(path) }
                 .onFailure { Logx.e("删除 jail 失败：$path（${it.message}）", ctx) }
                 .getOrNull()
-            if (result != null && !result.ok) {
+            if (result == null) return false
+            if (!result.ok) {
                 Logx.e("删除 jail 失败：$path（${result.combined.takeLast(200)}）", ctx)
+                return false
             }
-        } else {
-            // App-private trees (PRoot mode) can still carry mounts from a chroot install
-            // performed while root was available, so the app-side delete is guarded too.
-            if (!rootExec.deleteTree(path)) {
-                Logx.e("删除 jail 失败：$path（目录仍在）", ctx)
-            }
+            return true
         }
+        // App-private trees (PRoot mode) can still carry mounts from a chroot install
+        // performed while root was available, so the app-side delete is guarded too.
+        if (!rootExec.deleteTree(path)) {
+            Logx.e("删除 jail 失败：$path（目录仍在）", ctx)
+            return false
+        }
+        return true
     }
 
     /**
@@ -482,7 +518,9 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             "var/lib/apt/lists/partial", "var/cache/apt/archives/partial",
         ).forEach { File(root, it).mkdirs() }
 
-        File(root, "etc/resolv.conf").writeText(dnsConfig() + "\n")
+        // resolv.conf + gai.conf come from the same helper that refreshes an existing
+        // install ([refreshNetworkConfig]), so the fix cannot land in only one of them.
+        networkFiles().forEach { (relative, content) -> File(root, relative).writeText(content) }
         File(root, "etc/hosts").writeText("127.0.0.1 localhost\n::1 localhost\n")
         File(root, "etc/hostname").writeText("claudroid\n")
         File(root, "etc/claudroid-rootfs").writeText(
@@ -538,18 +576,52 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         }
     }
 
+    /**
+     * Drops stale CLI versions from `opt/claude/`, keeping the one just installed.
+     *
+     * Both branches re-check the mount table first: `opt/claude/<version>` is normally
+     * mount-free, but it lives inside the jail, and a chroot session may have left a bind
+     * there. `rm -rf` through such a mountpoint deletes the *host* directory behind it —
+     * the same failure mode as deleting a jail root, which is why this must never be a
+     * bare recursive delete.
+     */
     private fun pruneVersions(installation: Installation, version: String) {
+        val keep = "${installation.jailPath}/opt/claude/$version"
         if (!installation.rootMode) {
-            File(installation.jail(), "opt/claude").listFiles()
-                ?.filter { it.isDirectory && it.name != version }
-                ?.forEach { runCatching { it.deleteRecursively() } }
+            val versions = File(installation.jail(), "opt/claude")
+            // Unreadable table proves nothing, so it blocks the delete (fail-closed).
+            val mountsText = runCatching { File("/proc/mounts").readText() }.getOrNull()
+            versions.listFiles()
+                ?.filter { (it.isDirectory || Files.isSymbolicLink(it.toPath())) && it.absolutePath != keep }
+                ?.forEach { dir ->
+                    val mounts = mountsText?.let { MountTable.mountsUnder(it, dir.absolutePath) }
+                    // null (unreadable table) and a non-empty list both block the delete:
+                    // only a confirmed mount-free directory may be removed.
+                    when {
+                        mounts == null ->
+                            Logx.e("跳过清理旧 CLI 版本：${dir.absolutePath}（无法读取 /proc/mounts，不能确认无挂载）", ctx)
+                        mounts.isNotEmpty() ->
+                            Logx.e("跳过清理旧 CLI 版本：${dir.absolutePath} 仍有挂载 ${mounts.joinToString(", ")}", ctx)
+                        // A link is unlinked, never walked: deleteRecursively would descend
+                        // into its target (the same hazard as replacing a symlink in TarGz).
+                        Files.isSymbolicLink(dir.toPath()) -> dir.delete()
+                        else -> runCatching { dir.deleteRecursively() }
+                            .onFailure { Logx.e("清理旧 CLI 版本失败：${dir.absolutePath}（${it.message}）", ctx) }
+                    }
+                }
         } else {
-            val q = rootExec::q
-            rootExec.run(
-                "for d in ${q(installation.jailPath)}/opt/claude/*; do " +
-                    "[ \"\$d\" = ${q("${installation.jailPath}/opt/claude/$version")} ] || rm -rf \"\$d\"; done",
-                60_000,
-            )
+            val result = rootExec.run(MountTable.pruneScript("${installation.jailPath}/opt/claude", keep), 60_000)
+            // Every surviving version is named, so the log explains the leftover instead of
+            // leaving a silent gap; a missing PRUNE_DONE means the script aborted (no mount
+            // table, su refused, timeout) and nothing was pruned.
+            result.out.lineSequence()
+                .filter { it.startsWith("SKIP_MOUNTED=") }
+                .forEach { Logx.e("跳过清理旧 CLI 版本：${it.removePrefix("SKIP_MOUNTED=")} 仍有挂载", ctx) }
+            if (result.out.contains("NO_MOUNT_TABLE")) {
+                Logx.e("跳过清理旧 CLI 版本：root 侧无法读取 /proc/mounts，不能确认无挂载", ctx)
+            } else if (!result.out.contains("PRUNE_DONE")) {
+                Logx.e("清理旧 CLI 版本未完成（exit=${result.code}）：${result.combined.takeLast(200)}", ctx)
+            }
         }
     }
 
@@ -648,8 +720,11 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         if (!verify(updated, existing.rootMode)) {
             throw IllegalStateException("更新后自检失败：CLI 不可执行或容器工具缺失，已保留旧版本。")
         }
-        pruneVersions(updated, version)
+        // Pointer first, pruning second: install.json still named the *old* version until
+        // this line, and pruning removes exactly that binary. Dying in between would
+        // leave a pointer at a deleted CLI (next launch: full reinstall).
         Paths.saveInstallation(ctx, updated)
+        pruneVersions(updated, version)
         onProgress(Progress("CLI 已更新", 0.98f, version))
         return updated
     }
@@ -784,6 +859,8 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
      * Android has no /etc/resolv.conf. Prefer the DNS servers of the current network;
      * the legacy properties are often empty on modern devices, so fall back to the
      * public resolvers the README already documents.
+     *
+     * Only IPv4 servers are written: see [dnsLines] for why the address family matters.
      */
     private fun dnsConfig(): String {
         val servers = mutableListOf<String>()
@@ -796,9 +873,67 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             }
         }
         servers += listOfNotNull(prop("net.dns1"), prop("net.dns2"))
-        servers += listOf("223.5.5.5", "119.29.29.29", "1.1.1.1")
-        return servers.distinct().take(4).joinToString("\n") { "nameserver $it" } +
-            "\noptions timeout:2 attempts:3"
+        return dnsLines(servers)
+    }
+
+    /**
+     * The two files that decide which address family the container resolves to.
+     *
+     * Written both at install time ([configureJail]) and on every start of an existing
+     * install ([refreshNetworkConfig]), so a fix here reaches users who never reinstall.
+     */
+    private fun networkFiles(): Map<String, String> = linkedMapOf(
+        "etc/resolv.conf" to dnsConfig() + "\n",
+        "etc/gai.conf" to GAI_CONF,
+    )
+
+    /**
+     * Rewrites `etc/resolv.conf` and `etc/gai.conf` of an existing install.
+     *
+     * `configureJail` only runs during an install, so without this an install created
+     * before the IPv4-first fix would keep its old resolver forever (the WebFetch
+     * domain check would keep returning 403 through the TUN proxy's IPv6 edge).
+     *
+     * Idempotent and best-effort by contract: a failure only logs, it must never turn a
+     * Ready engine into a Failed one — a stale resolv.conf is still functional, just
+     * with the WebFetch check failing. The content is compared first, so an already
+     * correct jail costs no `su` call.
+     */
+    fun refreshNetworkConfig(installation: Installation) {
+        val files = networkFiles()
+        if (!installation.rootMode) {
+            // The app owns filesDir/engine/jail and can write it directly.
+            files.forEach { (relative, content) ->
+                writeIfChanged(File(installation.jail(), relative), content)
+            }
+            return
+        }
+        // /data/adb is root-owned; without a grant the jail is unreadable anyway and the
+        // engine cannot run, so there is nothing to fix here.
+        if (!rootExec.isGranted()) return
+        // Readable only when the app happens to have access; otherwise the root shell
+        // decides and we pay one `su -c` per launch.
+        if (files.all { (relative, content) ->
+                runCatching { File(installation.jail(), relative).readText() }.getOrNull() == content
+            }
+        ) return
+        val result = rootExec.run(netConfigScript(installation.jailPath, files), 30_000)
+        if (!result.out.contains(NETCONF_OK)) {
+            Logx.e(
+                "重写容器 DNS 配置失败：${installation.jailPath}（exit=${result.code}，" +
+                    "${result.combined.takeLast(200)}）",
+                ctx,
+            )
+        }
+    }
+
+    /** Writes [content] unless the file already holds exactly that text; failures log. */
+    private fun writeIfChanged(file: File, content: String) {
+        if (runCatching { file.readText() }.getOrNull() == content) return
+        runCatching {
+            file.parentFile?.mkdirs()
+            file.writeText(content)
+        }.onFailure { Logx.e("写入 ${file.absolutePath} 失败：${it.message}", ctx) }
     }
 
     private fun prop(name: String): String? = runCatching {
@@ -818,6 +953,85 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     companion object {
         /** Real binary is ~300 MB; anything under 100 MB is definitely truncated. */
         const val MIN_BINARY_BYTES = 100L * 1024 * 1024
+
+        /**
+         * glibc prefers IPv6 whenever the host has an AAAA record, and `api.anthropic.com`'s
+         * IPv6 edge answers 403 through the TUN proxy used on real devices — which made the
+         * CLI's WebFetch domain check (`/api/web/domain_info`) always fail. These two files
+         * keep the container on IPv4; see [dnsLines] and [GAI_CONF].
+         */
+        internal const val GAI_CONF =
+            "# Prefer IPv4: some CDN edges reject this device IPv6 egress.\n" +
+                "precedence ::ffff:0:0/96  100\n"
+
+        /** Printed by [netConfigScript] only when both files were written. */
+        internal const val NETCONF_OK = "NETCONF_OK"
+
+        /**
+         * Public resolvers used when the network reports fewer than [MAX_NAMESERVERS] IPv4
+         * servers (or only IPv6 ones, which are dropped).
+         */
+        internal val DNS_FALLBACKS = listOf("223.5.5.5", "119.29.29.29", "1.1.1.1")
+
+        /** glibc reads at most this many nameservers; extra lines are dead weight. */
+        internal const val MAX_NAMESERVERS = 4
+
+        /**
+         * Builds the `resolv.conf` body from the servers Android reported.
+         *
+         * IPv6 literal nameservers are dropped on purpose. The device's TUN proxy exposes
+         * an IPv6 resolver (`fd17:…`) that returns the *real* A/AAAA records, so a resolver
+         * list that starts with it sends the CLI to Cloudflare's IPv6 edge, which rejects
+         * the WebFetch domain check with 403. Only the proxy's IPv4 resolver (a fake-IP
+         * `198.18.x.x`) gets the request intercepted, and IPv4 is what works end to end.
+         * The network's own IPv4 servers come first, then the public fallbacks fill the
+         * remaining slots — dropping the fallbacks outright when the network only offers
+         * IPv6 would leave the container without a resolver.
+         */
+        internal fun dnsLines(servers: List<String>): String {
+            val network = servers
+                .map { it.trim() }
+                .filter { isIpv4(it) }
+                .distinct()
+                .take(MAX_NAMESERVERS)
+            val all = (network + DNS_FALLBACKS).distinct().take(MAX_NAMESERVERS)
+            return all.joinToString("\n") { "nameserver $it" } +
+                "\noptions timeout:2 attempts:3"
+        }
+
+        /**
+         * Strict dotted-quad check. Also filters out IPv6 (`:`), scoped link-local
+         * addresses (`fe80::1%wlan0`) and anything else that is not a literal IPv4.
+         */
+        internal fun isIpv4(value: String): Boolean {
+            val parts = value.split('.')
+            if (parts.size != 4) return false
+            return parts.all { part ->
+                part.length in 1..3 && part.all { it in '0'..'9' } && part.toIntOrNull() in 0..255
+            }
+        }
+
+        /**
+         * Root-side rewrite of the network files for an existing jail.
+         *
+         * Needed because `/data/adb/claudroid` belongs to root while the app runs as its
+         * own uid. Only the basename of each key is used, so a caller cannot write outside
+         * `<jail>/etc`; `printf '%s'` keeps the content verbatim (no `%` expansion).
+         */
+        internal fun netConfigScript(jailPath: String, files: Map<String, String>): String = buildString {
+            appendLine("set +e")
+            appendLine("D=${TurnScripts.quote(jailPath.trim().trimEnd('/'))}")
+            appendLine("mkdir -p \"\$D/etc\" 2>/dev/null")
+            files.forEach { (relative, content) ->
+                val name = relative.substringAfterLast('/')
+                appendLine(
+                    "printf '%s' ${TurnScripts.quote(content)} > \"\$D/etc/$name\" " +
+                        "|| { echo \"NETCONF_FAIL=$name\"; FAILED=1; }",
+                )
+            }
+            appendLine("if [ \"\${FAILED:-0}\" = 1 ]; then exit 1; fi")
+            appendLine("echo $NETCONF_OK")
+        }
 
         private const val MAX_LOG_CHARS = 200_000
 
@@ -897,6 +1111,35 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             appendLine("echo TOOLS_OK")
             appendLine("echo CLAUDE_OK")
         }
+
+        /**
+         * Root-side swap of the verified `.new` tree into place. Arguments must already be
+         * shell-quoted (see `RootExec.q`); the script is pure so the ordering rules below
+         * are unit-tested.
+         *
+         * `test ! -e "$O"` is the important line: if the old tree survived the app-side
+         * sweep (a mount it could not detach, a concurrent session), `mv "$J" "$O"` would
+         * move the live jail *inside* `.old` and then move `.new` over the old name — the
+         * install would look successful while the previous jail is buried a level deeper.
+         */
+        internal fun swapScript(jail: String, next: String, old: String, version: String): String =
+            buildString {
+                appendLine("set -e")
+                appendLine("J=$jail")
+                appendLine("N=$next")
+                appendLine("O=$old")
+                appendLine("test -f \"\$N/etc/debian_version\"")
+                appendLine("test -x \"\$N/bin/bash\"")
+                appendLine("test -x \"\$N/opt/claude/$version/claude\"")
+                appendLine("test ! -e \"\$O\"")
+                appendLine("if [ -e \"\$J\" ]; then mv \"\$J\" \"\$O\"; fi")
+                appendLine("if ! mv \"\$N\" \"\$J\"; then")
+                appendLine("  if [ -e \"\$O\" ] && [ ! -e \"\$J\" ]; then mv \"\$O\" \"\$J\" || true; fi")
+                appendLine("  echo SWAP_FAILED")
+                appendLine("  exit 1")
+                appendLine("fi")
+                appendLine("echo SWAP_OK")
+            }
 
         /**
          * Translates the last ~400 chars of provisioning output into a message the user

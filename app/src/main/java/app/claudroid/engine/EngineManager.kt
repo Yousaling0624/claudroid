@@ -11,6 +11,7 @@ import app.claudroid.data.EngineMode
 import app.claudroid.data.SettingsRepository
 import app.claudroid.engine.openai.OpenAiProxy
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -145,6 +146,11 @@ class EngineManager(
             }
             install(force = existing != null)
         } else {
+            // Existing installs never re-run configureJail, so the container's DNS config
+            // is refreshed here on every start (IPv4-first resolv.conf + gai.conf).
+            // Best-effort: a failure only logs, a stale resolver must not block startup.
+            runCatching { toolchain.refreshNetworkConfig(existing) }
+                .onFailure { Logx.e("刷新容器 DNS 配置失败：${it.message}", ctx) }
             refreshChroot(existing)
             _state.update { it.copy(phase = Phase.Ready, stage = "就绪", fraction = 1f) }
             if (settings.autoUpdate) checkForUpdate(quiet = true)
@@ -196,6 +202,10 @@ class EngineManager(
                 // The install swapped the jail into its official name; any su/busybox/
                 // chroot probe from an earlier attempt was for a different path.
                 rootExec.resetCache()
+                // An in-place CLI upgrade reuses the existing rootfs, so configureJail did
+                // not run; refresh the resolver config here as well (no-op when correct).
+                runCatching { toolchain.refreshNetworkConfig(installation) }
+                    .onFailure { Logx.e("刷新容器 DNS 配置失败：${it.message}", ctx) }
                 refreshChroot(installation)
                 _state.update {
                     it.copy(
@@ -244,6 +254,9 @@ class EngineManager(
             // A previous "no su / no busybox / no chroot" answer may have been cached
             // before the user approved the su dialog; re-probe with the new grant.
             rootExec.resetCache()
+            // No DNS refresh here: callers reach this from the UI thread and a root-mode
+            // rewrite is a blocking `su` round trip. Bootstrap and install already refresh
+            // the config, which is the path that matters for a turn.
             installation()?.let { refreshChroot(it) }
         }
     }
@@ -516,32 +529,52 @@ class EngineManager(
     /** Removes the installed CLI. Sessions and the workspace survive unless asked for. */
     suspend fun uninstall(deleteWorkspace: Boolean = false) = withContext(Dispatchers.IO) {
         engine.cancel()
-        val inst = installation()
+        // cancel() only sets a flag and starts a reaper; the turn's `finally` (which
+        // releases the jail and its chroot session) has not run yet. Deleting the tree
+        // now would pull the rootfs out from under a live CLI, so wait for the turn.
+        if (!awaitTurnEnd(UNINSTALL_TURN_WAIT_MS)) {
+            val message = "仍有任务在运行，卸载已中止；请先停止任务，稍后再试。"
+            Logx.e(message, ctx)
+            _state.update { it.copy(error = message) }
+            return@withContext
+        }
+
+        // Every jail candidate, including the swap leftovers of an interrupted install:
+        // `install.json` may be gone (a half-written install), yet a ~1 GB tree remains.
+        val appTrees = listOf(File(Paths.engine(ctx), "jail").absolutePath)
+            .flatMap { base -> listOf(base, base + ".new", base + ".old") }
+        val rootTrees = listOf(Paths.ROOT_JAIL, Paths.ROOT_JAIL_FALLBACK)
+            .flatMap { base -> listOf(base, base + ".new", base + ".old") }
+
+        val failed = mutableListOf<String>()
         runCatching {
-            // `.new`/`.old` are swap leftovers; removing only the official name would
-            // leak a full Debian tree after an interrupted reinstall.
-            val trees = if (inst == null) emptyList() else listOf(
-                inst.jailPath,
-                inst.jailPath + ".new",
-                inst.jailPath + ".old",
-            )
-            // App-private trees (PRoot mode) may still carry chroot-era mounts; deleteTree
-            // sweeps them before deleting, so `rm -rf` cannot walk into the host.
-            if (inst == null || !inst.rootMode) {
-                trees.forEach { if (!rootExec.deleteTree(it)) Logx.e("删除 jail 失败：$it", ctx) }
+            // App-private trees (PRoot mode) are ours to delete; root trees are not
+            // readable/writable for this uid and must go through the root script.
+            appTrees.forEach { path ->
+                if (!rootExec.deleteTree(path)) {
+                    failed += path
+                    Logx.e("删除 jail 失败：$path", ctx)
+                }
             }
             // Root jails are outside app storage: unreadable without root, but they still
             // cost ~1 GB and may be orphans of an install that never finished.
             if (rootExec.isGranted()) {
                 // deleteJail unmounts the chroot's workspace/home binds first; a plain
                 // rm -rf would otherwise follow them into the host filesystem.
-                (trees + Paths.ROOT_JAIL + Paths.ROOT_JAIL_FALLBACK)
-                    .distinct()
-                    .forEach {
-                        val r = runCatching { rootExec.deleteJail(it) }.getOrNull()
-                        if (r == null || !r.ok) Logx.e("删除 jail 失败：$it", ctx)
+                rootTrees.forEach { path ->
+                    val r = runCatching { rootExec.deleteJail(path) }.getOrNull()
+                    if (r == null || !r.ok) {
+                        failed += path
+                        Logx.e("删除 jail 失败：$path", ctx)
                     }
+                }
             }
+        }.onFailure {
+            failed += "卸载异常"
+            Logx.e("卸载失败：${it.message}", ctx)
+        }
+
+        if (failed.isEmpty()) {
             if (deleteWorkspace) {
                 Paths.workspace(ctx).deleteRecursively()
                 Paths.home(ctx).deleteRecursively()
@@ -550,23 +583,45 @@ class EngineManager(
             // Verified CLI/rootfs archives are engine cache, not user data.
             Paths.staging(ctx).deleteRecursively()
             Paths.clearInstallation(ctx)
-        }.onFailure { Logx.e("卸载失败：${it.message}", ctx) }
-        // The jail is gone; a cached chroot/su answer has no valid target anymore.
-        rootExec.resetCache()
-        _state.update {
-            it.copy(
-                phase = Phase.Idle,
-                installedVersion = null,
-                latestVersion = null,
-                jailPath = null,
-                rootMode = false,
-                chrootAvailable = false,
-                stage = "",
-                detail = "",
-                fraction = 0f,
-                selfTest = null,
-            )
+            // The jail is gone; a cached chroot/su answer has no valid target anymore.
+            rootExec.resetCache()
+            _state.update {
+                it.copy(
+                    phase = Phase.Idle,
+                    installedVersion = null,
+                    latestVersion = null,
+                    jailPath = null,
+                    rootMode = false,
+                    chrootAvailable = false,
+                    stage = "",
+                    detail = "",
+                    fraction = 0f,
+                    selfTest = null,
+                    error = null,
+                )
+            }
+        } else {
+            // Keep install.json: a tree may still be on disk, and reporting "未安装" would
+            // hide it. The uninstall button stays available so the user can retry.
+            val message = "卸载未完成：${failed.joinToString("、")} 仍在。" +
+                "如有终端任务或 chroot 会话在运行，请先关闭它们后重试卸载。"
+            Logx.e(message, ctx)
+            _state.update { it.copy(error = message) }
         }
+    }
+
+    /**
+     * Waits for the current turn to release [ClaudeEngine.isRunning]. Polling instead of
+     * a lock because a turn can start from the chat screen at any moment and there is no
+     * single owner to join.
+     */
+    private suspend fun awaitTurnEnd(timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (engine.isRunning) {
+            if (System.nanoTime() >= deadline) return false
+            delay(POLL_MS)
+        }
+        return true
     }
 
     private fun dirSize(dir: File?): Long {
@@ -629,4 +684,17 @@ class EngineManager(
 
     /** Clears a stop from the previous turn before a new one starts. */
     fun resetCancel() = engine.resetCancel()
+
+    /**
+     * True while a chat turn holds the engine. The settings screen uses this to keep the
+     * uninstall / reinstall buttons disabled: deleting the jail under a live CLI is the
+     * exact race [uninstall] refuses to lose.
+     */
+    val busy: Boolean get() = engine.isRunning
+
+    companion object {
+        /** How long uninstall waits for a cancelled turn to release the jail. */
+        private const val UNINSTALL_TURN_WAIT_MS = 15_000L
+        private const val POLL_MS = 100L
+    }
 }

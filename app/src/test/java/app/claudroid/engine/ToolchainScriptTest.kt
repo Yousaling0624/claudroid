@@ -125,4 +125,18 @@ class ToolchainScriptTest {
         assertTrue(text, text.contains("Debian 容器初始化失败"))
         assertTrue(text, text.contains("line one line two"))
     }
+
+    @Test
+    fun `the root swap asserts the old tree is gone before moving the jail`() {
+        val script = Toolchain.swapScript("'/data/adb/claudroid'", "'/data/adb/claudroid.new'",
+            "'/data/adb/claudroid.old'", "2.1.0").trimEnd()
+        val assertAt = script.indexOf("test ! -e \"\$O\"")
+        val moveOldAt = script.indexOf("if [ -e \"\$J\" ]; then mv \"\$J\" \"\$O\"; fi")
+        // A surviving `.old` would swallow the live jail; the assertion must come first.
+        assertTrue(assertAt >= 0)
+        assertTrue(moveOldAt > assertAt)
+        // set -e turns a failed assertion into an abort instead of a nested move.
+        assertTrue(script.lines().first() == "set -e")
+        assertTrue(script.endsWith("echo SWAP_OK"))
+    }
 }

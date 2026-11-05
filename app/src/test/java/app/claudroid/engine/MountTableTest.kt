@@ -229,4 +229,65 @@ class MountTableTest {
     }
 
     private val prefix2 = "/data/user/0/app/files/engine2"
+
+    /**
+     * The CLI version directories live *inside* the jail, so they are normally mount-free
+     * — but a chroot session could leave a bind there, and `rm -rf` through that
+     * mountpoint deletes the host directory behind it. The old inline script pruned
+     * versions with a bare `rm -rf`, the only recursive delete in the repo that skipped
+     * this guard. (Kotlin block comments nest, hence the wording above: a literal
+     * glob star-slash in here would open a second comment.)
+     */
+    @Test
+    fun `prune script checks the mount table before every recursive delete`() {
+        val versions = "/data/adb/claudroid/opt/claude"
+        val script = MountTable.pruneScript(versions, "$versions/2.1.0")
+        // The check must precede the delete for each candidate directory.
+        val checkAt = script.indexOf("if mounted_under \"\$d\"; then")
+        val skipAt = script.indexOf("echo \"SKIP_MOUNTED=\$d\"")
+        val deleteAt = script.indexOf("rm -rf -- \"\$d\"")
+        assertTrue(checkAt >= 0)
+        assertTrue(skipAt > checkAt)
+        assertTrue(deleteAt > skipAt)
+        // The version just installed is kept, and the glob is never dereferenced blindly.
+        assertTrue(script.contains("P=${TurnScripts.quote(versions)}"))
+        assertTrue(script.contains("K=${TurnScripts.quote("$versions/2.1.0")}"))
+        assertTrue(script.contains("[ \"\$d\" = \"\$K\" ] && continue"))
+        assertTrue(script.contains("[ -e \"\$d\" ] || continue"))
+        assertTrue(script.contains("echo PRUNE_DONE"))
+    }
+
+    @Test
+    fun `prune script matches mounts with the same field split and octal decoding`() {
+        val versions = "/data/adb/claudroid/opt/claude"
+        val script = MountTable.pruneScript(versions, "$versions/2.1.0")
+        // Same parse as count_mounts/list_mounts: second whitespace field, then %b.
+        assertTrue(script.contains("pu_mp=\${pu_l#* }"))
+        assertTrue(script.contains("pu_mp=\${pu_mp%% *}"))
+        assertTrue(script.contains("pu_p=\$(printf '%b' \"\$pu_mp\")"))
+        // Only absolute mountpoints count, and a sibling such as /opt/claude2 must not
+        // match: the prefix test is the path itself or path/…, never a bare startsWith.
+        assertTrue(script.contains("case \"\$pu_mp\" in /*) ;; *) continue ;; esac"))
+        assertTrue(script.contains("case \"\$pu_p\" in \"\$1\"|\"\$1\"/*) return 0 ;; esac"))
+        // A stuck/unreadable table must not turn into a silent success.
+        assertTrue(script.contains("set +e"))
+        assertTrue(script.contains("done < /proc/mounts"))
+        // No table at all: refuse everything rather than treating every dir as unmounted.
+        val tableGuardAt = script.indexOf("if [ ! -r /proc/mounts ]; then")
+        val loopAt = script.indexOf("for d in")
+        assertTrue(tableGuardAt >= 0)
+        assertTrue(loopAt > tableGuardAt)
+        assertTrue(script.contains("echo NO_MOUNT_TABLE"))
+        assertTrue(script.contains("exit 6"))
+    }
+
+    @Test
+    fun `prune script keeps a version whose name is a prefix of the new one`() {
+        // "2.1.0" and "2.1.00" are different directories; comparing by prefix would
+        // delete the wrong one, so the comparison is on the full path.
+        val versions = "/data/adb/claudroid/opt/claude"
+        val script = MountTable.pruneScript(versions, "$versions/2.1.0")
+        assertFalse(script.contains("[ \"\$d\" = ${TurnScripts.quote(versions)}*"))
+        assertTrue(script.contains("[ \"\$d\" = \"\$K\" ] && continue"))
+    }
 }

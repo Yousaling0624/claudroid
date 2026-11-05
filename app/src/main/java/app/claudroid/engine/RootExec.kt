@@ -139,6 +139,13 @@ class RootExec(private val ctx: Context) {
             Logx.e("拒绝删除非白名单路径：$jailPath", ctx)
             return Result(2, "", "拒绝删除非 jail 路径：$jailPath")
         }
+        // A live chroot session still has this tree as its root: deleting it would pull
+        // the rootfs out from under a running CLI and leave it half-deleted. The caller
+        // (uninstall / swap) waits for turns first; this is the last line of defence.
+        liveChrootRefusal(activeChrootSessions())?.let { reason ->
+            Logx.e("拒绝删除 $target：$reason", ctx)
+            return Result(5, "", "$reason：$target")
+        }
         return synchronized(deleteLock) {
             val result = run(MountTable.deleteScript(target, umountBinary()), timeoutMs)
             if (result.out.lineSequence().any { it.trim() == "GONE" }) {
@@ -182,6 +189,11 @@ class RootExec(private val ctx: Context) {
             Logx.e("拒绝删除非白名单路径：$path", ctx)
             return false
         }
+        // Same rule as [deleteJail]: never delete the root of a live chroot session.
+        liveChrootRefusal(activeChrootSessions())?.let { reason ->
+            Logx.e("拒绝删除 $target：$reason", ctx)
+            return false
+        }
         return synchronized(deleteLock) {
             if (granted) {
                 val sweep = run(MountTable.unmountScript(target, umountBinary()), 120_000)
@@ -199,8 +211,13 @@ class RootExec(private val ctx: Context) {
                 }
             }
             // Second, app-side check: even a successful root sweep must be visible here
-            // before the recursive delete is allowed to start.
+            // before the recursive delete is allowed to start. An unreadable /proc/mounts
+            // proves nothing, so it must block the delete instead of passing it.
             val mounts = currentMountsUnder(target)
+            if (mounts == null) {
+                Logx.e("删除 $target 中止：无法读取 /proc/mounts，不能确认无挂载", ctx)
+                return false
+            }
             if (mounts.isNotEmpty()) {
                 Logx.e("删除 $target 中止：仍有挂载 ${mounts.joinToString(", ")}", ctx)
                 return false
@@ -253,6 +270,11 @@ class RootExec(private val ctx: Context) {
             return
         }
         val mounts = currentMountsUnder(target)
+        if (mounts == null) {
+            // Not an error for a sweep, but never report it as "clean".
+            Logx.i("无法读取 /proc/mounts，跳过 jail 挂载清理：$target", ctx)
+            return
+        }
         if (mounts.isEmpty()) return
         Logx.i("无 root，尝试清理挂载（预计失败）：${mounts.joinToString(", ")}", ctx)
         mounts.forEach { runCatching { execute(listOf(umountBinary(), "-l", it), 20_000) } }
@@ -267,10 +289,18 @@ class RootExec(private val ctx: Context) {
         activeChroots.updateAndGet { if (it > 0) it - 1 else 0 }
     }
 
-    /** App-side view of the mount table; only a hint when root is available. */
-    private fun currentMountsUnder(jailPath: String): List<String> {
+    /** Live chroot sessions in this process; read-only view of [activeChroots]. */
+    fun activeChrootSessions(): Int = activeChroots.get()
+
+    /**
+     * App-side view of the mount table; only a hint when root is available.
+     *
+     * `null` means "could not read `/proc/mounts`", which is *not* the same as "no mounts":
+     * a caller that deletes must refuse on null, while an unmount sweep may skip.
+     */
+    private fun currentMountsUnder(jailPath: String): List<String>? {
         if (jailPath.isEmpty()) return emptyList()
-        val text = runCatching { File("/proc/mounts").readText() }.getOrNull() ?: return emptyList()
+        val text = runCatching { File("/proc/mounts").readText() }.getOrNull() ?: return null
         return MountTable.mountsUnder(text, jailPath)
     }
 
@@ -323,6 +353,14 @@ class RootExec(private val ctx: Context) {
     fun q(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     companion object {
+        /**
+         * Why a delete must be refused while [sessions] chroot sessions are alive, or null
+         * when the delete may proceed. Pure so the gate is unit-tested without a device:
+         * both delete paths must fail loudly instead of silently reporting success.
+         */
+        internal fun liveChrootRefusal(sessions: Int): String? =
+            if (sessions > 0) "仍有 $sessions 个 chroot 会话存活，拒绝删除" else null
+
         /**
          * Serialises the read-unmount-delete sequence; concurrent deletes could race and
          * a delete that runs while a swap is mid-flight could remove the wrong tree.

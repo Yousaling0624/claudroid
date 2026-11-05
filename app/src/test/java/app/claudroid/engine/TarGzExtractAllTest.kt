@@ -109,6 +109,93 @@ class TarGzExtractAllTest {
         assertFalse(File(dir.parentFile, escaped).exists())
     }
 
+    /**
+     * usrmerge makes `bin` a symlink to `usr/bin`. `File.isDirectory` follows symlinks,
+     * so replacing `bin` with a plain file via `deleteRecursively` would have deleted
+     * `usr/bin`'s contents — i.e. every binary in the rootfs — instead of the link.
+     */
+    @Test
+    fun `replacing a symlink with a file unlinks only the link`() {
+        assumeSymlinks()
+        dest.mkdirs()
+        File(dest, "usr/bin").mkdirs()
+        File(dest, "usr/bin/tool").writeText("keep me")
+        Files.createSymbolicLink(File(dest, "bin").toPath(), Paths.get("usr/bin"))
+
+        writeTarGz(archive, listOf(TarItem(name = "bin", data = "not a link".toByteArray())))
+
+        TarGz.extractAll(archive, dest)
+
+        assertFalse(Files.isSymbolicLink(File(dest, "bin").toPath()))
+        assertEquals("not a link", File(dest, "bin").readText())
+        assertEquals("keep me", File(dest, "usr/bin/tool").readText())
+    }
+
+    /** Same hazard for a symlink replacing a symlink: the old target must stay intact. */
+    @Test
+    fun `replacing a symlink with another symlink unlinks only the old link`() {
+        assumeSymlinks()
+        dest.mkdirs()
+        File(dest, "usr/bin").mkdirs()
+        File(dest, "usr/bin/tool").writeText("keep me")
+        Files.createSymbolicLink(File(dest, "bin").toPath(), Paths.get("usr/bin"))
+
+        writeTarGz(archive, listOf(TarItem(name = "bin", type = '2', link = "usr/local/bin")))
+
+        TarGz.extractAll(archive, dest)
+
+        assertTrue(Files.isSymbolicLink(File(dest, "bin").toPath()))
+        // Paths.get normalizes the separator: the target is wrapped in File(...) by
+        // extractAll, which on Windows turns `/` into `\`.
+        assertEquals(
+            Paths.get("usr/local/bin").toString(),
+            Files.readSymbolicLink(File(dest, "bin").toPath()).toString(),
+        )
+        assertEquals("keep me", File(dest, "usr/bin/tool").readText())
+    }
+
+    /**
+     * A tarball whose stream ends before the size its header declared is truncated (a
+     * broken download). The old code silently kept the short file, and the CLI later died
+     * with SIGBUS far from the cause.
+     */
+    @Test
+    fun `a stream that ends inside an entry is reported as truncated`() {
+        GZIPOutputStream(FileOutputStream(archive)).use { gz ->
+            val header = ByteArray(512)
+            put(header, 0, "usr/bin/tool")
+            put(header, 100, "0000755")
+            put(header, 124, java.lang.Long.toOctalString(1000L).padStart(11, '0'))
+            header[156] = '0'.code.toByte()
+            put(header, 257, "ustar")
+            put(header, 263, "00")
+            for (i in 148 until 156) header[i] = ' '.code.toByte()
+            var sum = 0
+            header.forEach { sum += (it.toInt() and 0xFF) }
+            put(header, 148, java.lang.Long.toOctalString(sum.toLong()).padStart(6, '0'))
+            header[154] = 0
+            header[155] = ' '.code.toByte()
+            gz.write(header)
+            gz.write(ByteArray(300)) // header says 1000 bytes, stream ends here
+        }
+
+        try {
+            TarGz.extractAll(archive, dest)
+            fail("expected the truncated stream to be rejected")
+        } catch (e: Exception) {
+            assertTrue(e.message.orEmpty().contains("tar 流被截断"))
+        }
+    }
+
+    private fun assumeSymlinks() {
+        // Windows needs Developer Mode / SeCreateSymbolicLinkPrivilege.
+        val probe = File(dir, "probe-${System.nanoTime()}")
+        val canSymlink = runCatching {
+            Files.createSymbolicLink(probe.toPath(), Paths.get("target"))
+        }.isSuccess
+        Assume.assumeTrue("platform cannot create symlinks", canSymlink)
+    }
+
     private data class TarItem(
         val name: String,
         val type: Char = '0',

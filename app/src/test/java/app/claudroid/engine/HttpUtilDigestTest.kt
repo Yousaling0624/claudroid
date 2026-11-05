@@ -54,4 +54,22 @@ class HttpUtilDigestTest {
         assertTrue(HttpUtil.matchesIntegrity(computed, "sha512-abc+/="))
         assertFalse(HttpUtil.matchesIntegrity(computed, "sha512-other"))
     }
+
+    /**
+     * Fail-closed: a registry response without `dist.integrity` (proxy rewrite, truncated
+     * JSON) gives us nothing to verify the ~150 MB CLI binary against. Accepting it would
+     * let an unverified ELF into the jail, so the comparison must refuse.
+     */
+    @Test
+    fun `missing or blank integrity is refused`() {
+        val computed = "AbC+/="
+        assertFalse(HttpUtil.matchesIntegrity(computed, null))
+        assertFalse(HttpUtil.matchesIntegrity(computed, ""))
+        assertFalse(HttpUtil.matchesIntegrity(computed, "   "))
+        assertFalse(HttpUtil.matchesIntegrity(computed, "sha512-"))
+        assertFalse(HttpUtil.matchesIntegrity(computed, "sha512-   "))
+        // An empty digest must not match an absent one either.
+        assertFalse(HttpUtil.matchesIntegrity("", null))
+        assertFalse(HttpUtil.matchesIntegrity("", "sha512-"))
+    }
 }

@@ -158,6 +158,60 @@ internal object MountTable {
         appendLine("echo GONE")
     }
 
+    /**
+     * Script that removes every child of [versionsPath] except [keepPath] (the CLI version
+     * just installed), skipping any child that still has a mount at or below it.
+     *
+     * `opt/claude/<version>` is normally mount-free, but it lives inside the jail, and a
+     * chroot session could have left a bind there. A plain `rm -rf` would then descend
+     * through that mountpoint into the *host* directory — the same failure mode as
+     * [deleteScript]. Checking inside this one root shell is required for the same reason:
+     * `/proc/mounts` is per mount namespace, so an app-side read can miss those binds.
+     *
+     * Reuses the field split and octal decoding of the other scripts (`${l#* }` / `%% *`,
+     * `printf '%b'`) instead of a second parser; matching is `path` or `path/…`, never a
+     * bare prefix, so `2.1.0` cannot shadow `2.1.00`. Every skip is named
+     * (`SKIP_MOUNTED=<path>`) because the app log is the only place to see why a stale
+     * version survived.
+     */
+    fun pruneScript(versionsPath: String, keepPath: String): String {
+        val versions = normalize(versionsPath)
+        val keep = normalize(keepPath)
+        return buildString {
+            appendLine("set +e")
+            appendLine("P=${TurnScripts.quote(versions)}")
+            appendLine("K=${TurnScripts.quote(keep)}")
+            // An unreadable table would make every directory look mount-free; refuse the
+            // whole prune instead (exit 6 = no mount table, distinct from deleteJail's 4).
+            appendLine("if [ ! -r /proc/mounts ]; then")
+            appendLine("  echo NO_MOUNT_TABLE")
+            appendLine("  exit 6")
+            appendLine("fi")
+            // $1 is a real path, so the table's escaped fields are decoded before comparing.
+            appendLine("mounted_under() {")
+            appendLine("  while IFS= read -r pu_l; do")
+            appendLine("    pu_mp=\${pu_l#* }")
+            appendLine("    pu_mp=\${pu_mp%% *}")
+            appendLine("    case \"\$pu_mp\" in /*) ;; *) continue ;; esac")
+            appendLine("    pu_p=\$(printf '%b' \"\$pu_mp\")")
+            appendLine("    case \"\$pu_p\" in \"\$1\"|\"\$1\"/*) return 0 ;; esac")
+            appendLine("  done < /proc/mounts")
+            appendLine("  return 1")
+            appendLine("}")
+            appendLine("for d in \"\$P\"/*; do")
+            // No children: the glob stays literal, and `-e` rejects it.
+            appendLine("  [ -e \"\$d\" ] || continue")
+            appendLine("  [ \"\$d\" = \"\$K\" ] && continue")
+            appendLine("  if mounted_under \"\$d\"; then")
+            appendLine("    echo \"SKIP_MOUNTED=\$d\"")
+            appendLine("    continue")
+            appendLine("  fi")
+            appendLine("  rm -rf -- \"\$d\"")
+            appendLine("done")
+            appendLine("echo PRUNE_DONE")
+        }
+    }
+
     /** Shared read → match → longest-first `umount -l` half of both scripts. */
     private fun collectAndUnmount(jailPath: String, umountBinary: String): String {
         val target = normalize(jailPath)
