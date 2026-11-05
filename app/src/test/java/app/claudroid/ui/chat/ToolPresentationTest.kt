@@ -54,4 +54,26 @@ class ToolPresentationTest {
         assertEquals("工具调用 3", toolCallLabel(3, 0))
         assertEquals("工具调用 2 · 1 个错误", toolCallLabel(2, 1))
     }
+
+    @Test
+    fun `work label is empty when there is nothing to disclose`() {
+        assertEquals("", workLabel(0, 0, 0))
+    }
+
+    @Test
+    fun `work label shows thinking only`() {
+        assertEquals("思考过程 2 段", workLabel(2, 0, 0))
+    }
+
+    @Test
+    fun `work label merges thinking and tools in order`() {
+        assertEquals("思考过程 2 段 · 工具调用 3", workLabel(2, 3, 0))
+        assertEquals("工具调用 3", workLabel(0, 3, 0))
+    }
+
+    @Test
+    fun `work label appends the error count last`() {
+        assertEquals("思考过程 1 段 · 工具调用 3 · 1 个错误", workLabel(1, 3, 1))
+        assertEquals("工具调用 2 · 1 个错误", workLabel(0, 2, 1))
+    }
 }

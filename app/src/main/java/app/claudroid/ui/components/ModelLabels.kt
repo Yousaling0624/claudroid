@@ -35,6 +35,18 @@ fun chatModelLabel(settings: AppSettings): String {
 fun tierMappingLabel(settings: AppSettings, tier: ModelTier): String =
     settings.tierModel(tier).ifEmpty { "官方默认" }
 
+/**
+ * Compact label for the floating model pill. The pill has room for one short word,
+ * so a selected tier shows its name only; the full mapping stays in the picker and
+ * in the assistant signature.
+ */
+fun shortModelLabel(settings: AppSettings): String {
+    if (settings.usesAutoModel) return "CLI 默认"
+    settings.resolvedActiveTier?.let { return it.label }
+    val raw = settings.model.trim().ifBlank { "默认" }
+    return if (raw.length > 16) raw.take(15) + "…" else raw
+}
+
 /** One-line summary for the tier chip row's supporting copy. */
 fun activeTierSummary(settings: AppSettings): String {
     if (settings.usesAutoModel) return "CLI 默认 · 不指定模型"

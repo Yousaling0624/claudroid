@@ -252,6 +252,8 @@ object Radii {
     val xs: Dp = 12.dp
     val sm: Dp = 16.dp
     val md: Dp = 20.dp
+    /** Floating dropdown menus sit between md and lg so they read lighter than sheets. */
+    val menu: Dp = 22.dp
     val lg: Dp = 24.dp
     val xl: Dp = 28.dp
     val xxl: Dp = 32.dp
@@ -260,6 +262,7 @@ object Radii {
     val xsShape get() = shape(xs)
     val smShape get() = shape(sm)
     val mdShape get() = shape(md)
+    val menuShape get() = shape(menu)
     val lgShape get() = shape(lg)
     val xlShape get() = shape(xl)
     val xxlShape get() = shape(xxl)

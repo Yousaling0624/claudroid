@@ -114,3 +114,17 @@ object ToolPresentation {
 fun toolCallLabel(count: Int, errorCount: Int): String =
     if (errorCount > 0) "工具调用 $count · $errorCount 个错误"
     else "工具调用 $count"
+
+/**
+ * Label for the unified work disclosure that merges thinking segments and tool calls
+ * once the answer starts (or the turn ends). Both halves are optional, so a turn that
+ * only reasoned or only called tools still gets a meaningful label; an empty string
+ * means there is nothing to disclose.
+ */
+fun workLabel(thinkingCount: Int, toolCount: Int, errorCount: Int): String {
+    val parts = buildList {
+        if (thinkingCount > 0) add("思考过程 $thinkingCount 段")
+        if (toolCount > 0 || errorCount > 0) add(toolCallLabel(toolCount, errorCount))
+    }
+    return parts.joinToString(" · ")
+}

@@ -104,13 +104,13 @@ private enum class ModelTarget { DEFAULT, SMALL }
  */
 private enum class Page(val title: String, val icon: ImageVector) {
     ROOT("设置", AppIcons.Settings),
-    API("接口与模型", AppIcons.Sliders),
+    API("接口与模型", AppIcons.Plug),
     TIERS("模型档位", AppIcons.Layers),
     ENGINE("引擎与权限", AppIcons.Shield),
     LABS("功能与实验", AppIcons.Flask),
     APPEARANCE("外观", AppIcons.Palette),
     WORKSPACE("工作区", AppIcons.Folder),
-    ADVANCED("高级", AppIcons.Settings),
+    ADVANCED("高级", AppIcons.Sliders),
     ABOUT("关于", AppIcons.Info),
 }
 

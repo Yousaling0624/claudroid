@@ -35,6 +35,14 @@
 
 **验证失败时不要提交。** 先修复；修不好就如实说明失败项和原因。不要用 `--no-verify`、跳过测试、删测试或改 CI 阈值来「通过」。
 
+### 2.1 Agent 工作流（强制）
+
+- **默认所有开发任务都分派给对应模块的 subagent 执行**；主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`；
+  `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；验证与提交前审查 → `qa-reviewer`。
+- 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push。
+- 纯问答、纯文档更新或一行以内的紧急修复可由主会话直接处理，但要在回复里说明。
+
 ## 3. 版本与发布（重要）
 
 - **不要手动升版本号、打 tag、发 Release。** `app/build.gradle.kts` 里的 `1.1.0` 只是本地基线。

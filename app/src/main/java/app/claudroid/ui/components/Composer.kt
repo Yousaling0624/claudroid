@@ -1,10 +1,15 @@
 package app.claudroid.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,10 +21,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -34,43 +39,47 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.ui.theme.AppIcons
 import app.claudroid.ui.theme.AppType
-import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 
 /**
- * The one composer shared by the landing page and the transcript: paper card with a
- * hairline sand border, auto-growing text field, attachment + model affordances and
- * a single round send / stop control.
+ * The one composer shared by the landing page and the transcript.
+ *
+ * One capsule holds every affordance — attach, the growing text field and send/stop —
+ * instead of stacking a toolbar under the input. The top-bar model pill owns model
+ * switching now, so the composer stays a single uninterrupted rounded surface.
  */
 @Composable
 fun ClaudeComposer(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    model: String,
     running: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onAttach: () -> Unit,
-    onModelClick: () -> Unit,
     modifier: Modifier = Modifier,
+    editing: Boolean = false,
+    onCancelEdit: () -> Unit = {},
+    focusRequester: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val colors = MaterialTheme.appColors
-    val shape = Radii.lgShape
+    val shape = CircleShape
     val borderWidth by animateDpAsState(
         targetValue = if (focused) 1.5.dp else 1.dp,
         animationSpec = tween(Motion.FAST, easing = Motion.EaseChrome),
@@ -84,11 +93,7 @@ fun ClaudeComposer(
 
     val enabled = running || value.isNotBlank()
     val sendColor by animateColorAsState(
-        targetValue = when {
-            running -> colors.orange
-            enabled -> colors.orange
-            else -> colors.surface2
-        },
+        targetValue = if (enabled) colors.orange else colors.surface2,
         animationSpec = tween(Motion.MEDIUM, easing = Motion.EaseChrome),
         label = "send-color",
     )
@@ -99,26 +104,99 @@ fun ClaudeComposer(
         animationSpec = Motion.Press,
         label = "send-scale",
     )
+    val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
 
     Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
-        Column(
+        AnimatedVisibility(
+            visible = editing,
+            enter = expandVertically(tween(Motion.MEDIUM, easing = Motion.EaseChrome)) + fadeIn(tween(Motion.FAST)),
+            exit = shrinkVertically(tween(Motion.FAST)) + fadeOut(tween(Motion.FAST)),
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+                    .clip(CircleShape)
+                    .background(colors.orangeSoft)
+                    .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    AppIcons.Edit,
+                    contentDescription = null,
+                    tint = colors.accentInk,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "正在编辑消息，发送后将从这里重新开始",
+                    style = AppType.caption.copy(fontSize = 11.5.sp),
+                    color = colors.accentInk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onCancelEdit),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        AppIcons.Close,
+                        contentDescription = "取消编辑",
+                        tint = colors.accentInk,
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
+        }
+
+        Row(
             Modifier
                 .fillMaxWidth()
+                .shadow(
+                    elevation = 8.dp,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = colors.ink.copy(alpha = 0.08f),
+                    spotColor = colors.ink.copy(alpha = 0.10f),
+                )
                 .clip(shape)
                 .background(colors.paper)
                 .border(borderWidth, borderColor, shape)
-                .animateContentSize(),
+                .animateContentSize()
+                .padding(6.dp)
+                .heightIn(min = 40.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
             Box(
                 Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 13.dp, bottom = 2.dp)
+                    .size(40.dp)
+                    .pressFeedback(shape = CircleShape, dragMorph = true)
+                    .clip(CircleShape)
+                    .background(colors.surface1)
+                    .clickable(onClick = onAttach),
+                contentAlignment = Alignment.Center,
             ) {
+                Icon(
+                    AppIcons.Plus,
+                    contentDescription = "添加附件",
+                    tint = colors.graphite,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            Box(Modifier.weight(1f)) {
                 if (value.isEmpty()) {
                     Text(
                         placeholder,
                         style = AppType.userBody,
                         color = colors.stone,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
                     )
                 }
                 BasicTextField(
@@ -126,109 +204,59 @@ fun ClaudeComposer(
                     onValueChange = onValueChange,
                     textStyle = AppType.userBody.copy(color = colors.ink),
                     cursorBrush = SolidColor(colors.orange),
-                    maxLines = 8,
+                    maxLines = 7,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 8.dp)
+                        .then(focusModifier)
                         .onFocusChanged { focused = it.isFocused },
                 )
             }
-            Row(
+            Spacer(Modifier.width(4.dp))
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 10.dp)
-                    .height(40.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .size(40.dp)
+                    .graphicsLayer {
+                        scaleX = sendScale
+                        scaleY = sendScale
+                    }
+                    // The legacy interaction-source scale stays; the morph layer stacks
+                    // on top so the send circle also stretches while dragged.
+                    .pressFeedback(shape = CircleShape, dragMorph = true)
+                    .clip(CircleShape)
+                    .background(sendColor)
+                    .clickable(
+                        interactionSource = sendInteraction,
+                        indication = null,
+                        enabled = enabled,
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (running) onStop() else onSend()
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .pressFeedback(shape = CircleShape)
-                        .clip(CircleShape)
-                        .clickable(onClick = onAttach),
-                    contentAlignment = Alignment.Center,
-                ) {
+                if (running) {
                     Icon(
-                        AppIcons.Plus,
-                        "添加附件",
-                        tint = colors.graphite,
+                        AppIcons.Stop,
+                        contentDescription = "停止",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                } else {
+                    Icon(
+                        AppIcons.ArrowUp,
+                        contentDescription = "发送",
+                        tint = if (enabled) MaterialTheme.colorScheme.onPrimary else colors.bone,
                         modifier = Modifier.size(19.dp),
                     )
                 }
-                Spacer(Modifier.width(4.dp))
-                val modelShape = Radii.xsShape
-                Row(
-                    Modifier
-                        .weight(1f)
-                        .pressFeedback(shape = modelShape)
-                        .clip(modelShape)
-                        .clickable(onClick = onModelClick)
-                        .padding(horizontal = 7.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ClaudeMark(size = 12.dp)
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        text = model.ifBlank { "选择模型" },
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 12.5.sp,
-                        ),
-                        color = colors.graphite,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 168.dp),
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    Icon(
-                        AppIcons.ChevronDown,
-                        contentDescription = null,
-                        tint = colors.stone,
-                        modifier = Modifier.size(12.dp),
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier
-                        .size(40.dp)
-                        .graphicsLayer {
-                            scaleX = sendScale
-                            scaleY = sendScale
-                        }
-                        .clip(CircleShape)
-                        .background(sendColor)
-                        .clickable(
-                            interactionSource = sendInteraction,
-                            indication = null,
-                            enabled = enabled,
-                        ) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (running) onStop() else onSend()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (running) {
-                        Icon(
-                            AppIcons.Stop,
-                            contentDescription = "停止",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    } else {
-                        Icon(
-                            AppIcons.ArrowUp,
-                            contentDescription = "发送",
-                            tint = if (enabled) MaterialTheme.colorScheme.onPrimary else colors.bone,
-                            modifier = Modifier.size(19.dp),
-                        )
-                    }
-                }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(5.dp))
         Text(
             "Agent 可能修改系统文件，请确认它执行的命令。",
-            style = AppType.caption,
+            style = AppType.caption.copy(fontSize = 10.5.sp),
             color = colors.stone,
             modifier = Modifier.fillMaxWidth(),
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,

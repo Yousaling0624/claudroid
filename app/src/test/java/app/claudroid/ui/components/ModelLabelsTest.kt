@@ -70,4 +70,23 @@ class ModelLabelsTest {
         assertEquals("默认", composerModelLabel(empty))
         assertEquals("CLI 默认 · 不指定模型", chatModelLabel(empty))
     }
+
+    @Test
+    fun shortLabelKeepsOnlyTheTierName() {
+        val settings = base.copy(activeTier = ModelTier.OPUS.name, opusModel = "auto/hy4free")
+        assertEquals("Opus", shortModelLabel(settings))
+    }
+
+    @Test
+    fun shortLabelFallsBackToTheRawModel() {
+        assertEquals("auto/hy4free", shortModelLabel(base))
+        assertEquals("CLI 默认", shortModelLabel(base.copy(activeTier = AppSettings.AUTO_MODEL)))
+        assertEquals("默认", shortModelLabel(AppSettings(model = "")))
+    }
+
+    @Test
+    fun shortLabelTruncatesVeryLongModelIds() {
+        val long = AppSettings(model = "vendor/some-very-long-routing-group")
+        assertEquals("vendor/some-ver…", shortModelLabel(long))
+    }
 }

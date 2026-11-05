@@ -10,11 +10,19 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * Hand-drawn line icons on a 24dp grid. Strokes stay at 1.7dp with round caps so the
- * whole chrome reads as one hairline language alongside the brand starburst, instead
- * of the heavier filled Material icon set.
+ * Material 3 Expressive-adjacent icon set on a 24dp grid.
+ *
+ * The old set was a 1.7dp hand-drawn hairline; it read thin and slightly skeuomorphic
+ * next to the new rounded chrome. These use Material Symbols' rounded language:
+ * 2dp strokes, round caps/joins, 2.4dp corner radii, fewer interior details, and
+ * filled forms only where a solid shape is the clearest reading (stop, sparkle,
+ * status dots). Geometry is simplified rather than literal — the terminal is a soft
+ * rounded frame, the folder a single rounded silhouette.
  */
 object AppIcons {
+
+    private const val STROKE = 2f
+    private const val CORNER = 2.4f
 
     private fun icon(name: String, block: ImageVector.Builder.() -> Unit): ImageVector =
         ImageVector.Builder(
@@ -26,7 +34,7 @@ object AppIcons {
         ).apply(block).build()
 
     private fun ImageVector.Builder.stroke(
-        width: Float = 1.7f,
+        width: Float = STROKE,
         block: PathBuilder.() -> Unit,
     ) {
         path(
@@ -50,12 +58,32 @@ object AppIcons {
         close()
     }
 
+    /** Rounded rectangle with a single soft corner radius, the base of the new set. */
+    private fun PathBuilder.roundRect(l: Float, t: Float, r: Float, b: Float, radius: Float = CORNER) {
+        val rad = minOf(radius, (r - l) / 2f, (b - t) / 2f)
+        moveTo(l + rad, t)
+        lineTo(r - rad, t)
+        quadTo(r, t, r, t + rad)
+        lineTo(r, b - rad)
+        quadTo(r, b, r - rad, b)
+        lineTo(l + rad, b)
+        quadTo(l, b, l, b - rad)
+        lineTo(l, t + rad)
+        quadTo(l, t, l + rad, t)
+        close()
+    }
+
+    /** Rounded page silhouette; the old folded corner read as skeuomorphic at 18dp. */
+    private fun PathBuilder.documentOutline() {
+        roundRect(6.2f, 3.6f, 17.8f, 20.4f, CORNER)
+    }
+
     val Menu: ImageVector by lazy {
         icon("Menu") {
             stroke {
-                moveTo(4.5f, 6.8f); lineTo(19.5f, 6.8f)
-                moveTo(4.5f, 12f); lineTo(19.5f, 12f)
-                moveTo(4.5f, 17.2f); lineTo(19.5f, 17.2f)
+                moveTo(4.6f, 6.8f); lineTo(19.4f, 6.8f)
+                moveTo(4.6f, 12f); lineTo(19.4f, 12f)
+                moveTo(4.6f, 17.2f); lineTo(19.4f, 17.2f)
             }
         }
     }
@@ -63,38 +91,35 @@ object AppIcons {
     val Plus: ImageVector by lazy {
         icon("Plus") {
             stroke {
-                moveTo(12f, 5.5f); lineTo(12f, 18.5f)
-                moveTo(5.5f, 12f); lineTo(18.5f, 12f)
+                moveTo(12f, 5.2f); lineTo(12f, 18.8f)
+                moveTo(5.2f, 12f); lineTo(18.8f, 12f)
             }
         }
     }
 
-    /** Send arrow, drawn slimmer than a filled Material arrow. */
+    /** Send arrow; slightly heavier than the chrome so it holds inside the filled circle. */
     val ArrowUp: ImageVector by lazy {
         icon("ArrowUp") {
-            stroke(width = 1.9f) {
-                moveTo(12f, 19.5f); lineTo(12f, 5.2f)
-                moveTo(5.4f, 11.8f); lineTo(12f, 5.2f); lineTo(18.6f, 11.8f)
+            stroke(width = 2.2f) {
+                moveTo(12f, 19.2f); lineTo(12f, 5.4f)
+                moveTo(5.8f, 11.4f); lineTo(12f, 5.2f); lineTo(18.2f, 11.4f)
             }
         }
     }
 
-    /** Stop square: rounded enough to belong to the family, still read as "halt". */
+    /** Filled rounded square: the clearest "halt" at 16dp. */
     val Stop: ImageVector by lazy {
         icon("Stop") {
-            stroke(width = 2.6f) {
-                moveTo(7.8f, 7.8f); lineTo(16.2f, 7.8f); lineTo(16.2f, 16.2f); lineTo(7.8f, 16.2f)
-                close()
-            }
+            solid { roundRect(7.2f, 7.2f, 16.8f, 16.8f, 2.6f) }
         }
     }
 
     val More: ImageVector by lazy {
         icon("More") {
             solid {
-                circle(5f, 12f, 1.55f)
-                circle(12f, 12f, 1.55f)
-                circle(19f, 12f, 1.55f)
+                circle(5f, 12f, 1.7f)
+                circle(12f, 12f, 1.7f)
+                circle(19f, 12f, 1.7f)
             }
         }
     }
@@ -102,7 +127,7 @@ object AppIcons {
     val ChevronDown: ImageVector by lazy {
         icon("ChevronDown") {
             stroke {
-                moveTo(6.9f, 9.7f); lineTo(12f, 14.8f); lineTo(17.1f, 9.7f)
+                moveTo(6.8f, 9.6f); lineTo(12f, 14.8f); lineTo(17.2f, 9.6f)
             }
         }
     }
@@ -110,7 +135,7 @@ object AppIcons {
     val ChevronRight: ImageVector by lazy {
         icon("ChevronRight") {
             stroke {
-                moveTo(9.7f, 6.8f); lineTo(14.9f, 12f); lineTo(9.7f, 17.2f)
+                moveTo(9.6f, 6.8f); lineTo(14.8f, 12f); lineTo(9.6f, 17.2f)
             }
         }
     }
@@ -118,8 +143,8 @@ object AppIcons {
     val Search: ImageVector by lazy {
         icon("Search") {
             stroke {
-                circle(10.6f, 10.6f, 5.9f)
-                moveTo(15.1f, 15.1f); lineTo(19.8f, 19.8f)
+                circle(10.6f, 10.6f, 6f)
+                moveTo(15.1f, 15.1f); lineTo(19.4f, 19.4f)
             }
         }
     }
@@ -127,8 +152,8 @@ object AppIcons {
     val Close: ImageVector by lazy {
         icon("Close") {
             stroke {
-                moveTo(6.4f, 6.4f); lineTo(17.6f, 17.6f)
-                moveTo(17.6f, 6.4f); lineTo(6.4f, 17.6f)
+                moveTo(6.6f, 6.6f); lineTo(17.4f, 17.4f)
+                moveTo(17.4f, 6.6f); lineTo(6.6f, 17.4f)
             }
         }
     }
@@ -136,8 +161,8 @@ object AppIcons {
     val Back: ImageVector by lazy {
         icon("Back") {
             stroke {
-                moveTo(19f, 12f); lineTo(5.6f, 12f)
-                moveTo(11f, 6.4f); lineTo(5.4f, 12f); lineTo(11f, 17.6f)
+                moveTo(19.2f, 12f); lineTo(5.2f, 12f)
+                moveTo(11.2f, 5.8f); lineTo(5f, 12f); lineTo(11.2f, 18.2f)
             }
         }
     }
@@ -145,17 +170,16 @@ object AppIcons {
     val Copy: ImageVector by lazy {
         icon("Copy") {
             stroke {
-                moveTo(9f, 8.6f); lineTo(9f, 4.6f); lineTo(19.4f, 4.6f); lineTo(19.4f, 15f); lineTo(15f, 15f)
-                moveTo(4.6f, 9f); lineTo(15f, 9f); lineTo(15f, 19.4f); lineTo(4.6f, 19.4f)
-                close()
+                roundRect(9f, 4.8f, 19.2f, 15f, 2.4f)
+                roundRect(4.8f, 9f, 15f, 19.2f, 2.4f)
             }
         }
     }
 
     val Check: ImageVector by lazy {
         icon("Check") {
-            stroke(width = 1.8f) {
-                moveTo(5f, 12.6f); lineTo(9.8f, 17.4f); lineTo(19.2f, 6.6f)
+            stroke(width = 2.2f) {
+                moveTo(5.2f, 12.4f); lineTo(9.8f, 17f); lineTo(18.8f, 7.2f)
             }
         }
     }
@@ -163,28 +187,20 @@ object AppIcons {
     val Folder: ImageVector by lazy {
         icon("Folder") {
             stroke {
-                moveTo(3.6f, 7.6f)
-                lineTo(9.1f, 7.6f)
-                lineTo(11f, 9.5f)
-                lineTo(20.4f, 9.5f)
-                lineTo(20.4f, 18.2f)
-                lineTo(3.6f, 18.2f)
+                // One soft silhouette with a small tab; no sharp fold or hanging lip.
+                moveTo(3.8f, 17.4f)
+                lineTo(3.8f, 7.0f)
+                quadTo(3.8f, 5.2f, 5.6f, 5.2f)
+                lineTo(11.4f, 5.2f)
+                quadTo(12.2f, 5.2f, 12.8f, 5.8f)
+                lineTo(14.0f, 7.2f)
+                lineTo(18.2f, 7.2f)
+                quadTo(20.2f, 7.2f, 20.2f, 9.2f)
+                lineTo(20.2f, 17.4f)
+                quadTo(20.2f, 19.2f, 18.4f, 19.2f)
+                lineTo(5.6f, 19.2f)
+                quadTo(3.8f, 19.2f, 3.8f, 17.4f)
                 close()
-            }
-        }
-    }
-
-    val Settings: ImageVector by lazy {
-        icon("Settings") {
-            stroke {
-                moveTo(4.5f, 7f); lineTo(19.5f, 7f)
-                moveTo(4.5f, 12f); lineTo(19.5f, 12f)
-                moveTo(4.5f, 17f); lineTo(19.5f, 17f)
-            }
-            solid {
-                circle(9f, 7f, 2f)
-                circle(15f, 12f, 2f)
-                circle(9f, 17f, 2f)
             }
         }
     }
@@ -192,14 +208,45 @@ object AppIcons {
     /** Workspace alias so older screens can keep their name. */
     val Workspace: ImageVector get() = Folder
 
+    /**
+     * Rounded gear: one soft outer ring, eight short teeth and a centre hole. The old
+     * slider-with-dots glyph was indistinguishable from the "advanced" settings icon.
+     */
+    val Settings: ImageVector by lazy {
+        icon("Settings") {
+            stroke {
+                circle(12f, 12f, 6.1f)
+                circle(12f, 12f, 2.3f)
+            }
+            stroke(width = 2.4f) {
+                moveTo(18.6f, 12f); lineTo(20.9f, 12f)
+                moveTo(16.6f, 16.6f); lineTo(18.3f, 18.3f)
+                moveTo(12f, 18.6f); lineTo(12f, 20.9f)
+                moveTo(7.4f, 16.6f); lineTo(5.7f, 18.3f)
+                moveTo(5.4f, 12f); lineTo(3.1f, 12f)
+                moveTo(7.4f, 7.4f); lineTo(5.7f, 5.7f)
+                moveTo(12f, 5.4f); lineTo(12f, 3.1f)
+                moveTo(16.6f, 7.4f); lineTo(18.3f, 5.7f)
+            }
+        }
+    }
+
     val Trash: ImageVector by lazy {
         icon("Trash") {
             stroke {
-                moveTo(4.6f, 7.2f); lineTo(19.4f, 7.2f)
-                moveTo(9.2f, 7.2f); lineTo(9.2f, 4.6f); lineTo(14.8f, 4.6f); lineTo(14.8f, 7.2f)
-                moveTo(6.6f, 7.2f); lineTo(7.5f, 19.4f); lineTo(16.5f, 19.4f); lineTo(17.4f, 7.2f)
-                moveTo(10.3f, 10.8f); lineTo(10.3f, 16.1f)
-                moveTo(13.7f, 10.8f); lineTo(13.7f, 16.1f)
+                moveTo(4.8f, 7.2f); lineTo(19.2f, 7.2f)
+                moveTo(9.2f, 7.2f); lineTo(9.2f, 5.2f)
+                quadTo(9.2f, 4.6f, 9.8f, 4.6f)
+                lineTo(14.2f, 4.6f)
+                quadTo(14.8f, 4.6f, 14.8f, 5.2f)
+                lineTo(14.8f, 7.2f)
+                moveTo(6.6f, 7.2f); lineTo(7.4f, 18.2f)
+                quadTo(7.5f, 19.2f, 8.5f, 19.2f)
+                lineTo(15.5f, 19.2f)
+                quadTo(16.5f, 19.2f, 16.6f, 18.2f)
+                lineTo(17.4f, 7.2f)
+                moveTo(10.2f, 10.8f); lineTo(10.2f, 16f)
+                moveTo(13.8f, 10.8f); lineTo(13.8f, 16f)
             }
         }
     }
@@ -212,10 +259,13 @@ object AppIcons {
                 curveTo(7.5f, 3.8f, 3.8f, 7.5f, 3.8f, 12f)
                 curveTo(3.8f, 16.5f, 7.5f, 20.2f, 12f, 20.2f)
                 curveTo(15.9f, 20.2f, 19.2f, 17.6f, 20.1f, 14f)
-                moveTo(19.6f, 4.6f); lineTo(19.6f, 8.6f); lineTo(15.6f, 8.6f)
+                moveTo(19.8f, 4.8f); lineTo(19.8f, 8.8f); lineTo(15.8f, 8.8f)
             }
         }
     }
+
+    /** Regenerate reuses the circular arrow; kept as a semantic alias. */
+    val Regenerate: ImageVector get() = Refresh
 
     val Share: ImageVector by lazy {
         icon("Share") {
@@ -249,99 +299,113 @@ object AppIcons {
         }
     }
 
-    /** Source/code file: angle brackets around a slash. */
+    /** Edit: pencil with a rounded shoulder, used by the user-message action. */
+    val Edit: ImageVector by lazy {
+        icon("Edit") {
+            stroke {
+                moveTo(4.8f, 19.2f)
+                lineTo(4.8f, 15.4f)
+                lineTo(15f, 5.2f)
+                quadTo(15.8f, 4.4f, 16.6f, 5.2f)
+                lineTo(18.8f, 7.4f)
+                quadTo(19.6f, 8.2f, 18.8f, 9f)
+                lineTo(8.6f, 19.2f)
+                close()
+                moveTo(13.6f, 6.6f); lineTo(17.4f, 10.4f)
+            }
+        }
+    }
+
     val Code: ImageVector by lazy {
         icon("Code") {
             stroke {
-                moveTo(8.6f, 7.2f); lineTo(4.4f, 12f); lineTo(8.6f, 16.8f)
-                moveTo(15.4f, 7.2f); lineTo(19.6f, 12f); lineTo(15.4f, 16.8f)
-                moveTo(13.3f, 5.4f); lineTo(10.7f, 18.6f)
+                moveTo(8.8f, 7.4f); lineTo(4.6f, 12f); lineTo(8.8f, 16.6f)
+                moveTo(15.2f, 7.4f); lineTo(19.4f, 12f); lineTo(15.2f, 16.6f)
+                moveTo(13.2f, 5.4f); lineTo(10.8f, 18.6f)
             }
         }
     }
 
-    /** Plain text: page with folded corner and ruled lines. */
     val TextFile: ImageVector by lazy {
         icon("TextFile") {
             stroke {
-                moveTo(6f, 3.6f); lineTo(14.2f, 3.6f); lineTo(18.4f, 7.8f); lineTo(18.4f, 20.4f)
-                lineTo(6f, 20.4f); close()
-                moveTo(14f, 3.8f); lineTo(14f, 8f); lineTo(18.2f, 8f)
-                moveTo(9f, 12.2f); lineTo(15.2f, 12.2f)
-                moveTo(9f, 15.6f); lineTo(15.2f, 15.6f)
+                documentOutline()
+                moveTo(9.2f, 9.4f); lineTo(14.8f, 9.4f)
+                moveTo(9.2f, 13.0f); lineTo(14.8f, 13.0f)
+                moveTo(9.2f, 16.6f); lineTo(12.8f, 16.6f)
             }
         }
     }
 
-    /** Image file: frame with a sun and a mountain ridge. */
     val Image: ImageVector by lazy {
         icon("Image") {
             stroke {
-                moveTo(4.2f, 5.2f); lineTo(19.8f, 5.2f); lineTo(19.8f, 18.8f); lineTo(4.2f, 18.8f); close()
-                circle(9.1f, 9.9f, 1.7f)
-                moveTo(4.8f, 17.2f); lineTo(9.9f, 12.5f); lineTo(13.6f, 15.7f)
-                moveTo(13.6f, 15.7f); lineTo(15.7f, 13.8f); lineTo(19.1f, 17.1f)
+                roundRect(4.2f, 5.2f, 19.8f, 18.8f, 2.8f)
+                circle(8.8f, 9.6f, 1.5f)
+                // A single mountain line instead of the old two-peak zigzag.
+                moveTo(5.4f, 16.6f)
+                lineTo(9.6f, 12.4f)
+                lineTo(13.0f, 15.8f)
+                lineTo(15.4f, 13.4f)
+                lineTo(18.6f, 16.6f)
             }
         }
     }
 
-    /** Generic/binary file. */
     val File: ImageVector by lazy {
         icon("File") {
-            stroke {
-                moveTo(6f, 3.6f); lineTo(14.2f, 3.6f); lineTo(18.4f, 7.8f); lineTo(18.4f, 20.4f)
-                lineTo(6f, 20.4f); close()
-                moveTo(14f, 3.8f); lineTo(14f, 8f); lineTo(18.2f, 8f)
-            }
+            stroke { documentOutline() }
         }
     }
 
     // ---------------------------------------------------------------- tool icons
-    // Same 24dp grid / 1.7dp hairline / round caps as the chrome icons above. These
-    // are restrained line-object silhouettes (Claude's quiet sketch language), not
-    // filled Material glyphs, so a transcript full of tool rows stays calm.
+    // Same 24dp grid and 2dp rounded language as the chrome. Simplified silhouettes
+    // keep a transcript full of tool rows calm while still reading as objects.
 
-    /** Terminal: rounded frame, a `>_` prompt. Maps Bash / shell tools. */
     val Terminal: ImageVector by lazy {
         icon("Terminal") {
             stroke {
-                moveTo(3.8f, 5.2f); lineTo(20.2f, 5.2f); lineTo(20.2f, 18.8f); lineTo(3.8f, 18.8f); close()
-                moveTo(7.4f, 9.6f); lineTo(10f, 12f); lineTo(7.4f, 14.4f)
-                moveTo(11.6f, 14.6f); lineTo(16.4f, 14.6f)
+                roundRect(3.8f, 5.2f, 20.2f, 18.8f, 2.8f)
+                moveTo(7.4f, 9.8f); lineTo(10.0f, 12f); lineTo(7.4f, 14.2f)
+                moveTo(11.6f, 14.4f); lineTo(16.0f, 14.4f)
             }
         }
     }
 
-    /** Read: open page with an eye; distinct from a plain file. */
     val ReadFile: ImageVector by lazy {
         icon("ReadFile") {
             stroke {
-                moveTo(6f, 3.6f); lineTo(14.2f, 3.6f); lineTo(18.4f, 7.8f); lineTo(18.4f, 20.4f)
-                lineTo(6f, 20.4f); close()
-                moveTo(14f, 3.8f); lineTo(14f, 8f); lineTo(18.2f, 8f)
-                moveTo(9f, 13.4f)
-                curveTo(10f, 11.9f, 14f, 11.9f, 15f, 13.4f)
-                curveTo(14f, 14.9f, 10f, 14.9f, 9f, 13.4f); close()
-                circle(12f, 13.4f, 0.9f)
+                documentOutline()
+                moveTo(8.8f, 13.4f)
+                quadTo(10.2f, 11.4f, 12f, 11.4f)
+                quadTo(13.8f, 11.4f, 15.2f, 13.4f)
+                quadTo(13.8f, 15.4f, 12f, 15.4f)
+                quadTo(10.2f, 15.4f, 8.8f, 13.4f)
+                close()
             }
+            solid { circle(12f, 13.4f, 1f) }
         }
     }
 
-    /** Write / Edit: page with a pencil. */
     val WriteFile: ImageVector by lazy {
         icon("WriteFile") {
             stroke {
-                moveTo(6f, 3.6f); lineTo(12.6f, 3.6f); lineTo(16.8f, 7.8f); lineTo(16.8f, 10.4f)
-                moveTo(6f, 3.6f); lineTo(6f, 20.4f); lineTo(13.4f, 20.4f)
-                moveTo(12.4f, 3.8f); lineTo(12.4f, 8f); lineTo(16.6f, 8f)
-                moveTo(14.6f, 13.2f); lineTo(20.2f, 18.8f); lineTo(17.6f, 21.4f); lineTo(12f, 15.8f)
+                documentOutline()
+                // Pencil overlaps the page's lower-right corner; the tip stays outside
+                // so the glyph still reads at 17dp in the workspace list.
+                moveTo(11.8f, 20.8f)
+                lineTo(12.6f, 17.4f)
+                lineTo(17.6f, 12.4f)
+                quadTo(18.4f, 11.6f, 19.2f, 12.4f)
+                lineTo(20.0f, 13.2f)
+                quadTo(20.8f, 14.0f, 20.0f, 14.8f)
+                lineTo(15.0f, 19.8f)
                 close()
-                moveTo(13.4f, 14.4f); lineTo(16.8f, 17.8f)
+                moveTo(12.6f, 17.4f); lineTo(15.0f, 19.8f)
             }
         }
     }
 
-    /** Globe: circle with meridian + latitude arcs. Maps WebFetch / WebSearch. */
     val Globe: ImageVector by lazy {
         icon("Globe") {
             stroke {
@@ -355,7 +419,6 @@ object AppIcons {
         }
     }
 
-    /** Agents / Task: two small heads over a shared shoulder line. */
     val Agents: ImageVector by lazy {
         icon("Agents") {
             stroke {
@@ -370,7 +433,6 @@ object AppIcons {
         }
     }
 
-    /** Checklist / Todo: three rules with a leading check. */
     val Checklist: ImageVector by lazy {
         icon("Checklist") {
             stroke {
@@ -382,7 +444,6 @@ object AppIcons {
         }
     }
 
-    /** Plug / MCP: cable with a two-prong head. */
     val Plug: ImageVector by lazy {
         icon("Plug") {
             stroke {
@@ -396,7 +457,6 @@ object AppIcons {
         }
     }
 
-    /** Wrench / generic tool: open jaw + handle. */
     val Wrench: ImageVector by lazy {
         icon("Wrench") {
             stroke {
@@ -413,22 +473,25 @@ object AppIcons {
         }
     }
 
-    /** Sparkle: four-point star with small satellites; maps "think"/generate tools. */
+    /** Filled four-point star: the one expressive solid in the tool family. */
     val Sparkle: ImageVector by lazy {
         icon("Sparkle") {
-            stroke {
-                moveTo(12f, 3.4f)
-                curveTo(12.6f, 8.2f, 15.8f, 11.4f, 20.6f, 12f)
-                curveTo(15.8f, 12.6f, 12.6f, 15.8f, 12f, 20.6f)
-                curveTo(11.4f, 15.8f, 8.2f, 12.6f, 3.4f, 12f)
-                curveTo(8.2f, 11.4f, 11.4f, 8.2f, 12f, 3.4f); close()
-                moveTo(18.6f, 4.2f); lineTo(18.6f, 6.6f)
-                moveTo(17.4f, 5.4f); lineTo(19.8f, 5.4f)
+            solid {
+                moveTo(12f, 3.2f)
+                curveTo(12.7f, 8f, 16f, 11.3f, 20.8f, 12f)
+                curveTo(16f, 12.7f, 12.7f, 16f, 12f, 20.8f)
+                curveTo(11.3f, 16f, 8f, 12.7f, 3.2f, 12f)
+                curveTo(8f, 11.3f, 11.3f, 8f, 12f, 3.2f)
+                close()
+                moveTo(18.8f, 3.8f)
+                lineTo(19.3f, 4.9f); lineTo(20.4f, 5.4f); lineTo(19.3f, 5.9f)
+                lineTo(18.8f, 7f); lineTo(18.3f, 5.9f); lineTo(17.2f, 5.4f)
+                lineTo(18.3f, 4.9f)
+                close()
             }
         }
     }
 
-    /** Generic tool: a quiet hex nut, used for any unrecognised name. */
     val Tool: ImageVector by lazy {
         icon("Tool") {
             stroke {
@@ -440,17 +503,18 @@ object AppIcons {
     }
 
     // ---------------------------------------------------------------- settings IA
+    /** Vertical faders; visually distinct from the gear used for the settings root. */
     val Sliders: ImageVector by lazy {
         icon("Sliders") {
             stroke {
-                moveTo(4.2f, 7f); lineTo(19.8f, 7f)
-                moveTo(4.2f, 12f); lineTo(19.8f, 12f)
-                moveTo(4.2f, 17f); lineTo(19.8f, 17f)
+                moveTo(6.6f, 4.6f); lineTo(6.6f, 19.4f)
+                moveTo(12f, 4.6f); lineTo(12f, 19.4f)
+                moveTo(17.4f, 4.6f); lineTo(17.4f, 19.4f)
             }
             solid {
-                circle(9f, 7f, 2.1f)
-                circle(15f, 12f, 2.1f)
-                circle(8f, 17f, 2.1f)
+                circle(6.6f, 15.2f, 2.2f)
+                circle(12f, 8.8f, 2.2f)
+                circle(17.4f, 13.2f, 2.2f)
             }
         }
     }
@@ -511,7 +575,7 @@ object AppIcons {
                 circle(12f, 12f, 8.4f)
                 moveTo(12f, 11f); lineTo(12f, 16.4f)
             }
-            solid { circle(12f, 8f, 0.95f) }
+            solid { circle(12f, 8f, 1.05f) }
         }
     }
 }

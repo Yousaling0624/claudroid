@@ -2,11 +2,14 @@ package app.claudroid.ui.chat
 
 import app.claudroid.AppContainer
 import app.claudroid.core.Logx
+import app.claudroid.core.WebSources
+import app.claudroid.data.AppSettings
 import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
 import app.claudroid.data.ApiFlavor
 import app.claudroid.data.Role
+import app.claudroid.engine.ClaudeEngine
 import app.claudroid.engine.EngineEvent
 import app.claudroid.engine.TitleGenerator
 import app.claudroid.engine.TurnService
@@ -22,6 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.UUID
 
 /**
  * Owns one conversation. Lives in [AppContainer] rather than a ViewModel on purpose:
@@ -133,7 +137,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             ?.joinToString("\n") { it.text }?.trim().orEmpty()
         val assistant = messages.lastOrNull { it.role == Role.ASSISTANT }
             ?.blocks?.filterIsInstance<Block.Text>()
-            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+            ?.joinToString("\n") { WebSources.stripTrailingSources(it.text) }?.trim().orEmpty()
         if (firstUser.isEmpty() || assistant.isEmpty()) return
         val expectedTitle = _title.value
         val generationAtStart = titleGeneration
@@ -167,7 +171,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             ?.joinToString("\n") { it.text }?.trim().orEmpty()
         val assistant = messages.lastOrNull { it.role == Role.ASSISTANT }
             ?.blocks?.filterIsInstance<Block.Text>()
-            ?.joinToString("\n") { it.text }?.trim().orEmpty()
+            ?.joinToString("\n") { WebSources.stripTrailingSources(it.text) }?.trim().orEmpty()
         if (firstUser.isEmpty() || assistant.isEmpty()) {
             _titleNotice.value = "还没有可总结的对话内容"
             return
@@ -234,13 +238,94 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     fun send(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
-        // Claim the turn synchronously; the Flow check alone races with a fast double tap.
-        if (!_running.compareAndSet(false, true)) return
+        launchTurn { prepared ->
+            executeTurn(
+                prepared = prepared,
+                baseMessages = _messages.value,
+                userText = text,
+                prompt = text,
+                resetCliSession = false,
+                userMessageId = null,
+            )
+        }
+    }
+
+    /**
+     * Edits a user message. The transcript is cut at that message and a fresh CLI
+     * session starts with the earlier turns replayed as context; the official CLI can
+     * resume but cannot rewind, so this is the honest equivalent of an edit-and-resend.
+     *
+     * Returns false when the message no longer exists, so the composer can keep the
+     * draft and the editing banner instead of silently dropping both.
+     */
+    fun resendFrom(messageId: String, raw: String): Boolean {
+        val text = raw.trim()
+        if (text.isEmpty()) return false
+        val messages = _messages.value
+        val index = messages.indexOfFirst { it.id == messageId && it.role == Role.USER }
+        if (index < 0) {
+            notifyError("要编辑的消息已不存在，请重新选择")
+            return false
+        }
+        val history = messages.take(index)
+        return launchTurn { prepared ->
+            executeTurn(
+                prepared = prepared,
+                baseMessages = history,
+                userText = text,
+                prompt = ConversationPrompt.build(history, text),
+                resetCliSession = true,
+                userMessageId = messageId,
+            )
+        }
+    }
+
+    /** Re-runs the user turn that produced [messageId] and replaces that answer. */
+    fun regenerate(messageId: String) {
+        val messages = _messages.value
+        // Only the newest answer can be regenerated; older ones would drop the turns
+        // that came after them without the user asking for that.
+        if (messages.lastOrNull { it.role == Role.ASSISTANT }?.id != messageId) return
+        val assistantIndex = messages.indexOfFirst { it.id == messageId && it.role == Role.ASSISTANT }
+        if (assistantIndex < 0) return
+        val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { messages[it].role == Role.USER }
+            ?: return
+        val text = messages[userIndex].blocks
+            .filterIsInstance<Block.Text>()
+            .joinToString("\n") { it.text }
+            .trim()
+        if (text.isEmpty()) return
+        val history = messages.take(userIndex)
+        launchTurn { prepared ->
+            executeTurn(
+                prepared = prepared,
+                baseMessages = history,
+                userText = text,
+                prompt = ConversationPrompt.build(history, text),
+                resetCliSession = true,
+                userMessageId = messages[userIndex].id,
+            )
+        }
+    }
+
+    private data class PreparedTurn(
+        val settings: AppSettings,
+        val plan: ClaudeEngine.LaunchPlan,
+    )
+
+    /**
+     * Claims the single running slot synchronously (a Flow check races with a double
+     * tap), then prepares the backend before touching the transcript. A failed
+     * precheck must not delete messages when the user was editing or regenerating.
+     */
+    private fun launchTurn(block: suspend (PreparedTurn) -> Unit): Boolean {
+        if (!_running.compareAndSet(false, true)) return false
         // A stop from the previous turn must not leak into this one.
         container.engine.resetCancel()
         job = scope.launch {
             try {
-                sendLocked(text)
+                val prepared = prepareTurn() ?: return@launch
+                block(prepared)
             } finally {
                 withContext(NonCancellable) {
                     _running.value = false
@@ -250,43 +335,64 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 }
             }
         }
+        return true
     }
 
-    private suspend fun sendLocked(text: String) {
+    private suspend fun prepareTurn(): PreparedTurn? {
         val settings = container.settings.flow.first()
         if (!settings.isConfigured) {
             appendError("还没有配置 API Key：请到「设置 → 接口」填写 Base URL 与 Key（本地地址可留空）")
-            return
+            return null
         }
         container.engine.startIssue(settings)?.let {
             appendError(it)
-            return
+            return null
         }
         val plan = container.engine.plan(settings)
         if (plan == null) {
             appendError("后端尚未就绪：请到「设置 → Claude Code 引擎」安装或修复内置 CLI")
-            return
+            return null
         }
         if (settings.apiFlavor == ApiFlavor.OPENAI && plan.proxyBaseUrl == null) {
             appendError("OpenAI 兼容代理启动失败，请检查端口占用后重试。")
-            return
+            return null
         }
+        return PreparedTurn(settings, plan)
+    }
+
+    private suspend fun executeTurn(
+        prepared: PreparedTurn,
+        baseMessages: List<ChatMessage>,
+        userText: String,
+        prompt: String,
+        resetCliSession: Boolean,
+        userMessageId: String?,
+    ) {
+        val settings = prepared.settings
+        val plan = prepared.plan
+        if (resetCliSession) claudeSessionId = null
 
         _status.value = "准备中…"
-        TurnService.start(container.appContext, "Claudroid 正在执行", text.take(48))
+        TurnService.start(container.appContext, "Claudroid 正在执行", userText.take(48))
 
         var session = _session.value ?: ChatSession(id = sessionId)
         if (session.title == "新对话") {
-            session = session.copy(title = text.replace('\n', ' ').take(28))
+            session = session.copy(title = userText.replace('\n', ' ').take(28))
             _title.value = session.title
             titleIsTemporary = true
         }
         session = session.copy(model = settings.model)
         _session.value = session
 
-        val userMsg = ChatMessage(role = Role.USER, blocks = listOf(Block.Text(text)))
+        // Reusing the edited message's id keeps the composer's editing target valid
+        // after the transcript is rebuilt (edit-and-resend, regenerate).
+        val userMsg = ChatMessage(
+            id = userMessageId ?: UUID.randomUUID().toString(),
+            role = Role.USER,
+            blocks = listOf(Block.Text(userText)),
+        )
         val assistant = ChatMessage(role = Role.ASSISTANT, streaming = true)
-        _messages.update { it + userMsg + assistant }
+        _messages.value = baseMessages + userMsg + assistant
         persist()
 
         var finalText: String? = null
@@ -299,7 +405,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             var code = 0
             withContext(Dispatchers.IO) {
                 code = container.engine.engine.runTurn(
-                    prompt = text,
+                    prompt = prompt,
                     resumeSessionId = resumeId,
                     settings = settings,
                     plan = plan,

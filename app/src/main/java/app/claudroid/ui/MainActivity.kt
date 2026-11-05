@@ -202,9 +202,9 @@ private fun AppRoot(container: AppContainer) {
                                 pendingPrompt = null
                             },
                             onOpenDrawer = { scope.launch { drawerState.open() } },
+                            onNewChat = { startNewChat() },
                             onOpenWorkspace = { push("workspace") },
                             onOpenSettings = { push("settings") },
-                            onBack = { pop() },
                         )
                     }
                     else -> HomeScreen(

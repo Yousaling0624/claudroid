@@ -3,9 +3,9 @@ package app.claudroid.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,10 +22,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -38,9 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.claudroid.data.AppSettings
@@ -80,126 +81,135 @@ fun SheetTitle(title: String, description: String?) {
     }
 }
 
-private @Composable
-fun ModelChoiceRow(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = Radii.smShape
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .pressFeedback(shape = shape)
-            .clip(shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (selected) MaterialTheme.appColors.accentInk else MaterialTheme.appColors.ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.appColors.stone,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 1.dp),
-            )
-        }
-        if (selected) {
-            Icon(
-                AppIcons.Check,
-                contentDescription = "已选择",
-                tint = MaterialTheme.appColors.accentInk,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    }
-}
-
 /**
- * Composer model switcher shared by home and chat. Selecting a tier only changes
- * [AppSettings.activeTier]; the concrete model stays editable in settings so the same
- * picker works for Anthropic aliases and OpenAI-compatible proxies.
+ * Model switcher shared by home and chat. This used to be a bottom sheet; a dropdown
+ * anchored under the model pill matches the top-bar control that opens it and keeps
+ * the transcript visible. Selecting a tier only changes [AppSettings.activeTier]; the
+ * concrete model stays editable in settings so the same picker works for Anthropic
+ * aliases and OpenAI-compatible proxies.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelPickerSheet(
+fun ModelDropdownMenu(
+    expanded: Boolean,
     settings: AppSettings,
+    offset: DpOffset,
     onSelectTier: (ModelTier?) -> Unit,
     onSelectAuto: () -> Unit,
     onManageTiers: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
+    val colors = MaterialTheme.appColors
+    FloatingMenu(
+        expanded = expanded,
         onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.appColors.paper,
-        scrimColor = MaterialTheme.appColors.ink.copy(alpha = 0.32f),
-        dragHandle = { SheetHandle() },
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        width = ModelMenuWidth,
+        offset = offset,
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(start = 16.dp, end = 16.dp, bottom = 18.dp)
+        Text(
+            "选择模型",
+            style = AppType.captionMedium.copy(letterSpacing = 0.4.sp),
+            color = colors.stone,
+            modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 2.dp),
+        )
+        val active = settings.resolvedActiveTier
+        ModelMenuItem(
+            title = "默认 / 路由组",
+            subtitle = settings.model.ifBlank { "未设置" },
+            selected = active == null && !settings.usesAutoModel,
         ) {
-            SheetTitle(
-                "选择模型",
-                "二选一：选具体档位按映射传 --model；选「默认 / 路由组」则把「接口与模型」里填的" +
-                    "模型 ID 原样传给 --model，路由组（如 auto/dfmodel[1m]）也填在那里。",
-            )
-            Spacer(Modifier.height(8.dp))
-            val active = settings.resolvedActiveTier
-            ModelChoiceRow(
-                title = "默认 / 路由组",
-                subtitle = settings.model.ifBlank { "未设置" },
-                selected = active == null && !settings.usesAutoModel,
-            ) {
-                onSelectTier(null)
-                onDismiss()
-            }
-            ClaudeDivider(Modifier.padding(horizontal = 12.dp))
-            ModelChoiceRow(
-                title = "CLI 默认（不指定模型）",
-                subtitle = "不传 --model，由 Claude Code 用自身默认模型",
-                selected = settings.usesAutoModel,
-            ) {
-                onSelectAuto()
-                onDismiss()
-            }
-            ClaudeDivider(Modifier.padding(horizontal = 12.dp))
-            ModelTier.entries.forEach { tier ->
-                ModelChoiceRow(
-                    title = tier.label,
-                    subtitle = tierMappingLabel(settings, tier),
-                    selected = active == tier,
-                ) {
-                    onSelectTier(tier)
-                    onDismiss()
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            GhostButton(
-                text = "管理模型档位",
-                onClick = {
-                    onManageTiers()
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            onSelectTier(null)
+            onDismiss()
         }
+        ModelMenuItem(
+            title = "CLI 默认（不指定模型）",
+            subtitle = "不传 --model，由 Claude Code 用自身默认模型",
+            selected = settings.usesAutoModel,
+        ) {
+            onSelectAuto()
+            onDismiss()
+        }
+        ModelTier.entries.forEach { tier ->
+            ModelMenuItem(
+                title = tier.label,
+                subtitle = tierMappingLabel(settings, tier),
+                selected = active == tier,
+            ) {
+                onSelectTier(tier)
+                onDismiss()
+            }
+        }
+        ClaudeDivider(Modifier.padding(horizontal = 12.dp))
+        DropdownMenuItem(
+            text = {
+                Text(
+                    "管理模型档位",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.accentInk,
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    AppIcons.Layers,
+                    contentDescription = null,
+                    tint = colors.accentInk,
+                    modifier = Modifier.size(17.dp),
+                )
+            },
+            onClick = {
+                onDismiss()
+                onManageTiers()
+            },
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp),
+        )
+        Spacer(Modifier.height(4.dp))
     }
+}
+
+@Composable
+private fun ModelMenuItem(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.appColors
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (selected) colors.accentInk else colors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    subtitle,
+                    style = AppType.caption,
+                    color = colors.stone,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+        },
+        trailingIcon = if (selected) {
+            {
+                Icon(
+                    AppIcons.Check,
+                    contentDescription = "已选择",
+                    tint = colors.accentInk,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        } else null,
+        onClick = onClick,
+        colors = MenuDefaults.itemColors(
+            textColor = colors.ink,
+            trailingIconColor = colors.accentInk,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+    )
 }
 
 /**

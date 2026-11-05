@@ -19,12 +19,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,16 +44,14 @@ import app.claudroid.AppContainer
 import app.claudroid.core.Attachments
 import app.claudroid.data.AppSettings
 import app.claudroid.engine.EngineManager
-import app.claudroid.ui.components.BrandLockup
-import app.claudroid.ui.components.ClaudeMark
 import app.claudroid.ui.components.ClaudeComposer
-import app.claudroid.ui.components.ModelPickerSheet
+import app.claudroid.ui.components.ClaudeMark
+import app.claudroid.ui.components.FloatingTopBar
+import app.claudroid.ui.components.ModelDropdownMenu
 import app.claudroid.ui.components.OrganicHalo
-import app.claudroid.ui.components.composerModelLabel
 import app.claudroid.ui.components.pressFeedback
-import app.claudroid.ui.theme.AppIcons
+import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.theme.AppType
-import app.claudroid.ui.theme.Radii
 import app.claudroid.ui.theme.appColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -81,7 +76,7 @@ fun HomeScreen(
     val engineState by container.engine.state.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     var attachmentError by remember { mutableStateOf<String?>(null) }
-    var showModelPicker by remember { mutableStateOf(false) }
+    var showModelMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -116,37 +111,38 @@ fun HomeScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onOpenDrawer, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    AppIcons.Menu,
-                    "会话记录",
-                    tint = MaterialTheme.appColors.graphite,
-                    modifier = Modifier.size(21.dp),
+        FloatingTopBar(
+            title = "Claudroid",
+            subtitle = null,
+            modelLabel = shortModelLabel(settings),
+            running = false,
+            onOpenDrawer = onOpenDrawer,
+            onModelClick = { showModelMenu = !showModelMenu },
+            onNewChat = onNewChat,
+            modelMenuOpen = showModelMenu,
+            modelMenu = { offset ->
+                ModelDropdownMenu(
+                    expanded = showModelMenu,
+                    settings = settings,
+                    offset = offset,
+                    onSelectTier = { tier ->
+                        scope.launch {
+                            container.settings.edit { it.copy(activeTier = tier?.name ?: "") }
+                        }
+                    },
+                    onSelectAuto = {
+                        scope.launch {
+                            container.settings.edit { it.copy(activeTier = AppSettings.AUTO_MODEL) }
+                        }
+                    },
+                    onManageTiers = onOpenSettings,
+                    onDismiss = { showModelMenu = false },
                 )
-            }
-            Spacer(Modifier.weight(1f))
-            BrandLockup(starSize = 17.dp, textSize = 19.sp)
-            Spacer(Modifier.weight(1f))
-            IconButton(onClick = onNewChat, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    AppIcons.Plus,
-                    "新对话",
-                    tint = MaterialTheme.appColors.graphite,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
+            },
+        )
 
         Column(Modifier.weight(1f).fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
@@ -205,32 +201,12 @@ fun HomeScreen(
                     attachmentError = null
                 },
                 placeholder = "有什么可以帮你的？",
-                model = composerModelLabel(settings),
                 running = false,
                 onSend = ::submit,
                 onStop = {},
                 onAttach = { filePicker.launch(arrayOf("*/*")) },
-                onModelClick = { showModelPicker = true },
             )
         }
-    }
-
-    if (showModelPicker) {
-        ModelPickerSheet(
-            settings = settings,
-            onSelectTier = { tier ->
-                scope.launch {
-                    container.settings.edit { it.copy(activeTier = tier?.name ?: "") }
-                }
-            },
-            onSelectAuto = {
-                scope.launch {
-                    container.settings.edit { it.copy(activeTier = AppSettings.AUTO_MODEL) }
-                }
-            },
-            onManageTiers = onOpenSettings,
-            onDismiss = { showModelPicker = false },
-        )
     }
 }
 
@@ -242,7 +218,7 @@ private val SUGGESTIONS = listOf(
 
 @Composable
 private fun SuggestionChip(text: String, onClick: () -> Unit) {
-    val shape = Radii.lgShape
+    val shape = CircleShape
     Row(
         Modifier
             .pressFeedback(shape = shape)
@@ -277,7 +253,7 @@ private fun EngineHint(state: EngineManager.State, onOpenSettings: () -> Unit) {
         state.phase == EngineManager.Phase.Failed -> MaterialTheme.appColors.error
         else -> MaterialTheme.appColors.orange
     }
-    val shape = Radii.smShape
+    val shape = CircleShape
     Row(
         Modifier
             .fillMaxWidth()
@@ -286,7 +262,7 @@ private fun EngineHint(state: EngineManager.State, onOpenSettings: () -> Unit) {
             .clip(shape)
             .background(MaterialTheme.appColors.surface1)
             .clickable(onClick = onOpenSettings)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

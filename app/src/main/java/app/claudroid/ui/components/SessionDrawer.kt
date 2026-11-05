@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -93,6 +94,7 @@ fun AppDrawer(
             .fillMaxHeight()
             .fillMaxWidth(0.88f),
         color = MaterialTheme.appColors.paper,
+        shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
     ) {
         Column(
             Modifier
@@ -119,21 +121,20 @@ fun AppDrawer(
                 }
             }
 
-            val newChatShape = Radii.smShape
+            val newChatShape = CircleShape
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
-                    .height(46.dp)
-                    .pressFeedback(shape = newChatShape)
+                    .height(48.dp)
+                    .pressFeedback(shape = newChatShape, dragMorph = true)
                     .clip(newChatShape)
-                    .background(MaterialTheme.appColors.paper)
-                    .border(1.dp, MaterialTheme.appColors.sand, newChatShape)
+                    .background(MaterialTheme.appColors.surface1)
                     .clickable {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         onNewChat()
                     }
-                    .padding(horizontal = 14.dp),
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -232,11 +233,10 @@ private fun DrawerSearch(value: String, onValueChange: (String) -> Unit) {
         Modifier
             .fillMaxWidth()
             .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 8.dp)
-            .height(40.dp)
-            .clip(Radii.smShape)
+            .height(44.dp)
+            .clip(CircleShape)
             .background(MaterialTheme.appColors.surface1)
-            .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), Radii.smShape)
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -299,13 +299,13 @@ private fun DrawerSessionRow(
         animationSpec = tween(Motion.FAST, easing = Motion.EaseChrome),
         label = "drawer-row",
     )
-    val shape = Radii.smShape
+    val shape = Radii.lgShape
     Box {
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
-                .height(50.dp)
+                .height(52.dp)
                 .pressFeedback(shape = shape)
                 .clip(shape)
                 .background(background)
@@ -388,8 +388,8 @@ private fun DrawerActionRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .pressFeedback(shape = Radii.smShape)
-            .clip(Radii.smShape)
+            .pressFeedback(shape = Radii.lgShape)
+            .clip(Radii.lgShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -424,7 +424,7 @@ private fun EngineCard(state: EngineManager.State, onClick: () -> Unit, modifier
         state.phase == EngineManager.Phase.Failed -> MaterialTheme.appColors.error
         else -> MaterialTheme.appColors.stone
     }
-    val shape = Radii.smShape
+    val shape = Radii.lgShape
     Row(
         modifier
             .fillMaxWidth()
@@ -433,7 +433,7 @@ private fun EngineCard(state: EngineManager.State, onClick: () -> Unit, modifier
             .background(MaterialTheme.appColors.surface1)
             .border(1.dp, MaterialTheme.appColors.sand.copy(alpha = 0.6f), shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

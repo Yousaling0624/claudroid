@@ -9,6 +9,9 @@
 暖纸色 + 陶土橙。参考 Claude 官方 App 的安静、克制：平面纸张、1dp 发丝描边代替阴影、
 衬线体承载助手的声音、无纯黑与蓝灰。橙色是**焦点色，不是主题色**——大面积铺橙会毁掉纸张质感。
 
+内容卡片保持「平面纸张 + 发丝描边」；只有悬浮 chrome（顶栏四胶囊、底部输入胶囊）使用
+半透明玻璃、柔和阴影和亮边，形成前后层次。
+
 字体（`Theme.kt` 的 `AppType` / `AppTypography`）：
 
 | 用途 | 字体 | 关键尺寸 |
@@ -63,23 +66,38 @@
 | token | 值 | 用途 |
 | --- | --- | --- |
 | `xs` | 12dp | 小标签、复制按钮、小 chip、图标块 |
-| `sm` | 16dp | 输入框、普通行、工具卡、代码块 |
+| `sm` | 16dp | 普通行、工具卡、代码块 |
 | `md` | 20dp | 普通按钮、主按钮、折叠披露、代码块头部 |
-| `lg` | 24dp | 分区卡、用户气泡、设置分类卡、底部弹层 |
-| `xl` | 28dp | 对话框 |
+| `menu` | 22dp | 顶栏模型 / 标题下拉浮层（`FloatingMenu`） |
+| `lg` | 24dp | 分区卡、用户气泡、设置分类卡、底部弹层、侧边栏会话行 / 引擎卡 / 提示行 |
+| `xl` | 28dp | 对话框、抽屉右缘 |
 | `xxl` | 32dp | 大弹层 / M3 extraLarge |
+| 胶囊 | `CircleShape` | 顶栏四个气泡、底部输入框、侧边栏新对话 / 搜索、建议 chip |
 
 `Shapes` 把 extraSmall…extraLarge 一一对应上去。卡片比按钮圆一点、按钮比小 chip 圆一点，
-形成"越大的容器越圆"的稳定节奏；但都不做全屏 pill。
+形成"越大的容器越圆"的稳定节奏；需要胶囊时直接用 `CircleShape`，不新增硬编码半径。
+侧边栏的会话行、引擎卡、搜索框、新对话按钮都使用 `lg` 或胶囊，不再使用 `sm` 小圆角。
 
 ## 4. 图标规范（`AppIcons.kt`）
 
 - 24dp 网格，`viewport 24×24`。
-- 线宽统一 **1.7dp**，`StrokeCap.Round` + `StrokeJoin.Round`，`fill = null`（纯线稿）。
-- 少量必要的实心点用 `solid {}`，圆半径 0.9–2.3（如 `More`、信息点）。
-- 轮廓是克制的拟物线稿（终端框、折角纸、地球经纬线、插头、扳手），不是 Material 的填充图标，
-  也不是几何抽象符号。所有图标在深浅主题都用 `Icon` 的 `tint` 上色，令牌见第 2 节。
+- 线宽统一 **2dp**（个别强调图标 2.2dp），`StrokeCap.Round` + `StrokeJoin.Round`，圆角半径约 **2.4dp**。
+- 参考 Material Symbols Rounded / M3 Expressive 的 2026 方向：先画清楚的轮廓，再决定要不要加内部细节；
+  不再用三条横线加圆点、折角纸、经纬线、扳手齿这类偏拟物的细碎线条。
+- 具体轮廓：
+  - `Settings`：圆润齿轮——一个外圈、8 个短齿、中心圆孔；不再复用滑块。
+  - `Sliders`：三条竖向推子 + 圆钮，与齿轮明确区分（设置根页用齿轮，「高级」用推子）。
+  - `File` / `TextFile` / `ReadFile` / `WriteFile`：圆角文档矩形 + 2–3 条短线，去掉折角；
+    `ReadFile` 内部用眼睛，`WriteFile` 在右下角叠一支铅笔，靠语义而不是细节区分。
+  - `Folder`：柔和圆角轮廓 + 左上小页签，没有尖锐折角或外翻的纸边。
+  - `Image` / `Code` / `Terminal`：只保留 1–2 个内部特征（太阳点 + 单条山线、`< >` + 斜杠、
+    提示符 + 光标线），在 17–20dp 下仍然清楚。
+- 纯线稿为主；`Stop`、`Sparkle`、`More`、状态点等用实心，作为语义强调，实心面积保持很小。
+- 所有图标在深浅主题都用 `Icon` 的 `tint` 上色，令牌见第 2 节。
 - `ClaudeMark`（`ui/components/Brand.kt`）是例外：八条带弧肩的实心星芒，品牌专用，跟随主题 accent。
+- 消息操作新增 `Edit`（编辑）与 `Regenerate`（复用 `Refresh` 的语义别名）。
+- 设置分类图标：ROOT 用 `Settings` 齿轮，API「接口与模型」用 `Plug`，ADVANCED「高级」用 `Sliders`，
+  不再让 ROOT / ADVANCED 共用同一个图标。
 - 工具图标映射在 `ui/chat/ToolPresentation.kt`（纯函数，可单测）：
 
 | 工具名 | 中文动词 | 图标 |
@@ -104,9 +122,19 @@
 
 **触摸物理**：可复用 `Modifier.pressFeedback(shape = ...)`，加在 `clickable` **之前**，本身只观察不消费事件。
 
-- 按下：`scale 0.96` + `translationY 1dp`；
-- 松手：`spring(dampingRatio = 0.72f, stiffness = 340f)`（`Motion.Release`）回弹，软 Q 弹但不过分晃；
+- 按下：`scale 0.96` + `translationY 1dp`；松手用 `spring(dampingRatio = 0.72f, stiffness = 340f)`
+  （`Motion.Release`）回弹，软 Q 弹但不过分晃；
 - 滚动防误触：位移超过 `LocalViewConfiguration.touchSlop` 立即取消按压态，把手势让给父滚动容器；
+- **拖动形变（`dragMorph = true`，2026 液态材质）**：用于悬浮 chrome，不用于 `LazyColumn` 行。
+  - 按下 90ms 内到 `0.96`；拖动后沿主轴拉伸、垂直轴压缩：
+    `stretch ≤ 0.15`，`squash = stretch × 0.65`，以拖动反方向的边为锚点（anchor stretch）；
+  - 中心向手指阻尼位移 `0.12 × 拖动距离`，不 1:1 跟手；
+  - 松手用 `spring(dampingRatio = 0.55f, stiffness = 380f)`，并把 `VelocityTracker` 的
+    速度换算成形变速度作为 `initialVelocity`，避免固定时长曲线的顿挫；
+  - 按下时叠一层 `alpha ≤ 0.07` 的白色高光，只裁剪高光本身（阴影和拉伸仍可越出原边界），
+    拖动越远高光越淡；
+  - 只应用于顶栏三个胶囊、输入框附件/发送按钮、侧边栏「新对话」；消息操作、建议 chip、
+    列表行仍用默认的安静按压；
 - 尊重无障碍：系统"移除动画"（`ANIMATOR_DURATION_SCALE == 0`）时 `LocalReduceMotion` 为 true，
   所有按压/页面/折叠动画降级为瞬时；`ClaudroidTheme` 注入该 CompositionLocal。
 
@@ -130,20 +158,40 @@
   「默认 / 路由组」（把原始模型 ID 原样传给 `--model`，可填 Magpie 的 `auto/dfmodel[1m]`）
   与「CLI 默认（不指定模型）」（完全不传 `--model`）。
 
-## 7. 工具调用折叠规则（`ui/chat/ChatScreen.kt`）
+## 7. 思考与工具折叠规则（`ui/chat/ChatScreen.kt`）
 
-按 `ChatController` 的 `Block.Tool` 模型，分两阶段：
+**输出前实时，输出后合并。** 助手回合还没有非空 `Block.Text` 且仍在流式时，思考显示为
+一个「思考中…」胶囊（可点开看实时推理），工具调用显示为紧凑「活动行」——`中文动词 + 工具图标`，
+如「执行」「读取」「搜索」「查看网页」「调用代理」。活动行不显示命令、文件路径、输入/输出 JSON、
+结果细节；运行中用小脉冲点，失败/完成用小标记。`ChatController` 的 `_status` 同样只写中文动词。
 
-1. **正式输出前**（助手回合里还没有非空 `Block.Text`）：只显示紧凑「活动行」——
-   `中文动词 + 工具图标`，如「执行」「读取」「搜索」「查看网页」「调用代理」。
-   不显示命令、文件路径、输入/输出 JSON、结果细节；运行中用小脉冲点，失败/完成用小标记。
-   `ChatController` 的 `_status` 同样只写中文动词。
-2. **正式输出开始后**：活动行收起，正文不再出现工具卡；在助手回合末尾提供低调可折叠
-   「工具调用 N」披露入口，**默认折叠**，展开才显示原始 `ToolCard` 细节（入参/输出/来源）。
-   标签由 `toolCallLabel(count, errorCount)` 生成，有错误时显示「工具调用 N · M 个错误」，
-   但错误详情只在展开后可见，不在正文铺大段错误卡。
+**正式输出开始或回合结束后**（已有正文，或流式已结束），思考胶囊与活动行一起收起，在**正式
+输出正文上方**换成一个统一的 `WorkDisclosure`：
 
-折叠状态用 `rememberSaveable(messageId)` 稳定保存，流式重组不会重置用户选择。
+- 标签由 `workLabel(thinkingCount, toolCount, errorCount)` 生成，形如
+  「思考过程 2 段 · 工具调用 3」，有错误时追加「· 1 个错误」；只有思考或只有工具时只显示
+  对应的一半，两者都没有时不渲染。标题图标用 `Sparkle`，有错误时转 error 色。
+- **外层默认折叠**，点标题行展开成一个小列表；展开后严格按 `message.blocks` 的原始顺序回放。
+- **嵌套折叠**：外层展开后，每段 `Block.Thinking` 和每个 `Block.Tool` 仍是各自默认收起的小折叠：
+  - 思考段是一行 `思考过程 i/n · N 字` + `RotatingChevron`，没有额外边框或底色；点整行才展开
+    正文，正文保留左侧 2dp 沙色竖线与 `SelectionContainer`；
+  - 工具调用复用 `ToolCard(embedded = true)`（本身默认收起，保留入参/输出/来源卡片）；
+  - 小折叠状态分别用 `rememberSaveable(messageId)` / `rememberSaveable(messageId, blockIndex)` /
+    `rememberSaveable(block.id)` 保存，流式重组不会重置用户选择；
+  - 项之间用沙色分隔线。全部收起时高度很紧凑，用户点哪一段才看哪一段。
+- 错误详情只在展开后可见，不在正文铺大段错误卡。
+
+### 7.1 消息操作与来源隐藏
+
+- 用户消息在空闲时可「编辑」：文本回填输入胶囊，发送后从该消息处截断并重放更早的对话
+  （`ChatController.resendFrom` + `ConversationPrompt`）。官方 CLI 只能 resume、不能 rewind，
+  所以编辑会开新会话，但更早的本地历史会作为紧凑前言带给模型。
+- 最后一条助手回答在空闲时可「重新回答」：定位到它前面的用户消息，同样截断并重放。
+  `prepareTurn` 在截断消息之前完成 API/引擎预检，配置错误不会毁掉已有记录。
+- 助手回答提供「复制」，复制内容同样剔除尾部来源列表。
+- WebSearch 回答尾部的 `Sources: …` / `Links: …` / `来源：…` 列表由
+  `WebSources.stripTrailingSources` 在渲染前剥离；代码块内的同名标题、以及只是提到
+  "Sources:" 的正文不受影响。可点击的来源卡片仍保留在工具调用的折叠区里。
 
 ## 8. 代码块折叠规则（`ui/md/Markdown.kt`）
 
@@ -178,11 +226,29 @@
 
 两个"重"库只用在两个明确的地方，不做无意义的炫技：
 
-- **聊天顶栏毛玻璃**（`ui/components/Frosted.kt`）：滚动内容挂 `Modifier.hazeSource(state)`，
-  顶栏覆盖层挂 `Modifier.frosted(state, canvas)`。`HazeStyle` 用
-  `blurRadius = 26dp`、canvas tint `alpha = 0.86`、`noiseFactor = 0.05`；Android 11 及以下
-  自动退化为近乎不透明的 `fallbackTint`，保证文字对比度。标题行不再占布局高度，消息从下方
-  滚入并穿过毛玻璃，`LazyColumn` 的 `contentPadding.top = 状态栏 + 56dp + 10dp`。
+- **悬浮顶栏玻璃**（`ui/components/FloatingTopBar.kt` + `Frosted.kt`）：聊天/首页顶栏由四个
+  独立胶囊组成——圆形侧栏、标题长胶囊（点按打开菜单）、模型切换胶囊、圆形新会话。聊天页
+  滚动内容挂 `Modifier.hazeSource(state)`，每个胶囊挂 `Modifier.frosted(...)`；
+  `HazeStyle` 用 `blurRadius = 22dp`、canvas tint `alpha = 0.80`、`noiseFactor = 0.05`，
+  Android 11 及以下退化为近乎不透明的 `fallbackTint`。首页没有滚动源，胶囊退化为半透明
+  `paper` + 柔和阴影。胶囊共用亮边（白→沙的竖向渐变）和 6dp 阴影，形成"浮在纸面上"的层次。
+  顶栏总高 **62dp（不含状态栏）**，`LazyColumn.contentPadding.top = 状态栏 + 62dp + 10dp`，
+  消息从胶囊之间和下方穿过。
+- **底部输入胶囊**（`ui/components/Composer.kt`）：一个 `CircleShape` 长条包住附件、可增高
+  输入框和发送/停止；paper 填充 + 1dp 沙色/橙色边框 + 8dp 柔和阴影。编辑消息时上方出现
+  一条 `orangeSoft` 胶囊提示，不把工具条塞回输入框内部。
+- **顶栏下拉菜单**（`FloatingMenu` / `ModelDropdownMenu`）：模型与标题菜单都从胶囊向下展开，
+  不再用 `ModalBottomSheet`。两者共用 paper 背景、`Radii.menu = 22dp`、0 tonal elevation、
+  10dp 阴影和 6dp 垂直偏移；模型菜单宽 **248dp**，标题菜单宽 **236dp**。
+  - 模型菜单右对齐到模型胶囊：用 `onSizeChanged` 量出胶囊实际宽度，
+    `offsetX = 胶囊宽 - 248dp`（负值），360dp 屏幕也不会越界；
+  - 标题菜单在标题胶囊内居中：`offsetX = (标题宽 - 236dp) / 2`，标题胶囊窄于 236dp 时
+    offsetX 为负值也照样居中，由 M3 popup 的 position provider 夹在窗口内；
+  - 两个胶囊的 chevron 都随菜单展开旋转；选中项用 `AppIcons.Check` 尾标。
+- **拖动形变**（`PressFeedback.kt`）：顶栏三个胶囊、输入框附件/发送、侧边栏「新对话」使用
+  `pressFeedback(dragMorph = true)`。参数与验收：按下 <100ms 到 0.96；沿拖动轴拉伸 ≤0.15，
+  垂直轴压缩 0.65×；中心阻尼跟手 0.12×；松手 `spring(0.55, 380)` + 速度回弹；
+  高光 7% 且随拖动淡出。列表行、消息操作、建议 chip 不启用，避免滚动时误触。
 - **品牌呼吸光环**（`ui/components/OrganicHalo.kt`）：`graphics-shapes` 的
   `Morph(circle → 圆角五角星)` 用 `asCubics(progress)` 生成真实曲线，慢速呼吸 + 42s 自转，
   放在 `ClaudeMark` 后面的低透明度陶土色圆斑里。只在首页问候与空对话页出现，替掉静态装饰；
