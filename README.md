@@ -7,7 +7,7 @@
 ```
 ┌──────────────── Android App（Kotlin + Compose）────────────────┐
 │  会话列表 / 对话流 / 设置                                       │
-│    · 流式输出、思考过程折叠、工具调用卡片、费用/耗时             │
+│    · 流式输出、思考/工具合并折叠、消息编辑/重新回答、费用/耗时   │
 │    · Anthropic / OpenAI 兼容端点 + 服务商预设 + 模型列表         │
 ├─────────────────── 引擎层（纯 Kotlin，零第三方 SDK）─────────────┤
 │  Toolchain：下载 / sha512 校验 / 解包 / 组装 jail / 版本切换      │
@@ -27,23 +27,25 @@
 
 ## 界面
 
-视觉语言对齐 Claude 官网 / Claude 客户端：暖米白纸面（#F5F2EA）、唯一陶土橙强调色（#D97757）、
-衬线标题、发丝级分割线、几乎不用投影 —— 让对话本身是屏幕上最重的东西。
+视觉语言对齐 Claude 官网 / Claude 客户端：暖米白纸面（#F8F4ED）、唯一陶土橙强调色（#D97757）、
+衬线标题、发丝级分割线；内容卡片保持平面，只有悬浮顶栏与输入胶囊使用玻璃和柔和阴影。
 
-| 会话列表 | 侧边栏抽屉 | 对话（浅色） |
+| 首页 | 侧边栏抽屉 | 对话（浅色） |
 | --- | --- | --- |
-| ![会话列表](docs/screenshots/home.png) | ![抽屉](docs/screenshots/drawer.png) | ![对话](docs/screenshots/chat.png) |
+| ![首页](docs/screenshots/home.png) | ![抽屉](docs/screenshots/drawer.png) | ![对话](docs/screenshots/chat.png) |
 
 | 设置 | 深色对话 |
 | --- | --- |
 | ![设置](docs/screenshots/settings.png) | ![深色](docs/screenshots/chat-dark.png) |
 
-模型列表可直接从接口拉取：
+| 模型档位下拉 | 思考与工具折叠 |
+| --- | --- |
+| ![模型选择](docs/screenshots/models.png) | ![思考与工具折叠](docs/screenshots/thinking.png) |
 
-![模型选择](docs/screenshots/models.png)
+模型档位从顶栏胶囊向下展开，不再用底部弹层。
 
-上面的截图来自 `prototype/index.html` 的真实渲染（headless Chrome 截图）。
-原型支持深链：`#chat` / `#settings`、`?theme=dark`、`?still=1`（关掉动画，便于截图）。
+上面的截图来自真实 App（MuMu 模拟器，480dp 宽），覆盖浅色 / 深色、模型下拉与嵌套折叠。
+`prototype/index.html` 仍保留为可点击原型，支持深链：`#chat` / `#settings`、`?theme=dark`、`?still=1`。
 
 ## 三个关键设计决定
 
@@ -201,7 +203,7 @@ claudroid/
 ├── prototype/index.html        高保真可点击 Web 原型
 ├── docs/DESIGN.md             设计系统：配色 / 圆角 / 图标 / 动效 / 工具与代码折叠
 ├── docs/ARCHITECTURE.md       架构与 Auto 模型、功能开关环境变量
-├── docs/screenshots/           原型真实渲染截图（浅色 / 深色）
+├── docs/screenshots/           真实 App 截图（浅色 / 深色 / 模型下拉 / 嵌套折叠）
 ├── tools/
 │   ├── fetch-proot.py          构建期下载 Termux PRoot 并改写成 jniLibs
 │   ├── setup-toolchain.sh      一键装 JDK/SDK/Gradle
