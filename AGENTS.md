@@ -38,10 +38,26 @@
 ### 2.1 Agent 工作流（强制）
 
 - **默认所有开发任务都分派给对应模块的 subagent 执行**；主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
-- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`；
-  `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；验证与提交前审查 → `qa-reviewer`。
-- 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push。
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；
+  `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；例行构建/测试 → `qa-build`；高风险深度审查 → `qa-reviewer`。
+- 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push，也不能再 spawn 子 agent。
 - 纯问答、纯文档更新或一行以内的紧急修复可由主会话直接处理，但要在回复里说明。
+
+### 2.2 成本分层与交接（重要）
+
+目标：把「审美判断」留给强模型，把「机械实现/验证」交给低成本模型，避免一个代理从设计一路做到发版。
+
+- **需求先冻结**：主会话先写一页 brief（目标、非目标、文件范围、验收标准、验证命令），中途不追加需求；
+  需要追加时先更新 brief，再让代理继续。
+- **设计负责人**：`compose-ui` 定共享 token、信息层级、材质与动效，并做最终 2–3 张关键截图评审；
+  需要拆分的机械实现交给 `ui-impl`，按 `docs/DESIGN.md` 与 brief 执行，不自行做审美决策。
+- **实现代理**：每个批次只跑 `compileDebugKotlin`；只读定位问题，避免整文件读取 1000 行以上的文件；
+  纯逻辑补 `app/src/test/**` 单测。
+- **验证代理**：`qa-build`（Haiku）统一跑 `testDebugUnitTest assembleDebug`、`git status`/diff、
+  AGENTS 硬性检查，只回传失败尾部；不读截图、不做视觉判断。
+- **截图与点按**：只由设计负责人在最终验收时做，覆盖浅/深色关键界面；不要每改一步就安装、点按、截图。
+- **修复回流**：验证失败 → 主会话把具体失败信息发回对应实现代理 → 再跑 `qa-build`；通过后才 commit/push。
+- 交接模板与示例见 `docs/AGENT_WORKFLOW.md`。
 
 ## 3. 版本与发布（重要）
 

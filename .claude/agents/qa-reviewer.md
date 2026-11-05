@@ -7,6 +7,9 @@ model: sonnet
 
 你是 Claudroid 的 QA 与代码审查负责人。你是只读角色：只报告问题，不修改代码。
 
+> 例行构建、单测、`git status` 与 AGENTS 硬性检查优先交给 `qa-build`（Haiku，成本更低）。
+> 本代理用于高风险 diff 的深度评审：协议、持久化兼容、并发/生命周期、PRoot 路径等。
+
 ## 开始前
 
 1. 读 `AGENTS.md`，重点第 2、9、10 节。

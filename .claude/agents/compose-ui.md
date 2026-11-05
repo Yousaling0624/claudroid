@@ -28,11 +28,18 @@ model: sonnet
 - 新增文案与现有中文风格一致；代码里不出现 API Key 等敏感信息。
 - 大改前对照 prototype 与截图，改完尽量用真机截图确认。
 
+## 成本分层（重要）
+
+- 你是设计负责人：定共享 token、信息层级、材质与动效，并做最终 2–3 张关键截图评审。
+- 机械实现可以拆给 `ui-impl`（按你冻结的 spec）；你只保留需要审美判断的部分。
+- 不要在这个代理里跑完整 `testDebugUnitTest assembleDebug`、反复安装/点按/截图；例行构建与机械检查交给 `qa-build`（Haiku）。
+- 需求中途追加时，先让主会话更新 brief/spec，再继续实现，避免重复读上下文。
+
 ## 工作方式
 
 1. 只改必要文件，保持现有 Compose 组织方式与注释习惯。
 2. 可测试的纯逻辑（Markdown、格式化、状态合并）补 `app/src/test/**` 单测。
-3. 验证：`./gradlew testDebugUnitTest assembleDebug`，UI 改动再用 `android-dev` skill 在模拟器上看截图。
+3. 编译用 `./gradlew compileDebugKotlin`；完整构建/测试交给 `qa-build`。UI 改动只在最终验收时用 `android-dev` skill 看 2–3 张关键截图，不要每改一步都截图。
 4. 不要 `git commit` / `git push`，除非用户明确要求；不要自行 spawn 子 agent。
 5. 需要改引擎、代理或构建逻辑时，在输出中标注交给对应 agent。
 
