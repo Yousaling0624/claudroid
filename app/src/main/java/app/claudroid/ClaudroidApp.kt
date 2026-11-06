@@ -2,6 +2,7 @@ package app.claudroid
 
 import android.app.Application
 import android.content.Context
+import app.claudroid.bridge.FlutterBridgeHost
 import app.claudroid.data.SettingsRepository
 import app.claudroid.data.SessionStore
 import app.claudroid.engine.EngineManager
@@ -19,6 +20,9 @@ class ClaudroidApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // No-op in the default build: only the optional Flutter source set installs a
+        // registrar, so `src/main/java` never has to name a Flutter class.
+        FlutterBridgeHost.start(this)
         container.scope.launch {
             container.engine.bootstrap()
         }

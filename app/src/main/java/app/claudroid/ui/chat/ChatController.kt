@@ -16,8 +16,12 @@ import app.claudroid.engine.TurnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -60,6 +64,84 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private val _status = MutableStateFlow("")
     val status: StateFlow<String> = _status.asStateFlow()
 
+    /**
+     * Incremental mirror of the flows above, for consumers that cannot cheaply
+     * re-read the whole transcript (the Flutter bridge). `_messages` remains the only
+     * source of truth; these are notifications emitted next to the existing writes.
+     *
+     * `tryEmit` everywhere: a slow or absent collector must never stall a turn.
+     */
+    private val _events = MutableSharedFlow<ChatEvent>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<ChatEvent> = _events.asSharedFlow()
+
+    /** Drops the oldest event when the buffer is full; see [events]. */
+    private fun emitEvent(event: ChatEvent) {
+        _events.tryEmit(event)
+    }
+
+    /** Publishes the whole transcript; call sites that replace `_messages` wholesale. */
+    private fun emitMessages() {
+        emitEvent(ChatEvent.Messages(_messages.value))
+    }
+
+    /**
+     * Appends one streaming chunk and publishes it.
+     *
+     * The tail block is sampled **before** the append. A chunk that opens a new block
+     * is structural: the receiver has no block to append to yet, so it gets the full
+     * list (which already contains the chunk) instead of a `delta`. Re-sending both
+     * would double the text on the Dart side.
+     */
+    private fun streamChunk(messageId: String, block: DeltaBlock, chunk: String) {
+        val before = _messages.value.firstOrNull { it.id == messageId }?.blocks?.lastOrNull()
+        mutateAssistant(messageId) {
+            when (block) {
+                DeltaBlock.TEXT -> appendText(it, chunk)
+                DeltaBlock.THINKING -> appendThinking(it, chunk)
+            }
+        }
+        val continues = when (block) {
+            DeltaBlock.TEXT -> before is Block.Text
+            DeltaBlock.THINKING -> before is Block.Thinking
+        }
+        if (continues) emitEvent(ChatEvent.Delta(messageId, block, chunk)) else emitMessages()
+    }
+
+    private fun setStatus(value: String) {
+        if (_status.value == value) return
+        _status.value = value
+        // The running flag travels with the event: `statusLine` depends on it, and a
+        // collector that reads it later can see a newer value.
+        emitEvent(ChatEvent.Status(value, _running.value))
+    }
+
+    /**
+     * The atomic guard lives in [launchTurn]'s `compareAndSet`; this only publishes
+     * the change, so every write of `_running` also reaches the bridge.
+     */
+    private fun setRunning(value: Boolean) {
+        _running.value = value
+        emitEvent(ChatEvent.Running(value))
+    }
+
+    private fun setTitle(value: String) {
+        _title.value = value
+        emitEvent(ChatEvent.Title(value))
+    }
+
+    private fun setTitleBusy(value: Boolean) {
+        _titleBusy.value = value
+        emitEvent(ChatEvent.TitleBusy(value))
+    }
+
+    private fun setTitleNotice(value: String?) {
+        _titleNotice.value = value
+        emitEvent(ChatEvent.TitleNotice(value))
+    }
+
     private val _session = MutableStateFlow<ChatSession?>(null)
     var claudeSessionId: String? = null
         private set
@@ -78,7 +160,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         container.sessions.load()
         val session = container.sessions.find(sessionId) ?: ChatSession(id = sessionId)
         _session.value = session
-        _title.value = session.title
+        setTitle(session.title)
         claudeSessionId = session.claudeSessionId
         // A title that still matches the first-message placeholder has never been
         // summarized (or was never renamed); only those are eligible for auto-summary.
@@ -100,6 +182,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             msg.copy(streaming = false, blocks = blocks)
         }
         _messages.value = repaired
+        emitMessages()
         if (changed) persist()
     }
 
@@ -152,7 +235,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             // The drawer may have renamed the persisted session while the request ran.
             if (container.sessions.find(sessionId)?.title?.let { it != expectedTitle } == true) return@launch
             if (!result.isNullOrBlank() && result != expectedTitle) {
-                _title.value = result
+                setTitle(result)
                 titleIsTemporary = false
                 runCatching { persist() }
             }
@@ -173,51 +256,51 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             ?.blocks?.filterIsInstance<Block.Text>()
             ?.joinToString("\n") { WebSources.stripTrailingSources(it.text) }?.trim().orEmpty()
         if (firstUser.isEmpty() || assistant.isEmpty()) {
-            _titleNotice.value = "还没有可总结的对话内容"
+            setTitleNotice("还没有可总结的对话内容")
             return
         }
         val expectedTitle = _title.value
         val generationAtStart = ++titleGeneration
-        _titleBusy.value = true
-        _titleNotice.value = "正在生成标题…"
+        setTitleBusy(true)
+        setTitleNotice("正在生成标题…")
         scope.launch {
             val result = runCatching {
                 TitleGenerator.generate(container.settings.flow.first(), firstUser, assistant)
             }.getOrNull()
             if (generationAtStart != titleGeneration || dismissed) {
-                _titleBusy.value = false
+                setTitleBusy(false)
                 return@launch
             }
             if (_title.value != expectedTitle) {
                 // Renamed mid-flight; keep the user's choice.
-                _titleNotice.value = "标题已手动修改，保留当前名称"
+                setTitleNotice("标题已手动修改，保留当前名称")
             } else if (!result.isNullOrBlank()) {
-                _title.value = result
+                setTitle(result)
                 titleIsTemporary = false
-                _titleNotice.value = "标题已更新"
+                setTitleNotice("标题已更新")
                 runCatching { persist() }
             } else {
-                _titleNotice.value = "标题生成失败，已保留原名称。可稍后重试或检查接口配置。"
+                setTitleNotice("标题生成失败，已保留原名称。可稍后重试或检查接口配置。")
             }
-            _titleBusy.value = false
+            setTitleBusy(false)
         }
     }
 
     /** Clears a transient title notice once the UI has shown it. */
-    fun consumeTitleNotice() { _titleNotice.value = null }
+    fun consumeTitleNotice() { setTitleNotice(null) }
 
     /** Called by a rename action so a pending auto-summary can never overwrite it. */
     fun markTitleUserEdited(newTitle: String) {
         if (newTitle == _title.value) return
         titleGeneration++
         titleIsTemporary = false
-        _title.value = newTitle
+        setTitle(newTitle)
         scope.launch { persist() }
     }
 
     fun stop() {
         if (!_running.value) return
-        _status.value = "正在停止…"
+        setStatus("正在停止…")
         container.engine.cancel()
     }
 
@@ -235,10 +318,10 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         container.forgetChat(sessionId)
     }
 
-    fun send(raw: String) {
+    fun send(raw: String): Boolean {
         val text = raw.trim()
-        if (text.isEmpty()) return
-        launchTurn { prepared ->
+        if (text.isEmpty()) return false
+        return launchTurn { prepared ->
             executeTurn(
                 prepared = prepared,
                 baseMessages = _messages.value,
@@ -320,6 +403,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
      */
     private fun launchTurn(block: suspend (PreparedTurn) -> Unit): Boolean {
         if (!_running.compareAndSet(false, true)) return false
+        setRunning(true)
         // A stop from the previous turn must not leak into this one.
         container.engine.resetCancel()
         job = scope.launch {
@@ -328,8 +412,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 block(prepared)
             } finally {
                 withContext(NonCancellable) {
-                    _running.value = false
-                    _status.value = ""
+                    setRunning(false)
+                    setStatus("")
                     TurnService.stop(container.appContext)
                     runCatching { persist() }
                 }
@@ -372,13 +456,13 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         val plan = prepared.plan
         if (resetCliSession) claudeSessionId = null
 
-        _status.value = "准备中…"
+        setStatus("准备中…")
         TurnService.start(container.appContext, "Claudroid 正在执行", userText.take(48))
 
         var session = _session.value ?: ChatSession(id = sessionId)
         if (session.title == "新对话") {
             session = session.copy(title = userText.replace('\n', ' ').take(28))
-            _title.value = session.title
+            setTitle(session.title)
             titleIsTemporary = true
         }
         session = session.copy(model = settings.model)
@@ -393,6 +477,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         )
         val assistant = ChatMessage(role = Role.ASSISTANT, streaming = true)
         _messages.value = baseMessages + userMsg + assistant
+        emitMessages()
         persist()
 
         var finalText: String? = null
@@ -415,24 +500,41 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                     when (ev) {
                         is EngineEvent.SessionInit -> {
                             if (ev.sessionId.isNotBlank()) claudeSessionId = ev.sessionId
-                            _status.value = "已连接 ${ev.model ?: settings.model}"
+                            setStatus("已连接 ${ev.model ?: settings.model}")
                         }
                         is EngineEvent.TextDelta -> {
-                            _status.value = "正在回复…"
-                            mutateAssistant(assistant.id) { appendText(it, ev.text) }
+                            setStatus("正在回复…")
+                            streamChunk(assistant.id, DeltaBlock.TEXT, ev.text)
                         }
                         is EngineEvent.ThinkingDelta -> {
-                            _status.value = "正在思考…"
-                            mutateAssistant(assistant.id) { appendThinking(it, ev.text) }
+                            setStatus("正在思考…")
+                            streamChunk(assistant.id, DeltaBlock.THINKING, ev.text)
                         }
                         is EngineEvent.ToolUse -> {
                             // Human verb only: commands, paths and JSON stay out of the
                             // live status line and are revealed in the collapsed cards.
-                            _status.value = ToolPresentation.verb(ev.name) + "…"
+                            setStatus(ToolPresentation.verb(ev.name) + "…")
+                            // `addTool` ignores a duplicate id; emitting then would make the
+                            // Dart mirror append a second card for the same call.
+                            val isNew = toolBlockExists(assistant.id, ev.id).not()
                             mutateAssistant(assistant.id) { addTool(it, ev) }
+                            if (isNew) {
+                                emitEvent(
+                                    ChatEvent.ToolUse(assistant.id, ev.id, ev.name, ev.inputJson),
+                                )
+                            }
                         }
-                        is EngineEvent.ToolResult ->
+                        is EngineEvent.ToolResult -> {
+                            // Same rule: a result for a card the receiver never saw would
+                            // force it to re-sync for nothing.
+                            val known = toolBlockExists(assistant.id, ev.id)
                             mutateAssistant(assistant.id) { resolveTool(it, ev) }
+                            if (known) {
+                                emitEvent(
+                                    ChatEvent.ToolResult(assistant.id, ev.id, ev.output, ev.isError),
+                                )
+                            }
+                        }
                         is EngineEvent.TurnDone -> {
                             finalText = ev.resultText
                             cost = ev.costUsd
@@ -448,13 +550,14 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                                 }
                                 if (note != null) {
                                     mutateAssistant(assistant.id) { appendError(it, note) }
+                                    emitEvent(ChatEvent.ErrorBlock(assistant.id, note))
                                 }
                             }
                         }
                         is EngineEvent.Log -> {
                             Logx.i("cli: ${ev.line}")
                             if (ev.isError) {
-                                _status.value = ev.line.take(120)
+                                setStatus(ev.line.take(120))
                                 if (stderrTail.size >= 8) stderrTail.removeFirst()
                                 stderrTail.addLast(ev.line)
                             }
@@ -462,6 +565,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                         is EngineEvent.Failed -> {
                             Logx.e("引擎错误: ${ev.message}")
                             mutateAssistant(assistant.id) { appendError(it, ev.message) }
+                            emitEvent(ChatEvent.ErrorBlock(assistant.id, ev.message))
                         }
                         is EngineEvent.Exited -> Unit
                     }
@@ -484,13 +588,14 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 // wipes them while the chat still points at the old session id; retry once
                 // without --resume instead of leaving the conversation permanently broken.
                 Logx.i("resume 会话不存在，改为新会话重试", container.appContext)
-                _status.value = "原会话已不存在，正在重新开始…"
+                setStatus("原会话已不存在，正在重新开始…")
                 claudeSessionId = null
                 finalText = null
                 cost = null
                 duration = null
                 stderrTail.clear()
                 mutateAssistant(assistant.id) { it.copy(blocks = emptyList()) }
+                emitMessages()
                 exitCode = attempt(null)
             }
         } catch (t: Throwable) {
@@ -516,14 +621,16 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                     },
                 )
             }
+            emitMessages()
             return
         }
 
         // If the backend never streamed deltas (older CLI), fall back to the final text.
         val hasText = _messages.value.firstOrNull { it.id == assistant.id }
             ?.blocks?.any { it is Block.Text && it.text.isNotBlank() } == true
-        if (!hasText && !finalText.isNullOrBlank()) {
-            mutateAssistant(assistant.id) { appendText(it, finalText ?: "") }
+        val pendingText = finalText
+        if (!hasText && !pendingText.isNullOrBlank()) {
+            streamChunk(assistant.id, DeltaBlock.TEXT, pendingText)
         }
 
         // A failed process must be visible. Silence was the worst part of the
@@ -543,16 +650,19 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 else -> ""
             }
             val tail = if (stderrTail.isEmpty()) "" else "\n" + stderrTail.takeLast(4).joinToString("\n")
-            mutateAssistant(assistant.id) { appendError(it, "CLI 退出码 $exitCode$tail$hint") }
+            val text = "CLI 退出码 $exitCode$tail$hint"
+            mutateAssistant(assistant.id) { appendError(it, text) }
+            emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
         } else if (current?.blocks.isNullOrEmpty() && exitCode == 0) {
-            mutateAssistant(assistant.id) {
-                appendError(it, "模型没有返回任何内容。请确认接口支持工具调用，或换一个模型试试。")
-            }
+            val text = "模型没有返回任何内容。请确认接口支持工具调用，或换一个模型试试。"
+            mutateAssistant(assistant.id) { appendError(it, text) }
+            emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
         }
 
         mutateAssistant(assistant.id) {
             it.copy(streaming = false, costUsd = cost, durationMs = duration)
         }
+        emitMessages()
 
         // Summarize only after a real answer exists; a failed/empty turn keeps the
         // first-message placeholder. This is deliberately fire-and-forget.
@@ -562,6 +672,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private suspend fun appendError(message: String) {
         val msg = ChatMessage(role = Role.SYSTEM, blocks = listOf(Block.Error(message)))
         _messages.update { it + msg }
+        emitMessages()
         persist()
     }
 
@@ -572,13 +683,14 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         }
         generation += 1
         _messages.value = emptyList()
+        emitMessages()
         claudeSessionId = null
         // The transcript is gone; keeping the old title would leave a conversation
         // named after a message it no longer contains.
-        _title.value = "新对话"
+        setTitle("新对话")
         titleIsTemporary = true
         titleGeneration += 1
-        _titleNotice.value = null
+        setTitleNotice(null)
         scope.launch { persist() }
     }
 
@@ -615,14 +727,24 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         return msg.copy(blocks = blocks)
     }
 
+    /**
+     * True when the assistant message already carries a tool card with [id].
+     *
+     * Used to decide whether a tool event is worth emitting: the receiver mirrors
+     * cards by id, so replaying a duplicate would make it append a second card.
+     */
+    private fun toolBlockExists(messageId: String, toolId: String): Boolean =
+        _messages.value.firstOrNull { it.id == messageId }
+            ?.blocks?.any { it is Block.Tool && it.id == toolId } == true
+
     private fun addTool(msg: ChatMessage, ev: EngineEvent.ToolUse): ChatMessage {
         if (msg.blocks.any { it is Block.Tool && it.id == ev.id }) return msg
-        _status.value = ToolPresentation.verb(ev.name) + "…"
+        setStatus(ToolPresentation.verb(ev.name) + "…")
         return msg.copy(blocks = msg.blocks + Block.Tool(id = ev.id, name = ev.name, input = ev.inputJson))
     }
 
     private fun resolveTool(msg: ChatMessage, ev: EngineEvent.ToolResult): ChatMessage {
-        _status.value = "工具返回"
+        setStatus("工具返回")
         return msg.copy(
             blocks = msg.blocks.map { b ->
                 if (b is Block.Tool && b.id == ev.id) {

@@ -1,6 +1,7 @@
 package app.claudroid.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -53,6 +54,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Optional Flutter frontend: when the build included it, hand off immediately.
+        // Kept as a trampoline rather than a manifest change because `TurnService` targets
+        // `MainActivity` by class for its "turn still running" notification; that tap must
+        // keep landing in the chat, whichever frontend is compiled in.
+        // `super.onCreate` must run first — the framework expects it before `finish()`,
+        // and nothing below the hand-off touches app state anyway.
+        if (flutterHostAvailable()) {
+            startActivity(Intent().setClassName(packageName, FLUTTER_HOST))
+            finish()
+            return
+        }
         enableEdgeToEdge()
         askForNotificationPermission()
         val container = (application as ClaudroidApp).container
@@ -62,6 +74,17 @@ class MainActivity : ComponentActivity() {
                 AppRoot(container)
             }
         }
+    }
+
+    /**
+     * `true` only in a `-PflutterUi=true` build. A class lookup keeps the default build's
+     * `src/main/java` free of any Flutter type, so it still compiles without the SDK.
+     */
+    private fun flutterHostAvailable(): Boolean =
+        runCatching { Class.forName(FLUTTER_HOST) }.isSuccess
+
+    private companion object {
+        const val FLUTTER_HOST = "app.claudroid.ui.FlutterHostActivity"
     }
 
     /** Only needed so the "turn still running" notification can appear on Android 13+. */

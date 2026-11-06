@@ -179,8 +179,12 @@ android {
 
     if (flutterUi) {
         // Platform-channel bridge. Kept out of src/main/java so the default build
-        // never needs the Flutter embedding on the classpath.
-        sourceSets.getByName("main").java.srcDir("src/main/flutter/java")
+        // never needs the Flutter embedding on the classpath. AGP 9's built-in Kotlin
+        // compiles `.kt` only from the `kotlin` source dir, so both have to be named.
+        sourceSets.getByName("main").apply {
+            java.srcDir("src/main/flutter/java")
+            kotlin.srcDir("src/main/flutter/java")
+        }
     }
 }
 

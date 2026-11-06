@@ -47,6 +47,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Optional Flutter frontend (`-PflutterUi=true`). The class only exists in that
+             build; MainActivity probes for it by name, so this entry stays inert otherwise. -->
+        <activity
+            android:name=".ui.FlutterHostActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Claudroid" />
+
         <service
             android:name=".engine.TurnService"
             android:exported="false"
