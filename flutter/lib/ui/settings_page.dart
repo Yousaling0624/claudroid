@@ -289,7 +289,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 checked: _settings.str('activeTier') == 'AUTO',
                 onPressed: () => _patch({'activeTier': 'AUTO'}),
               ),
-              for (final tier in _tiers.keys)
+              for (final tier in modelTierLabels.keys)
                 PopupMenuItem(
                   label: _tierLabel(tier),
                   checked: _settings.str('activeTier') == tier,
@@ -297,7 +297,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
             ],
           ),
-          for (final MapEntry(key: tier, value: tierName) in _tiers.entries)
+          for (final MapEntry(key: tier, value: tierName)
+              in modelTierLabels.entries)
             _ValueRow(
               label: '$tierName · ${tier.toLowerCase()}',
               value: _labels.tierMapping[tier] ?? 'CLI 默认',
@@ -854,13 +855,6 @@ const _engineModes = {
 
 const _themes = {0: '跟随系统', 1: '浅色', 2: '深色'};
 
-const _tiers = {
-  'OPUS': 'Opus',
-  'FABLE': 'Fable',
-  'SONNET': 'Sonnet',
-  'HAIKU': 'Haiku',
-};
-
 String _enumLabel<K>(Map<K, String> labels, K key) => labels[key] ?? '$key';
 
 String _tierField(String tier) => switch (tier) {
@@ -874,7 +868,7 @@ String _tierField(String tier) => switch (tier) {
 String _tierLabel(String tier) => switch (tier) {
       '' => 'CLI 默认（不指定模型）',
       'AUTO' => '自动（按任务路由）',
-      _ => _tiers[tier] ?? tier,
+      _ => modelTierLabels[tier] ?? tier,
     };
 
 String _size(int bytes) {

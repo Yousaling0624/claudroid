@@ -376,10 +376,12 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _modelMenu() {
     final activeTier = widget.settings.str('activeTier');
-    String tierLabel(String tier) =>
-        widget.labels.tierMapping[tier] ?? tier;
 
     return PopupMenu(
+      // Seven rows plus the `设置` divider and title. prism_ui's cap counts
+      // rows only, so the default 7 leaves the title and last row clipped;
+      // one extra row of budget covers both at any text scale.
+      maxVisibleItems: 8,
       items: [
         PopupMenuItem(
           label: 'CLI 默认（不指定模型）',
@@ -391,9 +393,10 @@ class _ChatPageState extends State<ChatPage> {
           checked: activeTier == 'AUTO',
           onPressed: () => _patch({'activeTier': 'AUTO'}),
         ),
-        for (final tier in const ['OPUS', 'FABLE', 'SONNET', 'HAIKU'])
+        for (final MapEntry(key: tier, value: tierName)
+            in modelTierLabels.entries)
           PopupMenuItem(
-            label: tierLabel(tier),
+            label: tierName,
             checked: activeTier == tier,
             onPressed: () => _patch({'activeTier': tier}),
           ),

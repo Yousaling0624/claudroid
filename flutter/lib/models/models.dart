@@ -361,6 +361,16 @@ class EngineState {
 // Derived labels
 // ---------------------------------------------------------------------------
 
+/// Display names for the four model tiers, copied from `ModelTier.label` in
+/// `data/ModelTier.kt`. The bridge sends only the serialized enum name for
+/// these, so the frontend keeps the four strings here and nowhere else.
+const modelTierLabels = {
+  'OPUS': 'Opus',
+  'FABLE': 'Fable',
+  'SONNET': 'Sonnet',
+  'HAIKU': 'Haiku',
+};
+
 /// Display strings computed by Kotlin (`ui/components/ModelLabels.kt`).
 class ModelLabels {
   const ModelLabels({
@@ -376,7 +386,9 @@ class ModelLabels {
   final String short;
   final String tierSummary;
 
-  /// Tier name (`OPUS`, `FABLE`, `SONNET`, `HAIKU`) → label.
+  /// Tier enum name (`OPUS`, `FABLE`, `SONNET`, `HAIKU`) → the model that tier
+  /// is mapped to in settings, or `官方默认` when none is set. This is a model
+  /// string, not the tier's display name — see [modelTierLabels] for that.
   final Map<String, String> tierMapping;
 
   factory ModelLabels.fromJson(Map<String, dynamic> json) => ModelLabels(
