@@ -6,6 +6,8 @@
 ## 1. 项目范围
 
 - `app/`：Android 客户端（Kotlin + Jetpack Compose）。引擎、UI、数据层都在这里。
+- `flutter/`：add-to-app 模块，**发布 APK 用的前端**（`release.yml` 以 `-PflutterUi=true` 构建）。
+  业务逻辑仍全在 Kotlin，Dart 只做界面；不带 flag 的本地构建仍是 Compose 前端。
 - `tools/`：构建期工具，尤其是 `fetch-proot.py`（把 Termux PRoot 打成 `lib*.so`）。
 - `.github/`：PR 检查与 push main 自动发版。
 - `prototype/`、`docs/`：设计原型与文档。改 UI 前先看 `prototype/index.html` 与截图。
@@ -35,9 +37,10 @@
 
 **验证失败时不要提交。** 先修复；修不好就如实说明失败项和原因。不要用 `--no-verify`、跳过测试、删测试或改 CI 阈值来「通过」。
 
-### 2.1 Agent 工作流（强制）
+### 2.1 Agent 工作流
 
-- **默认所有开发任务都分派给对应模块的 subagent 执行**；主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
+- **不要自动启动 subagent**：只有用户在当次需求里明确要求分派（如「派给子代理」「用 subagent」）时才启动，否则主会话直接实现。
+- 用户要求分派时，主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
 - 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；
   `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；例行构建/测试 → `qa-build`；高风险深度审查 → `qa-reviewer`。
 - 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push，也不能再 spawn 子 agent。

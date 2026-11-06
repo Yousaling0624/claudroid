@@ -1,10 +1,12 @@
-# Flutter 前端（可选模块）
+# Flutter 前端
 
-App 目前仍是 Compose 前端。`flutter/` 是一个 **add-to-app 模块**，默认不参与构建：
-`settings.gradle.kts` 只在传入 `-PflutterUi=true` 时才 `include(":flutter")`，所以普通
-`./gradlew assembleDebug` 的行为、产物和耗时与引入 Flutter 之前完全一致，CI 也不需要装 Flutter SDK。
+**发布的 APK 用 Flutter 前端**：`release.yml` 以 `-PflutterUi=true` 构建，所以 GitHub Release
+里的包启动后直接进 `FlutterHostActivity`。`flutter/` 仍是一个 **add-to-app 模块**，由
+`settings.gradle.kts` 按 flag 决定是否 `include(":flutter")`——本地不带 flag 的
+`./gradlew assembleDebug` 依旧是 Compose 前端，产物与引入 Flutter 之前完全一致，
+也不需要在 WSL 里装 Flutter SDK。
 
-等 Dart 实现追平功能后再把它切成默认前端，届时删掉这个 flag 即可。
+Compose 前端保留为对照实现与本地回退路径；两边功能追平后可以彻底删掉。
 
 ## 目录
 
@@ -49,6 +51,11 @@ flutter.sdk=C\:\\dev-toolchain\\flutter
 ```
 
 产物里会多出 `lib/*/libflutter.so` 与 `assets/flutter_assets/`，其余部分不变。
+
+`release.yml` 走的就是这条路径：装 Flutter 3.47.9、写 `local.properties` 的
+`flutter.sdk`、跑 `flutter pub get`，再以 `-PflutterUi=true -Pandroid.newDsl=false`
+`assembleRelease`，最后用 `unzip -l` 断言 `libapp.so` 与 `assets/flutter_assets/` 真的在包里
+——只有 Compose 的 APK 同样能构建成功，不校验就会悄悄发错前端。
 
 ### 为什么必须 `-Pandroid.newDsl=false`
 

@@ -1,7 +1,8 @@
 # Flutter 前端视觉规范
 
-Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖**可选的 Flutter 前端**
-（`-PflutterUi=true`），它刻意**不**沿用 `DESIGN.md` 的暖纸色 + 赤陶色，而是照搬
+Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖 **Flutter 前端**，它是发布
+APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`），刻意**不**沿用 `DESIGN.md` 的
+暖纸色 + 赤陶色，而是照搬
 [FlClash](https://github.com/chen08209/FlClash) 的视觉语言 —— 这是产品需求，不是疏漏：
 
 > 材质、图标、动画效果照抄 flclash，设置页面的排版也要借鉴一下，聊天页面保持当前布局。
@@ -126,6 +127,5 @@ Material Icons。
 
 - `prism_ui` 是 **GPL v3**（chen08209），版本 0.1.2。已在
   [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) 登记。
-- Flutter 前端是**可选模块**，默认构建产物里不含它；发布 APK 用默认构建，所以
-  GPL 义务不覆盖发布物。一旦把 `-PflutterUi=true` 变成默认，必须先复查许可并更新
-  `THIRD_PARTY_NOTICES.md`。
+- 发布 APK 用 Flutter 前端（`release.yml` 以 `-PflutterUi=true` 构建），所以 `prism_ui`
+  也随发布物分发。两边都是 GPLv3，本项目自身的 GPLv3 条款已覆盖这一义务。

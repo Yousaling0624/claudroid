@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'flutter/**'
       - 'tools/**'
       - 'gradle/**'
       - 'gradlew'
@@ -52,9 +53,32 @@ jobs:
           "$SDKMANAGER" "platforms;android-37.0" "build-tools;36.0.0" >/dev/null
         shell: bash
 
+      # Pinned to an exact stable release, same as ci.yml: flutter/pubspec.yaml requires
+      # >=3.47.0, and moving the SDK changes the generated module project.
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
       # v6 moves caching into a proprietary component; v5 is Node 24 and still MIT.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
+
+      # settings.gradle.kts reads flutter.sdk from local.properties (or FLUTTER_ROOT).
+      # local.properties is gitignored, so it is written here rather than committed.
+      - name: Point Gradle at the Flutter SDK
+        run: |
+          flutter_root="${FLUTTER_ROOT:-$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")}"
+          test -d "$flutter_root/bin"
+          echo "flutter.sdk=$flutter_root" >> local.properties
+          cat local.properties
+
+      # Generates flutter/.android/Flutter, which settings.gradle.kts checks for.
+      - name: Generate Flutter module project
+        working-directory: flutter
+        run: flutter pub get
 
       - name: Restore proot runtime
         uses: actions/cache@v6
@@ -96,16 +120,29 @@ jobs:
           echo "CLAUDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
           echo "CLAUDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
 
+      # -Pandroid.newDsl=false is required by Flutter's Gradle plugin (it resolves AGP's
+      # legacy BaseExtension); it cannot be set from settings.gradle.kts, so it stays on
+      # the command line. -PflutterUi=true makes the shipped APK use the Flutter UI.
       - name: Unit tests
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testDebugUnitTest
+          ./gradlew --no-daemon testDebugUnitTest \
+            -PflutterUi=true -Pandroid.newDsl=false
 
       - name: Assemble release APK
         run: |
           ./gradlew --no-daemon assembleRelease \
             -PversionName="${{ steps.version.outputs.version }}" \
-            -PversionCode="${{ steps.version.outputs.version_code }}"
+            -PversionCode="${{ steps.version.outputs.version_code }}" \
+            -PflutterUi=true -Pandroid.newDsl=false
+
+      # A Compose-only APK also builds fine, so assert the Flutter frontend really made
+      # it in — otherwise a silent flag regression would ship the wrong UI.
+      - name: Verify Flutter frontend is packaged
+        run: |
+          apk="app/build/outputs/apk/release/app-release.apk"
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libapp.so'
+          unzip -l "$apk" | grep -q 'assets/flutter_assets/AssetManifest.bin'
 
       - name: Rename & checksum
         run: |

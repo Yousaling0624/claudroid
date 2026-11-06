@@ -122,7 +122,9 @@ bash tools/build-apk.sh
 
 也可以用 Android Studio 直接打开项目。
 
-`flutter/` 是可选的前端模块，默认不参与构建（不加 flag 时产物与上面完全一致）。要构建它：
+`flutter/` 是 **发布用的前端**：GitHub Release 的 APK 以 `-PflutterUi=true` 构建，启动后直接进
+Flutter 界面。不带 flag 的本地构建仍是 Compose 前端（产物与上面完全一致），用于回退与对照。
+要自己构建 Flutter 版：
 
 ```bash
 cd flutter && flutter pub get                 # 生成 .android/
@@ -215,7 +217,7 @@ claudroid/
 │   ├── ui/                     Compose：home / chat / settings / markdown / theme
 │   └── ui/theme/               暖纸色 + 陶土橙配色
 ├── app/src/test/java/…         单测（协议翻译 / 解析 / tar / proot 参数 / 设置）
-├── flutter/                    可选 Flutter 前端（add-to-app 模块，默认不构建）
+├── flutter/                    发布用的 Flutter 前端（add-to-app 模块）
 ├── prototype/index.html        高保真可点击 Web 原型
 ├── docs/FLUTTER.md             Flutter 模块的构建配方与两个 flag 的由来
 ├── docs/BRIDGE_CONTRACT.md     Kotlin ↔ Dart 桥接契约（冻结）
