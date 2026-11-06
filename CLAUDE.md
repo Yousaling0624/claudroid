@@ -4,12 +4,14 @@
 
 最低限度必须遵守：
 
-- 主要改 `app/`；`tools/` 是构建期工具；不要提交 `app/src/main/jniLibs/`、APK、keystore。
+- 主要改 `app/`；`flutter/` 是发布用的前端；`tools/` 是构建期工具；不要提交 `app/src/main/jniLibs/`、APK、keystore。
 - 改完先验证：
 
   ```bash
   ./gradlew testDebugUnitTest assembleDebug
   ```
+
+  动了 `flutter/` 时另跑 `flutter analyze` / `flutter test` 与带 `-PflutterUi=true` 的构建（WSL 没有 Flutter，在 Windows 侧执行）。
 
 - `targetSdk = 28` 是**有意为之**（PRoot / jail 需要 exec 应用目录里的文件）；不要随手升。
 - 不要手动升版本号、打 tag、发 Release；CI 自动生成 `v0.1.<run_number>`。

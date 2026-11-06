@@ -26,6 +26,13 @@
    ./gradlew assembleDebug
    ```
 
+   动了 `flutter/` 时再跑（WSL 没有 Flutter，改在 Windows 侧执行）：
+
+   ```bash
+   cd flutter && flutter pub get && flutter analyze && flutter test
+   ./gradlew testDebugUnitTest assembleDebug -PflutterUi=true -Pandroid.newDsl=false
+   ```
+
    改了发版脚本时再跑：
 
    ```bash
@@ -48,6 +55,8 @@
 
 ### 2.2 成本分层与交接（重要）
 
+（仅在用户要求分派时启用；用户没要求时主会话直接实现，不分派）
+
 目标：把「审美判断」留给强模型，把「机械实现/验证」交给低成本模型，避免一个代理从设计一路做到发版。
 
 - **需求先冻结**：主会话先写一页 brief（目标、非目标、文件范围、验收标准、验证命令），中途不追加需求；
@@ -65,9 +74,9 @@
 ## 3. 版本与发布（重要）
 
 - **不要手动升版本号、打 tag、发 Release。** `app/build.gradle.kts` 里的 `1.1.0` 只是本地基线。
-- `.github/workflows/release.yml` 在每次 push `main`（命中 `app/**`、`tools/**`、Gradle 或工作流路径）时：
+- `.github/workflows/release.yml` 在每次 push `main`（命中 `app/**`、`flutter/**`、`tools/**`、Gradle 或工作流路径）时：
   1. 生成 `versionName = 0.1.<run_number>`、`versionCode = 1000 + run_number`；
-  2. 跑单元测试、`assembleRelease`；
+  2. 装 Flutter 3.47.9、`flutter pub get`，以 `-PflutterUi=true -Pandroid.newDsl=false` 跑单元测试、`assembleRelease`；
   3. 上传 `claudroid-<version>.apk` + `.sha256`；
   4. 用 commit 生成 release notes，并创建/更新 GitHub Release。
 - 纯文档改动不命中路径，不会发版；不要为了发版去改无关文件。
