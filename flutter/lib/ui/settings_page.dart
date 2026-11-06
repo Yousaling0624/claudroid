@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'scaffold_bar.dart';
 
 /// Settings, grouped the way FlClash groups its own: a section per topic, rows
 /// that read "label — current value — chevron". A row's whole surface opens the
@@ -165,7 +166,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return PrismScaffold(
-      bar: ScaffoldBar(
+      bar: ClaudroidBar(
         isCompact: context.isInCompactSheet,
         listenable: _neverBar,
         loading: _neverValue,

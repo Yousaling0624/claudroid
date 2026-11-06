@@ -10,6 +10,7 @@ import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
 import 'glyphs.dart';
+import 'scaffold_bar.dart';
 
 /// One conversation. Mirrors `ui/chat/ChatScreen.kt`: a floating bar with the
 /// title and the live status line, the transcript, and a composer pinned under
@@ -228,7 +229,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     return PrismScaffold(
-      bar: ScaffoldBar(
+      bar: ClaudroidBar(
         isCompact: context.isInCompactSheet,
         listenable: _barTick,
         loading: _loading,
@@ -1081,7 +1082,7 @@ class EmptyChatPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PrismScaffold(
-      bar: ScaffoldBar(
+      bar: ClaudroidBar(
         isCompact: context.isInCompactSheet,
         listenable: _neverBar,
         loading: _neverValue,

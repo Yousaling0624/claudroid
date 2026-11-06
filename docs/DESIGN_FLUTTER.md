@@ -19,7 +19,7 @@ Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖**可
 
 | 需要什么 | 用 prism_ui 的 |
 | --- | --- |
-| 页面骨架、顶栏 | `PrismScaffold`（需要 `ViewScope`，由 `PrismApp.builder` 提供） |
+| 页面骨架、顶栏 | `PrismScaffold`（需要 `ViewScope`，由 `PrismApp.builder` 提供）；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`，**不要**直接用 `ScaffoldBar` |
 | 容器 | `Surface`（`SurfaceLevel.page` / `.card` 取色） |
 | 设置项列表 | `generateSection` / `generateGroup` / `ListRow` / `DecorationListItem` |
 | 分组行间距 | `ItemPosition.get(index, length)` 或 `ItemPositionProvider` |
