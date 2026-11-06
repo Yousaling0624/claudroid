@@ -10,6 +10,7 @@ import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
 import 'glyphs.dart';
+import 'markdown.dart';
 import 'scaffold_bar.dart';
 
 /// One conversation. Mirrors `ui/chat/ChatScreen.kt`: a floating bar with the
@@ -683,6 +684,7 @@ class _AssistantMessage extends StatelessWidget {
     final thinking = blocks.whereType<ThinkingBlock>().toList();
     final tools = blocks.whereType<ToolBlock>().toList();
     final errors = blocks.whereType<ErrorBlock>().toList();
+    final textBlocks = blocks.whereType<TextBlock>().toList();
     final hasActivity =
         thinking.isNotEmpty || tools.isNotEmpty || errors.isNotEmpty;
     final label = _workLabel(thinking.length, tools);
@@ -710,13 +712,10 @@ class _AssistantMessage extends StatelessWidget {
             ),
             const SizedBox(height: 10),
           ],
-          for (final block in blocks.whereType<TextBlock>()) ...[
-            SelectableText(
+          for (final (i, block) in textBlocks.indexed) ...[
+            MarkdownText(
               block.text,
-              style: AppTextStyle.body.of(context).copyWith(
-                    color: context.colorScheme.onSurface,
-                    height: 1.5,
-                  ),
+              streaming: message.streaming && i == textBlocks.length - 1,
             ),
             const SizedBox(height: 10),
           ],

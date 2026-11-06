@@ -32,6 +32,7 @@ Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖**可
 | 长列表 | `PrismListView` |
 | 侧边抽屉 | `showModalSideSheet` + `SideSheet` |
 | 图标 | `GlyphIcon(Glyphs.x)`，**必须** `import 'package:prism_ui/icons/icons.dart';` |
+| Markdown（`ui/md/Markdown.kt`） | `markdown.dart` 的 `MarkdownText`（Dart 移植，无外部依赖） |
 
 **不要 import `package:flutter/material.dart`**：`prism_ui` 自带 `AppBar`、`ThemeMode`、
 `TextField`、`Card` 等同名符号，同时引入会产生 `ambiguous_import`。
@@ -88,6 +89,8 @@ FlClash 的观感来自这些统一的行高。
 - 消息气泡、助手正文、工具调用卡、思考折叠、流式光标、错误条、回到底部按钮，
   位置与信息层级照 `ChatScreen.kt` 的现有结构，只把 Compose 组件换成 prism_ui 等价物。
 - 助手气泡仍用**衬线**，与用户气泡的区分保留。
+- 助手正文由 `MarkdownText` 渲染（标题/列表/引用/表格/代码块/行内样式），用户气泡仍是纯文本；
+  链接只做样式（accent + 下划线），Flutter 侧没有打开 URL 的桥接方法。
 - 橙色（`colorScheme.primary`）只用于焦点与当前会话标记，占屏不超过 5%。
 
 ### 设置页 —— 借鉴 FlClash 排版
