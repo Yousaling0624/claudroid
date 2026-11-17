@@ -4,31 +4,40 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../models/models.dart';
 import 'glyphs.dart';
+import 'settings/settings_destination.dart';
+import 'settings/settings_dialogs.dart';
+import 'time_format.dart';
 
 /// The session drawer, laid out like `ui/components/SessionDrawer.kt`: brand
 /// row, new-chat capsule, search, history grouped by day, and each row's own
 /// rename/delete menu.
 ///
-/// This sits inside `showModalSideSheet`, which is not a [PrismScaffold], so
+/// This sits inside `showLeftSideSheet`, which is not a [PrismScaffold], so
 /// insets come from [MediaQuery] rather than the scaffold extensions.
 class SessionDrawer extends StatefulWidget {
   const SessionDrawer({
     super.key,
     required this.sessions,
     required this.activeId,
+    required this.engine,
     required this.onSelect,
     required this.onNew,
     required this.onRename,
     required this.onDelete,
+    required this.onWorkspace,
+    required this.onSettings,
     required this.onClose,
   });
 
   final List<ChatSession> sessions;
   final String? activeId;
+  final EngineState engine;
   final ValueChanged<String> onSelect;
   final VoidCallback onNew;
   final void Function(String id, String title) onRename;
   final ValueChanged<String> onDelete;
+  final VoidCallback onWorkspace;
+  final ValueChanged<SettingsDestination> onSettings;
   final VoidCallback onClose;
 
   @override
@@ -48,7 +57,15 @@ class _SessionDrawerState extends State<SessionDrawer> {
   Future<void> _rename(ChatSession session) async {
     final title = await showFloatingDialog<String>(
       context: context,
-      child: _RenameDialog(title: session.title),
+      child: SettingsTextPrompt(
+        title: '重命名对话',
+        initial: session.title,
+        hint: '给这段对话起个名字',
+        singleLine: true,
+        maxLength: 80,
+        validator: (value) =>
+            (value ?? '').trim().isEmpty ? '名字不能为空' : null,
+      ),
     );
     if (title == null) return;
     final trimmed = title.trim();
@@ -98,7 +115,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
               child: groups.isEmpty
                   ? _empty(context)
                   : ListView(
-                      padding: EdgeInsets.only(bottom: 8 + safe.bottom),
+                      padding: const EdgeInsets.only(bottom: 8),
                       children: [
                         for (final group in groups)
                           generateSection(
@@ -117,8 +134,96 @@ class _SessionDrawerState extends State<SessionDrawer> {
                       ],
                     ),
             ),
+            _footer(context),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Pinned footer, the same shape as `DrawerEnginePill` in the Compose drawer:
+  /// a status capsule that opens settings, then workspace and settings buttons.
+  Widget _footer(BuildContext context) {
+    final scheme = context.colorScheme;
+    final engine = widget.engine;
+    final dot = engine.phase == 'Failed'
+        ? scheme.error
+        : engine.ready
+            ? scheme.success
+            : engine.phase == 'Working'
+                ? scheme.primary
+                : scheme.onSurfaceVariant;
+    final baseLabel = engine.engineLabel.isEmpty ? '引擎状态' : engine.engineLabel;
+    final updateAvailable = engine.installedVersion != null &&
+        engine.latestVersion != null &&
+        engine.latestVersion != engine.installedVersion;
+    final label = updateAvailable ? '$baseLabel · 可更新' : baseLabel;
+    final dotColor = updateAvailable
+        ? scheme.primary
+        : dot;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        12,
+        8,
+        12,
+        8 + MediaQuery.paddingOf(context).bottom,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Semantics(
+              button: true,
+              label: '引擎状态：$label，打开引擎设置',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () =>
+                    widget.onSettings(SettingsDestination.engine),
+                child: Container(
+                  height: 46,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHigh,
+                    borderRadius: AppRadius.full,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: dotColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.footnote.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: widget.onWorkspace,
+            icon: const GlyphIcon(AppGlyphs.folder, size: 19),
+            tooltip: '工作区',
+          ),
+          IconButton(
+            onPressed: () => widget.onSettings(SettingsDestination.root),
+            icon: const GlyphIcon(AppGlyphs.settings, size: 19),
+            tooltip: '设置',
+          ),
+        ],
       ),
     );
   }
@@ -228,81 +333,72 @@ class _SessionRowState extends State<_SessionRow> {
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
+    final scheme = context.colorScheme;
+    final preview = session.preview.trim();
     return DecorationListItem(
       isSelected: widget.selected,
       onPressed: widget.onPressed,
-      title: Text(
-        session.title.isEmpty ? '新对话' : session.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(_timeLabel(session.updatedAt)),
-      trailing: PopupAnchor(
-        targetBuilder: (open) => IconButton(
-          onPressed: open,
-          icon: const GlyphIcon(Glyphs.more, size: 18),
-          tooltip: '对话选项',
-        ),
-        popupBuilder: (_) => PopupMenu(
-          items: [
-            PopupMenuItem(
-              label: '重命名',
-              glyph: AppGlyphs.edit,
-              onPressed: widget.onRename,
+      title: Row(
+        children: [
+          if (widget.selected) ...[
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                shape: BoxShape.circle,
+              ),
             ),
-            PopupMenuItem(
-              label: '删除对话',
-              glyph: AppGlyphs.trash,
-              danger: true,
-              onPressed: widget.onDelete,
-            ),
+            const SizedBox(width: 7),
           ],
-        ),
+          Expanded(
+            child: Text(
+              session.title.isEmpty ? '新对话' : session.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
-    );
-  }
-}
-
-class _RenameDialog extends StatefulWidget {
-  const _RenameDialog({required this.title});
-
-  final String title;
-
-  @override
-  State<_RenameDialog> createState() => _RenameDialogState();
-}
-
-class _RenameDialogState extends State<_RenameDialog> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.title);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: '重命名对话',
-      hasFields: true,
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text('保存'),
-        ),
-      ],
-      child: TextField(
-        controller: _controller,
-        autofocus: true,
-        maxLines: 1,
-        decoration: const InputDecoration(hintText: '给这段对话起个名字'),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
+      subtitle: preview.isEmpty
+          ? null
+          : Text(
+              preview,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            sessionTimeLabel(session.updatedAt),
+            style: AppTextStyle.caption2.of(context).copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+          PopupAnchor(
+            targetBuilder: (open) => IconButton(
+              onPressed: open,
+              icon: const GlyphIcon(Glyphs.more, size: 18),
+              tooltip: '对话选项',
+            ),
+            popupBuilder: (_) => PopupMenu(
+              items: [
+                PopupMenuItem(
+                  label: '重命名',
+                  glyph: AppGlyphs.edit,
+                  onPressed: widget.onRename,
+                ),
+                PopupMenuItem(
+                  label: '删除对话',
+                  glyph: AppGlyphs.trash,
+                  danger: true,
+                  onPressed: widget.onDelete,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -321,13 +417,17 @@ class _Group {
 
 /// "今天 / 昨天 / 过去 7 天 / 更早", the same buckets as `SessionGrouping.kt`.
 ///
-/// The bridge sends summaries only, so search matches titles; the Compose drawer
-/// also greps message text because it has the full session on hand.
+/// Sessions created but never used are hidden, matching the Compose drawer.
+/// Search matches the title and the truncated transcript text the host sends
+/// alongside each summary.
 List<_Group> _group(List<ChatSession> sessions, String query) {
   final needle = query.trim().toLowerCase();
   final visible = [
     for (final session in sessions)
-      if (needle.isEmpty || session.title.toLowerCase().contains(needle))
+      if (session.hasContent &&
+          (needle.isEmpty ||
+              session.title.toLowerCase().contains(needle) ||
+              session.searchText.toLowerCase().contains(needle)))
         session,
   ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
@@ -356,19 +456,3 @@ List<_Group> _group(List<ChatSession> sessions, String query) {
 }
 
 DateTime _dayOf(DateTime value) => DateTime(value.year, value.month, value.day);
-
-String _timeLabel(int millis) {
-  if (millis <= 0) return '';
-  final now = DateTime.now();
-  final time = DateTime.fromMillisecondsSinceEpoch(millis);
-  final days = _dayOf(now).difference(_dayOf(time)).inDays;
-  final clock =
-      '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  if (days <= 0) return clock;
-  if (days == 1) return '昨天 $clock';
-  if (days < 7) return '${time.month}月${time.day}日';
-  if (time.year != now.year) {
-    return '${time.year}年${time.month}月${time.day}日';
-  }
-  return '${time.month}月${time.day}日';
-}

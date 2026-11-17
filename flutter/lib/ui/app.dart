@@ -1,19 +1,20 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import 'chat_page.dart';
+import 'home_page.dart';
+import 'left_side_sheet.dart';
 import 'localizations.dart';
+import 'palette.dart';
 import 'session_drawer.dart';
+import 'settings/settings_destination.dart';
 import 'settings_page.dart';
-
-/// Seed for the whole palette: Claudroid's terracotta, the same value as
-/// `ui/theme/Theme.kt`'s `orange`, so the derived surfaces stay on the warm
-/// paper side instead of drifting blue.
-const kSeedColor = Color(0xFFD97757);
+import 'workspace_page.dart';
 
 /// The shell: owns the app-wide state stream, the active session, and the
 /// destinations. All business state lives in Kotlin; this only folds the
@@ -31,9 +32,14 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   final GlobalEvents _global = GlobalEvents();
   StreamSubscription<AppEvent>? _subscription;
 
-  AppState _state = const AppState();
+  final ValueNotifier<AppState> _state =
+      ValueNotifier<AppState>(const AppState());
   String? _sessionId;
   String? _startupError;
+
+  /// Incremented on every "new chat"; the home page drops its draft and asks
+  /// for a fresh set of suggestions.
+  int _homeEpoch = 0;
 
   /// A context under [BannerHost], for showing errors from async callbacks.
   BuildContext? _hostContext;
@@ -48,6 +54,7 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   @override
   void dispose() {
     _subscription?.cancel();
+    _state.dispose();
     super.dispose();
   }
 
@@ -56,14 +63,13 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
       final init = await widget.bridge.init();
       if (!mounted) return;
       setState(() {
-        _state = AppState(
+        _state.value = AppState(
           settings: init.settings,
           labels: init.labels,
           engine: init.engine,
           sessions: init.sessions,
           ready: true,
         );
-        _sessionId = init.sessions.isEmpty ? null : init.sessions.first.id;
       });
     } catch (error) {
       // The host may not be attached yet (tests, a stale engine). The shell
@@ -76,21 +82,35 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   void _onEvent(AppEvent event) {
     if (!mounted) return;
     setState(() {
-      _state = event.apply(_state);
-      // The first session on a cold start should open itself.
-      if (_sessionId == null && _state.sessions.isNotEmpty) {
-        _sessionId = _state.sessions.first.id;
-      }
+      _state.value = event.apply(_state.value);
+      // The shell stays on whatever page the user is looking at. A cold start
+      // lands on home (`_sessionId` is null); a session event never steals it.
     });
   }
 
-  Future<void> _newSession() async {
+  /// "New chat" is the home page, not an empty session: the session is created
+  /// when the first prompt is sent, matching `MainActivity`.
+  void _newSession() {
+    setState(() {
+      _sessionId = null;
+      _homeEpoch++;
+    });
+  }
+
+  Future<bool> _sendFromHome(String text) async {
     try {
       final session = await widget.bridge.newSession();
-      if (!mounted) return;
+      final accepted = await widget.bridge.send(session.id, text);
+      if (!mounted) return false;
+      if (!accepted) {
+        _toast('这一轮还没结束。先点停止，再发送。', isError: true);
+        return false;
+      }
       setState(() => _sessionId = session.id);
+      return true;
     } catch (error) {
-      _toast('$error', isError: true);
+      _toast('没能开始对话（$error）。再试一次。', isError: true);
+      return false;
     }
   }
 
@@ -113,7 +133,7 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   }
 
   Future<void> _updateSettings(Map<String, dynamic> patch) async {
-    final next = _state.settings.merge(patch);
+    final next = _state.value.settings.merge(patch);
     try {
       await widget.bridge.updateSettings(next);
       // `settings` events push the authoritative copy right after this returns,
@@ -137,18 +157,12 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
     return PrismApp(
       title: 'Claudroid',
       theme: ThemeData(
-        colorScheme: seededColorScheme(
-          seedColor: kSeedColor,
-          brightness: Brightness.light,
-        ),
+        colorScheme: claudroidColorScheme(Brightness.light),
       ),
       darkTheme: ThemeData(
-        colorScheme: seededColorScheme(
-          seedColor: kSeedColor,
-          brightness: Brightness.dark,
-        ),
+        colorScheme: claudroidColorScheme(Brightness.dark),
       ),
-      themeMode: switch (_state.settings.intOr('themeMode')) {
+      themeMode: switch (_state.value.settings.intOr('themeMode')) {
         1 => ThemeMode.light,
         2 => ThemeMode.dark,
         _ => ThemeMode.system,
@@ -174,11 +188,14 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
         builder: (context) {
           _hostContext = context;
           return _Shell(
-            state: _state,
+            state: _state.value,
+            stateListenable: _state,
             sessionId: _sessionId,
+            homeEpoch: _homeEpoch,
             startupError: _startupError,
             bridge: widget.bridge,
             onNewSession: _newSession,
+            onSendFromHome: _sendFromHome,
             onOpenSession: (id) => setState(() => _sessionId = id),
             onRenameSession: _renameSession,
             onDeleteSession: _deleteSession,
@@ -194,10 +211,13 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
 class _Shell extends StatelessWidget {
   const _Shell({
     required this.state,
+    required this.stateListenable,
     required this.sessionId,
+    required this.homeEpoch,
     required this.startupError,
     required this.bridge,
     required this.onNewSession,
+    required this.onSendFromHome,
     required this.onOpenSession,
     required this.onRenameSession,
     required this.onDeleteSession,
@@ -206,49 +226,72 @@ class _Shell extends StatelessWidget {
   });
 
   final AppState state;
+  final ValueListenable<AppState> stateListenable;
   final String? sessionId;
+  final int homeEpoch;
   final String? startupError;
   final Bridge bridge;
   final VoidCallback onNewSession;
+  final Future<bool> Function(String text) onSendFromHome;
   final ValueChanged<String> onOpenSession;
   final void Function(String id, String title) onRenameSession;
   final ValueChanged<String> onDeleteSession;
   final Future<void> Function(Map<String, dynamic> patch) onUpdateSettings;
   final void Function(String text, {bool isError}) onToast;
 
-  void _openSettings(BuildContext context) {
+  void _openSettings(
+    BuildContext context, [
+    SettingsDestination destination = SettingsDestination.root,
+  ]) {
     BaseNavigator.push<void>(
       context,
       SettingsPage(
         bridge: bridge,
-        settings: state.settings,
-        labels: state.labels,
-        engine: state.engine,
+        stateListenable: stateListenable,
         onUpdateSettings: onUpdateSettings,
         onToast: onToast,
+        destination: destination,
       ),
     );
   }
 
   void _openDrawer(BuildContext context) {
-    showModalSideSheet<void>(
+    showLeftSideSheet<void>(
       context: context,
       barrierColor: context.colorScheme.modalScrim,
       builder: (sheetContext) => SessionDrawer(
         sessions: state.sessions,
         activeId: sessionId,
+        engine: state.engine,
         onSelect: (id) {
+          // Pop synchronously: `maybePop` is async and would race the route
+          // pushed right after it, popping the new page instead of the drawer.
+          Navigator.of(sheetContext).pop();
           onOpenSession(id);
-          Navigator.of(sheetContext).maybePop();
         },
         onNew: () {
-          Navigator.of(sheetContext).maybePop();
+          Navigator.of(sheetContext).pop();
           onNewSession();
         },
         onRename: onRenameSession,
         onDelete: onDeleteSession,
-        onClose: () => Navigator.of(sheetContext).maybePop(),
+        onWorkspace: () {
+          Navigator.of(sheetContext).pop();
+          _openWorkspace(context);
+        },
+        onSettings: (destination) {
+          Navigator.of(sheetContext).pop();
+          _openSettings(context, destination);
+        },
+        onClose: () => Navigator.of(sheetContext).pop(),
       ),
+    );
+  }
+
+  void _openWorkspace(BuildContext context) {
+    BaseNavigator.push<void>(
+      context,
+      WorkspacePage(bridge: bridge, onToast: onToast),
     );
   }
 
@@ -256,11 +299,23 @@ class _Shell extends StatelessWidget {
   Widget build(BuildContext context) {
     final id = sessionId;
     if (id == null) {
-      return EmptyChatPage(
+      return HomePage(
+        bridge: bridge,
+        settings: state.settings,
+        labels: state.labels,
+        engine: state.engine,
+        homeEpoch: homeEpoch,
+        sessions: state.sessions,
+        onOpenSession: onOpenSession,
         notice: startupError,
         onOpenDrawer: () => _openDrawer(context),
-        onOpenSettings: () => _openSettings(context),
+        onOpenSettings: (destination) =>
+            _openSettings(context, destination),
+        onOpenWorkspace: () => _openWorkspace(context),
         onNewChat: onNewSession,
+        onSend: onSendFromHome,
+        onUpdateSettings: onUpdateSettings,
+        onToast: onToast,
       );
     }
     return ChatPage(
@@ -270,7 +325,9 @@ class _Shell extends StatelessWidget {
       settings: state.settings,
       labels: state.labels,
       onOpenDrawer: () => _openDrawer(context),
-      onOpenSettings: () => _openSettings(context),
+      onOpenSettings: (destination) =>
+          _openSettings(context, destination),
+      onOpenWorkspace: () => _openWorkspace(context),
       onNewChat: onNewSession,
       onUpdateSettings: onUpdateSettings,
       onToast: onToast,

@@ -1,9 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
+
+import 'palette.dart';
+import 'typography.dart';
 
 /// 刻意做小的 Markdown 渲染器：标题、有序/嵌套列表、任务列表、引用、围栏与行内代码、
 /// 表格、分隔线、粗体/斜体/删除线与链接。聊天记录要靠这些才读得像 CLI 输出；
@@ -24,6 +28,7 @@ class MdText extends MdBlock {
     this.quote = false,
     this.indent = 0,
     this.heading = false,
+    this.list = false,
   });
 
   final TextSpan span;
@@ -31,6 +36,7 @@ class MdText extends MdBlock {
   final bool quote;
   final int indent; // 0..4，每级 16dp
   final bool heading; // 只影响段前间距
+  final bool list; // 列表项之间用更紧的间距，读起来才像一个整体
 }
 
 class MdCode extends MdBlock {
@@ -92,8 +98,12 @@ abstract final class Markdown {
     required Color accent,
     required Color codeBackground,
     required Color codeColor,
+    Color? markerColor,
+    ValueChanged<String>? onLinkTap,
+    List<TapGestureRecognizer>? recognizers,
   }) {
     final blocks = <MdBlock>[];
+    final bulletColor = markerColor ?? accent;
     final lines = source.replaceAll('\r\n', '\n').split('\n');
     final paragraph = StringBuffer();
     String? fence;
@@ -110,6 +120,8 @@ abstract final class Markdown {
               accent: accent,
               codeBackground: codeBackground,
               codeColor: codeColor,
+              onLinkTap: onLinkTap,
+              recognizers: recognizers,
             ),
           ),
         );
@@ -160,6 +172,8 @@ abstract final class Markdown {
                     accent: accent,
                     codeBackground: codeBackground,
                     codeColor: codeColor,
+                    onLinkTap: onLinkTap,
+                    recognizers: recognizers,
                   ),
               ],
               rows: [
@@ -171,6 +185,8 @@ abstract final class Markdown {
                         accent: accent,
                         codeBackground: codeBackground,
                         codeColor: codeColor,
+                        onLinkTap: onLinkTap,
+                        recognizers: recognizers,
                       ),
                   ],
               ],
@@ -222,6 +238,8 @@ abstract final class Markdown {
                 accent: accent,
                 codeBackground: codeBackground,
                 codeColor: codeColor,
+                onLinkTap: onLinkTap,
+                recognizers: recognizers,
               ),
               kind: switch (level) {
                 1 => MdTextKind.headingLarge,
@@ -254,6 +272,8 @@ abstract final class Markdown {
                 accent: accent,
                 codeBackground: codeBackground,
                 codeColor: codeColor,
+                onLinkTap: onLinkTap,
+                recognizers: recognizers,
               ),
               kind: MdTextKind.quote,
               quote: true,
@@ -292,10 +312,8 @@ abstract final class Markdown {
                 TextSpan(
                   text: prefix,
                   style: TextStyle(
-                    color: accent,
-                    fontWeight: checkbox == null && !isDigitMarker
-                        ? FontWeight.bold
-                        : FontWeight.w500,
+                    color: bulletColor,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 const TextSpan(text: '  '),
@@ -304,10 +322,13 @@ abstract final class Markdown {
                   accent: accent,
                   codeBackground: codeBackground,
                   codeColor: codeColor,
+                  onLinkTap: onLinkTap,
+                  recognizers: recognizers,
                 ),
               ],
             ),
             indent: depth,
+            list: true,
           ),
         );
         i++;
@@ -343,6 +364,8 @@ abstract final class Markdown {
     required Color accent,
     required Color codeBackground,
     required Color codeColor,
+    ValueChanged<String>? onLinkTap,
+    List<TapGestureRecognizer>? recognizers,
   }) {
     final mono = _monoInline;
     final children = <TextSpan>[];
@@ -354,6 +377,18 @@ abstract final class Markdown {
     void append(String value, [TextStyle? style]) {
       if (value.isEmpty) return;
       children.add(TextSpan(text: value, style: style));
+    }
+
+    void appendLink(String label, String url) {
+      if (onLinkTap == null) {
+        append(label, linkStyle);
+        return;
+      }
+      final recognizer = TapGestureRecognizer()..onTap = () => onLinkTap(url);
+      recognizers?.add(recognizer);
+      children.add(
+        TextSpan(text: label, style: linkStyle, recognizer: recognizer),
+      );
     }
 
     var i = 0;
@@ -426,9 +461,10 @@ abstract final class Markdown {
         final open = close > 0 ? text.indexOf('(', close) : -1;
         final end = open == close + 1 ? text.indexOf(')', open) : -1;
         if (close > i && open == close + 1 && end > open) {
-          // 链接只做 accent + 下划线：Flutter 侧没有 openUrl 桥接方法，
-          // 加 recognizer 只会给用户一个点不动的链接。
-          append(text.substring(i + 1, close), linkStyle);
+          appendLink(
+            text.substring(i + 1, close),
+            text.substring(open + 1, end),
+          );
           i = end + 1;
         } else {
           append('[');
@@ -446,7 +482,7 @@ abstract final class Markdown {
         while (end > i && '.,;:!?)]}>'.contains(text[end - 1])) {
           end--;
         }
-        append(text.substring(i, end), linkStyle);
+        appendLink(text.substring(i, end), text.substring(i, end));
         i = end;
       } else {
         append(text[i]);
@@ -523,22 +559,106 @@ bool _isWhitespace(String char) => char == ' ' ||
 
 /// 助手正文的 Markdown 渲染入口。解析是纯函数，样式在这里按 [MdTextKind] 解析，
 /// 所以单测只测 [Markdown.parse] 就够。
-class MarkdownText extends StatelessWidget {
-  const MarkdownText(this.text, {super.key, this.streaming = false});
+///
+/// 链接的 [TapGestureRecognizer] 由这个 State 持有：识别器一旦挂到 TextSpan
+/// 就必须有人释放，而流式输出每帧都会重建 span。
+class MarkdownText extends StatefulWidget {
+  const MarkdownText(
+    this.text, {
+    super.key,
+    this.streaming = false,
+    this.serif = false,
+    this.onLinkTap,
+  });
 
   final String text;
   final bool streaming;
 
+  /// Assistant prose uses the serif voice; workspace previews stay sans.
+  final bool serif;
+
+  /// Called with an http(s) URL when a markdown link or bare URL is tapped.
+  final ValueChanged<String>? onLinkTap;
+
+  @override
+  State<MarkdownText> createState() => _MarkdownTextState();
+}
+
+class _MarkdownTextState extends State<MarkdownText> {
+  List<TapGestureRecognizer> _recognizers = const [];
+
+  // Parsing builds a TextSpan tree with gesture recognizers, so it is only
+  // safe to reuse while the text, colours and callback are unchanged. This is
+  // the common case: a streaming sibling rebuilds the page every frame, but
+  // completed messages keep their parsed blocks.
+  String? _parsedText;
+  Color? _parsedAccent;
+  Color? _parsedMarker;
+  Color? _parsedCodeBackground;
+  Color? _parsedCodeColor;
+  ValueChanged<String>? _parsedOnLinkTap;
+  bool? _parsedSerif;
+  List<MdBlock>? _parsedBlocks;
+
+  @override
+  void dispose() {
+    for (final recognizer in _recognizers) {
+      recognizer.dispose();
+    }
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final accent = scheme.primary;
-    final blocks = Markdown.parse(
-      text,
-      accent: accent,
-      codeBackground: scheme.surfaceContainerHighest,
-      codeColor: scheme.onSurface,
-    );
+    final accent = linkColor(scheme);
+    // 列表符号用次要文字色，不跟链接抢赤陶色；行内代码底比代码块浅一档，
+    // 嵌在正文里不会像一块补丁。
+    final markerColor = scheme.onSurfaceVariant;
+    final codeBackground = scheme.surfaceContainerHigh;
+    final codeColor = scheme.onSurface;
+    final List<MdBlock> blocks;
+    final cached = _parsedBlocks != null &&
+        _parsedText == widget.text &&
+        _parsedAccent == accent &&
+        _parsedMarker == markerColor &&
+        _parsedCodeBackground == codeBackground &&
+        _parsedCodeColor == codeColor &&
+        _parsedSerif == widget.serif &&
+        _parsedOnLinkTap == widget.onLinkTap;
+    if (cached) {
+      blocks = _parsedBlocks!;
+    } else {
+      final recognizers = <TapGestureRecognizer>[];
+      blocks = Markdown.parse(
+        widget.text,
+        accent: accent,
+        markerColor: markerColor,
+        codeBackground: codeBackground,
+        codeColor: codeColor,
+        onLinkTap: widget.onLinkTap,
+        recognizers: recognizers,
+      );
+      // The spans from the previous parse may still be on screen until this
+      // frame commits, so their recognizers are released after it.
+      final previous = _recognizers;
+      _recognizers = recognizers;
+      if (previous.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          for (final recognizer in previous) {
+            recognizer.dispose();
+          }
+        });
+      }
+      _parsedText = widget.text;
+      _parsedAccent = accent;
+      _parsedMarker = markerColor;
+      _parsedCodeBackground = codeBackground;
+      _parsedCodeColor = codeColor;
+      _parsedSerif = widget.serif;
+      _parsedOnLinkTap = widget.onLinkTap;
+      _parsedBlocks = blocks;
+    }
     // 光标只跟最后一个文字块：后面若还有工具块，光标仍停在那段正文上，
     // 与 Compose 的 lastTextIndex 语义一致。
     final lastText = blocks.lastIndexWhere((block) => block is MdText);
@@ -554,7 +674,12 @@ class MarkdownText extends StatelessWidget {
 
   Widget _buildBlock(BuildContext context, MdBlock block, int index, int lastText) {
     if (block is MdText) {
-      return _buildText(context, block, index, streaming && index == lastText);
+      return _buildText(
+        context,
+        block,
+        index,
+        widget.streaming && index == lastText,
+      );
     }
     if (block is MdCode) {
       return Padding(
@@ -585,13 +710,19 @@ class MarkdownText extends StatelessWidget {
           color: scheme.onSurface,
           height: 1.5,
         );
+    final styled = widget.serif ? claudroidSerif(base) : base;
     final span = showCaret ? _withCaret(block.span) : block.span;
     final child = SelectableText.rich(
       span,
-      style: base.merge(_styleFor(context, block.kind)),
+      style: styled.merge(_styleFor(context, block.kind)),
     );
 
-    final top = index == 0 ? 0.0 : (block.heading ? 18.0 : 8.0);
+    // 段落之间留 9dp；列表项彼此只留 5dp，整组列表才不会被拆成散点。
+    final top = index == 0
+        ? 0.0
+        : block.list
+            ? 5.0
+            : (block.heading ? 20.0 : 9.0);
     final left = block.indent * 16.0;
     if (block.quote) {
       // 竖条要贴满整块高度（含段前间距），所以边框放在外层，间距算进内层 padding。
@@ -630,23 +761,35 @@ class MarkdownText extends StatelessWidget {
 
   TextStyle _styleFor(BuildContext context, MdTextKind kind) => switch (kind) {
         MdTextKind.body => const TextStyle(),
-        MdTextKind.headingLarge =>
-          AppTextStyle.pageTitle.of(context, emphasized: true),
-        MdTextKind.heading => AppTextStyle.title3.of(context),
+        // 标题统一半粗、行距略紧；不再用 pageTitle 的 24/30 + w700，
+        // 否则一段回答里出现两级标题时字号跳得太厉害。
+        MdTextKind.headingLarge => AppTextStyle.custom(
+            context,
+            size: 22,
+            leading: 29,
+            weight: FontWeight.w600,
+          ),
+        MdTextKind.heading => AppTextStyle.custom(
+            context,
+            size: 20,
+            leading: 27,
+            weight: FontWeight.w600,
+          ),
         MdTextKind.headingSmall => AppTextStyle.custom(
             context,
             size: 17,
-            leading: 23,
-            weight: FontWeight.w500,
+            leading: 24,
+            weight: FontWeight.w600,
           ),
         MdTextKind.headingTiny => AppTextStyle.custom(
             context,
             size: 16,
             leading: 22,
-            weight: FontWeight.w500,
+            weight: FontWeight.w600,
           ),
-        MdTextKind.quote => AppTextStyle.custom(context, size: 15.5, leading: 24)
-            .copyWith(fontStyle: FontStyle.italic),
+        // 引用不斜体：中文斜体是机器合成，读起来别扭，靠左竖线和次要色区分即可。
+        MdTextKind.quote => AppTextStyle.custom(context, size: 16, leading: 25)
+            .copyWith(color: context.colorScheme.onSurfaceVariant),
       };
 }
 
@@ -861,7 +1004,12 @@ class _CodeBlockState extends State<_CodeBlock> {
       scrollDirection: Axis.horizontal,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: SelectableText(widget.code, style: mono),
+        // prism 的 SelectableText 是只读 EditableText，放进横向滚动会被喂无界
+        // 宽度、布局断言失败且不画字。折叠时用 Text 保留「点正文展开」，展开
+        // 后再用 SelectionArea 让代码可选中。
+        child: long && !_expanded
+            ? Text(widget.code, style: mono)
+            : SelectionArea(child: Text(widget.code, style: mono)),
       ),
     );
     if (long && !_expanded) {
@@ -934,10 +1082,15 @@ class _TableBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final headerStyle = AppTextStyle.subheadline.of(context, emphasized: true)
-        .copyWith(color: scheme.onSurface);
-    final cellStyle = AppTextStyle.caption1.of(context)
-        .copyWith(height: 18 / 12, color: scheme.onSurfaceVariant);
+    // 表格字号贴着正文走：12/16 在 17/25.5 的正文旁边显得像脚注。
+    final headerStyle = AppTextStyle.custom(
+      context,
+      size: 13.5,
+      leading: 18,
+      weight: FontWeight.w600,
+    ).copyWith(color: scheme.onSurface);
+    final cellStyle = AppTextStyle.custom(context, size: 13, leading: 18)
+        .copyWith(color: scheme.onSurfaceVariant);
     final widths = <double>[
       for (var column = 0; column < table.headers.length; column++)
         column < table.widths.length ? table.widths[column].toDouble() : 120,

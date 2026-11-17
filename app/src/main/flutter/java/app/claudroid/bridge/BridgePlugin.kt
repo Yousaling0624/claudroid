@@ -1,15 +1,31 @@
 package app.claudroid.bridge
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.core.content.FileProvider
 import app.claudroid.AppContainer
+import app.claudroid.BuildConfig
 import app.claudroid.ClaudroidApp
+import app.claudroid.core.Attachments
+import app.claudroid.core.FileKind
 import app.claudroid.core.Logx
+import app.claudroid.core.Paths
+import app.claudroid.core.WorkspaceEntry
+import app.claudroid.core.WorkspaceFiles
 import app.claudroid.data.AppSettings
+import app.claudroid.data.Providers
+import app.claudroid.data.ReleaseCheck
+import app.claudroid.engine.SuggestionGenerator
+import app.claudroid.engine.TerminalRunner
+import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.ui.chat.ChatController
 import app.claudroid.ui.chat.chatStatusLine
 import app.claudroid.ui.components.chatModelLabel
+import app.claudroid.ui.settings.activeProviderPreset
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -19,15 +35,21 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
 import io.flutter.plugin.common.StandardMethodCodec
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Thin adapter exposing [AppContainer] to the Flutter frontend as one MethodChannel
@@ -58,6 +80,30 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private val chatJobs = mutableMapOf<String, Job>()
     private val chatLock = Mutex()
 
+    /** The host Activity, used only for the document picker and for opening URLs. */
+    private var activity: Activity? = null
+    private var activityBinding: ActivityPluginBinding? = null
+    private var pendingPick: CompletableDeferred<Uri?>? = null
+
+    /** One terminal pane at a time; `terminal.run` rejects overlap. */
+    private var terminalChannel: EventChannel? = null
+    private var terminalSink: EventChannel.EventSink? = null
+    private var terminalJob: Job? = null
+    private val terminalRunner by lazy {
+        TerminalRunner(container.appContext, container.engine.rootExec)
+    }
+
+    private val pickResultListener = PluginRegistry.ActivityResultListener { code, result, data ->
+        if (code != ATTACHMENT_REQUEST) {
+            false
+        } else {
+            val pending = pendingPick
+            pendingPick = null
+            pending?.complete(if (result == Activity.RESULT_OK) data?.data else null)
+            true
+        }
+    }
+
     // ------------------------------------------------------------------ plugin
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -69,6 +115,13 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         globalChannel = EventChannel(messenger, GLOBAL_EVENTS, StandardMethodCodec.INSTANCE).also {
             it.setStreamHandler(GlobalStreamHandler())
         }
+        terminalChannel = EventChannel(messenger, TERMINAL_EVENTS, StandardMethodCodec.INSTANCE).also {
+            it.setStreamHandler(TerminalStreamHandler())
+        }
+        binding.platformViewRegistry.registerViewFactory(
+            HtmlPreviewView.VIEW_TYPE,
+            HtmlPreviewView.Factory(messenger),
+        )
         Logx.i("bridge: attached", binding.applicationContext)
     }
 
@@ -79,18 +132,42 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         globalChannel = null
         globalJob?.cancel()
         globalJob = null
+        terminalJob?.cancel()
+        terminalJob = null
+        terminalSink = null
+        terminalChannel?.setStreamHandler(null)
+        terminalChannel = null
         val ids = synchronized(chatChannels) { chatChannels.keys.toList() }
         ids.forEach { unregisterChatChannel(it) }
         // Controllers and running turns belong to the app, not the engine: detaching
         // must not kill a turn (the user may still be streaming in another host).
     }
 
-    // ActivityAware is required for add-to-app lifecycle; the bridge never needs the
-    // Activity itself (no permission dialogs, no Activity-bound channels).
-    override fun onAttachedToActivity(binding: ActivityPluginBinding) = Unit
-    override fun onDetachedFromActivityForConfigChanges() = Unit
-    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = Unit
-    override fun onDetachedFromActivity() = Unit
+    // The Activity is only needed for the document picker (attachments.pick) and for
+    // launching an external browser; nothing else in the bridge is Activity-bound.
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) = attachActivity(binding)
+
+    override fun onDetachedFromActivityForConfigChanges() = detachActivity()
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) =
+        attachActivity(binding)
+
+    override fun onDetachedFromActivity() = detachActivity()
+
+    private fun attachActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        activityBinding = binding
+        binding.addActivityResultListener(pickResultListener)
+    }
+
+    private fun detachActivity() {
+        activityBinding?.removeActivityResultListener(pickResultListener)
+        activityBinding = null
+        activity = null
+        // A picker that never returned must not leave the Dart caller awaiting forever.
+        pendingPick?.complete(null)
+        pendingPick = null
+    }
 
     // ----------------------------------------------------------------- methods
 
@@ -110,7 +187,26 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         Logx.i("bridge: ${call.method}")
         return when (call.method) {
             "app.init" -> appInit()
+            "app.suggestions" -> appSuggestions(call)
+            "app.info" -> appInfo()
+            "app.release" -> appRelease()
+            "app.openUrl" -> appOpenUrl(call)
             "settings.update" -> settingsUpdate(call)
+            "providers.list" -> providersList()
+            "providers.apply" -> providersApply(call)
+            "models.list" -> modelsFetch(testOnly = false)
+            "models.test" -> modelsFetch(testOnly = true)
+            "attachments.pick" -> attachmentsPick()
+            "workspace.list" -> workspaceList(call)
+            "workspace.preview" -> workspacePreview(call)
+            "workspace.delete" -> workspaceDelete(call)
+            "workspace.open" -> workspaceIntent(call, share = false)
+            "workspace.share" -> workspaceIntent(call, share = true)
+            "terminal.info" -> terminalInfo()
+            "terminal.run" -> terminalRun(call)
+            "terminal.stop" -> terminalStop()
+            "logs.read" -> mapOf("ok" to true, "linesJson" to BridgeWire.stringListJson(Logx.lines.value))
+            "logs.clear" -> { Logx.clear(); ok() }
             "sessions.list" ->
                 mapOf("ok" to true, "sessionsJson" to BridgeWire.sessionsJson(container.sessions.sessions.value))
             "sessions.new" -> sessionsNew(call)
@@ -127,6 +223,16 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             }
             "engine.selfTest" -> mapOf("ok" to true, "report" to container.engine.selfTest())
             "engine.rootProbeReport" -> mapOf("ok" to true, "report" to container.engine.rootProbeReport())
+            "engine.refreshNetwork" -> {
+                val result = container.engine.ensureNetworkConfig(force = true)
+                mapOf(
+                    "ok" to true,
+                    "changed" to result.changed,
+                    "skipped" to result.skipped,
+                    "dns" to result.dns,
+                    "message" to result.message,
+                )
+            }
             "engine.storageUsage" -> {
                 val usage = container.engine.storageUsage()
                 mapOf(
@@ -151,6 +257,291 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "chat.close" -> chatClose(call)
             else -> mapOf("ok" to false, "error" to "未知方法 ${call.method}")
         }
+    }
+
+    private suspend fun appSuggestions(call: MethodCall): Map<String, Any?> {
+        val count = call.int("count", 3).coerceIn(1, 5)
+        val context = call.str("context").orEmpty()
+        val items = SuggestionGenerator.generate(container.settings.current(), count, context)
+        return mapOf("ok" to true, "itemsJson" to BridgeWire.stringListJson(items))
+    }
+
+    private fun appInfo(): Map<String, Any?> = mapOf(
+        "ok" to true,
+        "versionName" to BuildConfig.VERSION_NAME,
+        "versionCode" to BuildConfig.VERSION_CODE,
+    )
+
+    private suspend fun appRelease(): Map<String, Any?> {
+        val release = ReleaseCheck.fetch().getOrThrow()
+        return mapOf(
+            "ok" to true,
+            "releaseJson" to BridgeWire.releaseJson(release, BuildConfig.VERSION_NAME),
+        )
+    }
+
+    private fun appOpenUrl(call: MethodCall): Map<String, Any?> {
+        val raw = call.require("url")
+        val uri = Uri.parse(raw)
+        require(uri.scheme == "http" || uri.scheme == "https") { "只允许打开 http/https 链接" }
+        val intent = Intent(Intent.ACTION_VIEW, uri)
+        val host = activity
+        if (host != null) {
+            host.startActivity(intent)
+        } else {
+            container.appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        return ok()
+    }
+
+    private suspend fun providersList(): Map<String, Any?> {
+        val settings = container.settings.current()
+        return mapOf(
+            "ok" to true,
+            "presetsJson" to BridgeWire.providersJson(Providers.all),
+            "activeId" to activeProviderPreset(settings)?.id,
+        )
+    }
+
+    private suspend fun providersApply(call: MethodCall): Map<String, Any?> {
+        val id = call.require("presetId")
+        val preset = Providers.all.firstOrNull { it.id == id }
+            ?: throw IllegalArgumentException("未知服务商 $id")
+        container.settings.edit { Providers.apply(it, preset) }
+        val settings = container.settings.current()
+        settingsSnapshot = settings
+        return mapOf(
+            "ok" to true,
+            "settingsJson" to BridgeWire.settingsJson(settings),
+            "labelsJson" to BridgeWire.labelsJson(settings),
+        )
+    }
+
+    private suspend fun modelsFetch(testOnly: Boolean): Map<String, Any?> {
+        val result = ModelCatalog.fetch(container.settings.current())
+        return if (testOnly) {
+            mapOf("ok" to true, "endpoint" to result.endpoint, "count" to result.models.size)
+        } else {
+            mapOf(
+                "ok" to true,
+                "modelsJson" to BridgeWire.stringListJson(result.models),
+                "modelDetailsJson" to BridgeWire.modelDetailsJson(result.details),
+                "endpoint" to result.endpoint,
+            )
+        }
+    }
+
+    private suspend fun attachmentsPick(): Map<String, Any?> {
+        val host = activity ?: throw IllegalStateException("界面不在前台，无法选择文件")
+        val deferred = CompletableDeferred<Uri?>()
+        pendingPick = deferred
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        host.startActivityForResult(intent, ATTACHMENT_REQUEST)
+        val uri = try {
+            deferred.await()
+        } finally {
+            if (pendingPick === deferred) pendingPick = null
+        } ?: return mapOf(
+            "ok" to true,
+            "cancelled" to true,
+            "relativePathsJson" to "[]",
+        )
+        // Copying can exceed 512 MB and must not run on the platform thread.
+        val relative = withContext(Dispatchers.IO) {
+            val file = Attachments.import(host, uri).getOrThrow()
+            Attachments.relativePath(host, file)
+        }
+        return mapOf(
+            "ok" to true,
+            "cancelled" to false,
+            "relativePathsJson" to BridgeWire.stringListJson(listOf(relative)),
+        )
+    }
+
+    // ------------------------------------------------------------- workspace
+
+    private fun workspaceRoot(): File = Paths.workspace(container.appContext)
+
+    /** Resolves a channel-supplied relative path, refusing anything outside the jail's /work. */
+    private fun workspaceFile(call: MethodCall): Pair<File, String> {
+        val root = workspaceRoot()
+        val file = WorkspaceFiles.resolve(root, call.str("path").orEmpty())
+            ?: throw IllegalArgumentException("路径不在工作区内")
+        return file to WorkspaceFiles.relativePath(root, file)
+    }
+
+    private suspend fun workspaceList(call: MethodCall): Map<String, Any?> {
+        val (dir, relative) = workspaceFile(call)
+        if (!dir.isDirectory) throw IllegalArgumentException("不是文件夹")
+        val entries = withContext(Dispatchers.IO) { WorkspaceFiles.list(dir) }
+        return mapOf(
+            "ok" to true,
+            "path" to relative,
+            "entriesJson" to BridgeWire.workspaceEntriesJson(entries, workspaceRoot()),
+            "totalBytes" to entries.filterNot { it.isDirectory }.sumOf { it.size },
+        )
+    }
+
+    private suspend fun workspacePreview(call: MethodCall): Map<String, Any?> {
+        val (file, relative) = workspaceFile(call)
+        if (!file.isFile) throw IllegalArgumentException("文件不存在")
+        val kind = WorkspaceFiles.kindOf(file)
+        val entry = WorkspaceEntry(file, file.name, kind, file.length(), file.lastModified())
+        val common = mapOf<String, Any?>(
+            "ok" to true,
+            "path" to relative,
+            "name" to file.name,
+            "kind" to kind.name,
+            "mime" to WorkspaceFiles.mimeOf(entry),
+            "size" to file.length(),
+            "modifiedAt" to file.lastModified(),
+            "truncated" to false,
+            "tooLarge" to false,
+        )
+        if (kind == FileKind.IMAGE) {
+            val bytes = if (file.length() <= MAX_IMAGE_BYTES) {
+                withContext(Dispatchers.IO) { file.readBytes() }
+            } else {
+                null
+            }
+            return if (bytes == null) {
+                common + ("tooLarge" to true)
+            } else {
+                common + ("bytes" to bytes)
+            }
+        }
+        val preview = withContext(Dispatchers.IO) { WorkspaceFiles.readPreview(file) }
+            ?: return common
+        return common + mapOf(
+            "text" to preview.text,
+            "truncated" to preview.truncated,
+        )
+    }
+
+    private suspend fun workspaceDelete(call: MethodCall): Map<String, Any?> {
+        val (file, _) = workspaceFile(call)
+        if (file.isDirectory) throw IllegalArgumentException("不能删除文件夹")
+        if (!file.isFile) throw IllegalArgumentException("文件不存在")
+        val deleted = withContext(Dispatchers.IO) { file.delete() }
+        if (!deleted) throw IllegalStateException("删除失败，文件可能仍被占用")
+        return ok()
+    }
+
+    private fun workspaceIntent(call: MethodCall, share: Boolean): Map<String, Any?> {
+        val (file, _) = workspaceFile(call)
+        if (!file.isFile) throw IllegalArgumentException("文件不存在")
+        val kind = WorkspaceFiles.kindOf(file)
+        val entry = WorkspaceEntry(file, file.name, kind, file.length(), file.lastModified())
+        val uri = FileProvider.getUriForFile(
+            container.appContext,
+            "${container.appContext.packageName}.files",
+            file,
+        )
+        val target = if (share) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = WorkspaceFiles.mimeOf(entry)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } else {
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, WorkspaceFiles.mimeOf(entry))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        val intent = if (share) Intent.createChooser(target, "分享 ${file.name}") else target
+        val host = activity
+        try {
+            if (host != null) {
+                host.startActivity(intent)
+            } else {
+                container.appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException(if (share) "无法分享：${e.message}" else "没有能打开该文件的应用")
+        }
+        return ok()
+    }
+
+    // -------------------------------------------------------------- terminal
+
+    private suspend fun terminalInfo(): Map<String, Any?> {
+        val settings = container.settings.current()
+        settingsSnapshot = settings
+        return mapOf(
+            "ok" to true,
+            "label" to container.engine.shellPlan(settings)?.label,
+            "issue" to container.engine.startIssue(settings),
+        )
+    }
+
+    private suspend fun terminalRun(call: MethodCall): Map<String, Any?> {
+        if (terminalJob?.isActive == true) throw IllegalStateException("终端已有命令在运行")
+        if (terminalSink == null) throw IllegalStateException("终端未连接")
+        val command = call.require("command")
+        val cwdRel = TerminalRunner.sanitizeCwd(call.str("cwdRel").orEmpty())
+        val settings = container.settings.current()
+        settingsSnapshot = settings
+        val issue = container.engine.startIssue(settings)
+        if (issue != null) throw IllegalStateException(issue)
+        val plan = container.engine.shellPlan(settings)
+            ?: throw IllegalStateException("引擎未安装，请先在设置中安装 Claude Code。")
+
+        // LAZY so `terminalJob` is assigned before the body can reach its finally block.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = terminalRunner.run(plan, command, cwdRel) { chunk ->
+                    withContext(Dispatchers.Main) {
+                        terminalSink?.success(mapOf("type" to "chunk", "text" to chunk))
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    terminalSink?.success(
+                        mapOf(
+                            "type" to "done",
+                            "exitCode" to result.exitCode,
+                            "cwdRel" to result.cwdRel,
+                            "error" to result.error,
+                            "truncated" to result.truncated,
+                        ),
+                    )
+                }
+            } catch (ce: CancellationException) {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    terminalSink?.success(mapOf("type" to "stopped"))
+                }
+                throw ce
+            } catch (e: Exception) {
+                // A cancelled job can surface the pipe-closed IOException instead of a
+                // CancellationException (see TerminalRunner's reader); report a stop
+                // rather than an execution failure.
+                val stopped = terminalJob?.isCancelled == true
+                if (!stopped) Logx.e("bridge: terminal failed: ${e.message}")
+                withContext(NonCancellable + Dispatchers.Main) {
+                    terminalSink?.success(
+                        if (stopped) {
+                            mapOf("type" to "stopped")
+                        } else {
+                            mapOf("type" to "error", "message" to (e.message ?: "执行失败"))
+                        },
+                    )
+                }
+            } finally {
+                terminalJob = null
+            }
+        }
+        terminalJob = job
+        job.start()
+        return ok()
+    }
+
+    private fun terminalStop(): Map<String, Any?> {
+        terminalJob?.cancel()
+        return ok()
     }
 
     private suspend fun appInit(): Map<String, Any?> {
@@ -200,7 +591,14 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     }
 
     private suspend fun sessionsRename(call: MethodCall): Map<String, Any?> {
-        container.sessions.rename(call.require("id"), call.require("title"))
+        val id = call.require("id")
+        val title = call.require("title")
+        container.sessions.rename(id, title)
+        // The drawer and the open chat read different sources; keep the controller in
+        // sync so a rename is visible immediately (and is protected from auto-titles).
+        val chat = container.chat(id)
+        chat.load()
+        chat.markTitleUserEdited(title)
         return ok()
     }
 
@@ -340,6 +738,20 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         }
     }
 
+    private inner class TerminalStreamHandler : EventChannel.StreamHandler {
+        override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
+            terminalSink = sink
+        }
+
+        override fun onCancel(arguments: Any?) {
+            terminalSink = null
+            // The terminal page cancels its command on dispose; this covers a dropped
+            // subscription too, so a child process never outlives the pane.
+            terminalJob?.cancel()
+            terminalJob = null
+        }
+    }
+
     private inner class ChatStreamHandler(private val sessionId: String) : EventChannel.StreamHandler {
 
         /**
@@ -365,7 +777,9 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                 sink.success(snapshotEvent(chat, settings))
                 val job = launch {
                     chat.events.collect { ev ->
-                        sink.success(BridgeWire.chatEvent(ev, chatModelLabel(settings)))
+                        // `settingsSnapshot` follows the DataStore stream, so a model
+                        // change while the chat is open is reflected in statusLine.
+                        sink.success(BridgeWire.chatEvent(ev, chatModelLabel(settingsSnapshot)))
                     }
                 }
                 chatLock.withLock {
@@ -422,12 +836,23 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private fun MethodCall.bool(key: String, default: Boolean = false): Boolean =
         (arguments as? Map<*, *>)?.get(key) as? Boolean ?: default
 
+    private fun MethodCall.int(key: String, default: Int): Int =
+        when (val value = (arguments as? Map<*, *>)?.get(key)) {
+            is Int -> value
+            is Number -> value.toInt()
+            else -> default
+        }
+
     // ----------------------------------------------------------------- statics
 
     companion object {
         const val METHOD_CHANNEL = "app.claudroid/bridge"
         const val GLOBAL_EVENTS = "app.claudroid/events"
+        const val TERMINAL_EVENTS = "app.claudroid/terminal"
         const val ENGINE_CACHE_KEY = "claudroid"
+
+        private const val ATTACHMENT_REQUEST = 0x0A77
+        private const val MAX_IMAGE_BYTES = 6L * 1024 * 1024
 
         /** Guards against attaching two plugins to the same engine (duplicate channels). */
         @Volatile private var attached = false

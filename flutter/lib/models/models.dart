@@ -7,6 +7,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 // ---------------------------------------------------------------------------
 // Blocks
@@ -88,12 +89,17 @@ class ToolBlock extends Block {
         running: json['running'] as bool? ?? false,
       );
 
-  ToolBlock copyWith({String? output, bool? isError, bool? running}) =>
+  ToolBlock copyWith({
+    String? output,
+    bool clearOutput = false,
+    bool? isError,
+    bool? running,
+  }) =>
       ToolBlock(
         id: id,
         name: name,
         input: input,
-        output: output ?? this.output,
+        output: clearOutput ? null : (output ?? this.output),
         isError: isError ?? this.isError,
         running: running ?? this.running,
       );
@@ -148,6 +154,7 @@ class ChatMessage {
     this.costUsd,
     this.durationMs,
     this.streaming = false,
+    this.model,
   });
 
   final String id;
@@ -157,6 +164,11 @@ class ChatMessage {
   final double? costUsd;
   final int? durationMs;
   final bool streaming;
+
+  /// Display label of the model that produced this answer, frozen by Kotlin when
+  /// the turn started. Null for records written before the field existed, and for
+  /// user/system messages; the assistant header then falls back to the live label.
+  final String? model;
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         id: json['id'] as String? ?? '',
@@ -169,6 +181,7 @@ class ChatMessage {
         costUsd: _asDouble(json['costUsd']),
         durationMs: _asInt(json['durationMs']),
         streaming: json['streaming'] as bool? ?? false,
+        model: json['model'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -183,6 +196,7 @@ class ChatMessage {
         'costUsd': costUsd,
         'durationMs': durationMs,
         'streaming': streaming,
+        'model': model,
       };
 
   /// Appends streaming text to the block of [kind] that is currently being
@@ -216,6 +230,7 @@ class ChatMessage {
         costUsd: costUsd,
         durationMs: durationMs,
         streaming: streaming,
+        model: model,
       );
 
   ChatMessage copyWith({
@@ -232,6 +247,7 @@ class ChatMessage {
         costUsd: costUsd ?? this.costUsd,
         durationMs: durationMs ?? this.durationMs,
         streaming: streaming ?? this.streaming,
+        model: model,
       );
 }
 
@@ -247,6 +263,9 @@ class ChatSession {
     this.updatedAt = 0,
     this.claudeSessionId,
     this.model,
+    this.hasContent = true,
+    this.preview = '',
+    this.searchText = '',
   });
 
   final String id;
@@ -256,6 +275,17 @@ class ChatSession {
   final String? claudeSessionId;
   final String? model;
 
+  /// False for a session that was created but never got a message; the drawer
+  /// hides those instead of filling itself with empty rows.
+  final bool hasContent;
+
+  /// Last message preview, computed by Kotlin.
+  final String preview;
+
+  /// Truncated transcript text used for drawer search (the transcript itself
+  /// never crosses the bridge).
+  final String searchText;
+
   factory ChatSession.fromJson(Map<String, dynamic> json) => ChatSession(
         id: json['id'] as String? ?? '',
         title: json['title'] as String? ?? '',
@@ -263,6 +293,9 @@ class ChatSession {
         updatedAt: _asInt(json['updatedAt']) ?? 0,
         claudeSessionId: json['claudeSessionId'] as String?,
         model: json['model'] as String?,
+        hasContent: json['hasContent'] as bool? ?? true,
+        preview: json['preview'] as String? ?? '',
+        searchText: json['searchText'] as String? ?? '',
       );
 
   Map<String, dynamic> toJson() => {
@@ -272,6 +305,9 @@ class ChatSession {
         'updatedAt': updatedAt,
         'claudeSessionId': claudeSessionId,
         'model': model,
+        'hasContent': hasContent,
+        'preview': preview,
+        'searchText': searchText,
       };
 }
 
@@ -407,6 +443,187 @@ class ModelLabels {
         'tierSummary': tierSummary,
         'tierMapping': tierMapping,
       };
+}
+
+// ---------------------------------------------------------------------------
+// Providers / release
+// ---------------------------------------------------------------------------
+
+/// One-tap provider setup. The values come from `Providers` in Kotlin; Dart only
+/// displays them and asks the host to apply the selected preset.
+class ProviderPreset {
+  const ProviderPreset({
+    required this.id,
+    required this.label,
+    required this.flavor,
+    required this.baseUrl,
+    required this.authStyle,
+    required this.model,
+    this.hint = '',
+  });
+
+  final String id;
+  final String label;
+  final String flavor;
+  final String baseUrl;
+  final String authStyle;
+  final String model;
+  final String hint;
+
+  factory ProviderPreset.fromJson(Map<String, dynamic> json) => ProviderPreset(
+        id: json['id'] as String? ?? '',
+        label: json['label'] as String? ?? '',
+        flavor: json['flavor'] as String? ?? 'ANTHROPIC',
+        baseUrl: json['baseUrl'] as String? ?? '',
+        authStyle: json['authStyle'] as String? ?? 'API_KEY',
+        model: json['model'] as String? ?? '',
+        hint: json['hint'] as String? ?? '',
+      );
+}
+
+class AppInfo {
+  const AppInfo({this.versionName = '', this.versionCode = 0});
+
+  final String versionName;
+  final int versionCode;
+}
+
+enum ReleaseStatus {
+  upToDate,
+  updateAvailable,
+  devBuild;
+
+  static ReleaseStatus fromWire(String? value) => switch (value) {
+        'UPDATE_AVAILABLE' => ReleaseStatus.updateAvailable,
+        'DEV_BUILD' => ReleaseStatus.devBuild,
+        _ => ReleaseStatus.upToDate,
+      };
+}
+
+class ReleaseInfo {
+  const ReleaseInfo({
+    required this.tag,
+    required this.url,
+    this.publishedAt,
+    this.status = ReleaseStatus.upToDate,
+    this.currentVersion = '',
+  });
+
+  final String tag;
+  final String url;
+  final String? publishedAt;
+  final ReleaseStatus status;
+  final String currentVersion;
+
+  factory ReleaseInfo.fromJson(Map<String, dynamic> json) => ReleaseInfo(
+        tag: json['tag'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+        publishedAt: json['publishedAt'] as String?,
+        status: ReleaseStatus.fromWire(json['status'] as String?),
+        currentVersion: json['currentVersion'] as String? ?? '',
+      );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace
+// ---------------------------------------------------------------------------
+
+enum WorkspaceKind {
+  directory,
+  image,
+  markdown,
+  html,
+  text,
+  archive,
+  other;
+
+  static WorkspaceKind fromWire(String? value) => switch (value) {
+        'DIRECTORY' => WorkspaceKind.directory,
+        'IMAGE' => WorkspaceKind.image,
+        'MARKDOWN' => WorkspaceKind.markdown,
+        'HTML' => WorkspaceKind.html,
+        'TEXT' => WorkspaceKind.text,
+        'ARCHIVE' => WorkspaceKind.archive,
+        _ => WorkspaceKind.other,
+      };
+}
+
+class WorkspaceEntry {
+  const WorkspaceEntry({
+    required this.name,
+    required this.path,
+    required this.kind,
+    required this.size,
+    required this.modifiedAt,
+    required this.isDirectory,
+  });
+
+  final String name;
+
+  /// Workspace-relative path (`/` separated); feed this back to the bridge.
+  final String path;
+  final WorkspaceKind kind;
+  final int size;
+  final int modifiedAt;
+  final bool isDirectory;
+
+  factory WorkspaceEntry.fromJson(Map<String, dynamic> json) => WorkspaceEntry(
+        name: json['name'] as String? ?? '',
+        path: json['path'] as String? ?? '',
+        kind: WorkspaceKind.fromWire(json['kind'] as String?),
+        size: _asInt(json['size']) ?? 0,
+        modifiedAt: _asInt(json['modifiedAt']) ?? 0,
+        isDirectory: json['isDirectory'] as bool? ??
+            WorkspaceKind.fromWire(json['kind'] as String?) ==
+                WorkspaceKind.directory,
+      );
+}
+
+class WorkspaceListing {
+  const WorkspaceListing({
+    required this.path,
+    required this.entries,
+    required this.totalBytes,
+  });
+
+  final String path;
+  final List<WorkspaceEntry> entries;
+  final int totalBytes;
+}
+
+class WorkspacePreview {
+  const WorkspacePreview({
+    required this.path,
+    required this.name,
+    required this.kind,
+    required this.mime,
+    required this.size,
+    required this.modifiedAt,
+    this.text,
+    this.bytes,
+    this.truncated = false,
+    this.tooLarge = false,
+  });
+
+  final String path;
+  final String name;
+  final WorkspaceKind kind;
+  final String mime;
+  final int size;
+  final int modifiedAt;
+  final String? text;
+  final Uint8List? bytes;
+  final bool truncated;
+  final bool tooLarge;
+}
+
+class TerminalInfo {
+  const TerminalInfo({this.label, this.issue});
+
+  final String? label;
+  final String? issue;
+
+  bool get available => issue == null && label != null;
 }
 
 // ---------------------------------------------------------------------------

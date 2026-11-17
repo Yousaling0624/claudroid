@@ -1,6 +1,9 @@
 package app.claudroid.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import app.claudroid.bridge.BridgeBootstrap
 import app.claudroid.bridge.BridgePlugin
@@ -20,6 +23,25 @@ class FlutterHostActivity : FlutterActivity() {
         // the super call, and the channels must be registered on it by then.
         BridgeBootstrap.install()
         super.onCreate(savedInstanceState)
+        askForNotificationPermission()
+    }
+
+    /**
+     * MainActivity returns before its own permission prompt when it hands off to this
+     * host, so the "turn still running" notification needs the request here instead.
+     * FlutterActivity extends plain Activity, so this uses the platform request rather
+     * than the ComponentActivity result API.
+     */
+    private fun askForNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+    }
+
+    private companion object {
+        const val NOTIFICATION_REQUEST = 0x0A76
     }
 
     /**

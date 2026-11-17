@@ -191,7 +191,7 @@ sealed class ChatEvent {
         return ChatToolResultEvent(
           messageId: map['messageId'] as String? ?? '',
           id: id,
-          output: map['output'] as String? ?? '',
+          output: map['output'] as String?,
           isError: map['isError'] as bool? ?? false,
         );
       case 'error_block':
@@ -301,7 +301,7 @@ class ChatToolResultEvent extends ChatEvent {
 
   final String messageId;
   final String id;
-  final String output;
+  final String? output;
   final bool isError;
 
   @override
@@ -317,6 +317,7 @@ class ChatToolResultEvent extends ChatEvent {
     final tool = blocks[blockIndex] as ToolBlock;
     blocks[blockIndex] = tool.copyWith(
       output: output,
+      clearOutput: output == null,
       isError: isError,
       running: false,
     );
@@ -388,8 +389,10 @@ class ChatTitleNoticeEvent extends ChatEvent {
   final String? notice;
 
   @override
-  ChatState apply(ChatState previous) =>
-      previous.copyWith(titleNotice: notice);
+  ChatState apply(ChatState previous) => previous.copyWith(
+        titleNotice: notice,
+        clearTitleNotice: notice == null,
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +435,81 @@ class ChatEvents {
   /// `chat.attach` and pushes a fresh snapshot through this same stream.
   Stream<ChatState> get states =>
       events.scan(const ChatState(), (state, event) => event.apply(state) ?? state);
+}
+
+// ---------------------------------------------------------------------------
+// Terminal events
+// ---------------------------------------------------------------------------
+
+/// One message from `app.claudroid/terminal`. Output is a stream of
+/// [TerminalChunkEvent]s; exactly one of done/stopped/error ends a run.
+sealed class TerminalEvent {
+  const TerminalEvent();
+
+  static TerminalEvent? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    switch (raw['type']) {
+      case 'chunk':
+        return TerminalChunkEvent(raw['text'] as String? ?? '');
+      case 'done':
+        return TerminalDoneEvent(
+          exitCode: (raw['exitCode'] as num?)?.toInt() ?? 0,
+          cwdRel: raw['cwdRel'] as String? ?? '',
+          error: raw['error'] as String?,
+          truncated: raw['truncated'] as bool? ?? false,
+        );
+      case 'stopped':
+        return const TerminalStoppedEvent();
+      case 'error':
+        return TerminalErrorEvent(raw['message'] as String? ?? '执行失败');
+      default:
+        return null;
+    }
+  }
+}
+
+class TerminalChunkEvent extends TerminalEvent {
+  const TerminalChunkEvent(this.text);
+
+  final String text;
+}
+
+class TerminalDoneEvent extends TerminalEvent {
+  const TerminalDoneEvent({
+    required this.exitCode,
+    required this.cwdRel,
+    this.error,
+    this.truncated = false,
+  });
+
+  final int exitCode;
+
+  /// Workspace-relative cwd the next command should start in.
+  final String cwdRel;
+  final String? error;
+  final bool truncated;
+}
+
+class TerminalStoppedEvent extends TerminalEvent {
+  const TerminalStoppedEvent();
+}
+
+class TerminalErrorEvent extends TerminalEvent {
+  const TerminalErrorEvent(this.message);
+
+  final String message;
+}
+
+class TerminalEvents {
+  TerminalEvents();
+
+  final EventChannel _channel = const EventChannel('app.claudroid/terminal');
+
+  Stream<TerminalEvent> get events => _channel
+      .receiveBroadcastStream()
+      .map(TerminalEvent.fromMap)
+      .where((event) => event != null)
+      .cast<TerminalEvent>();
 }
 
 // ---------------------------------------------------------------------------

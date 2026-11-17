@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import '../models/model_info.dart';
 import '../models/models.dart';
 
 const MethodChannel _channel = MethodChannel('app.claudroid/bridge');
@@ -82,6 +83,143 @@ class Bridge {
 
   Future<InitState> init() async => InitState.fromMap(await _call('app.init'));
 
+  Future<List<String>> suggestions({int count = 3, String context = ''}) async {
+    final map = await _call('app.suggestions', {
+      'count': count,
+      'context': context,
+    });
+    return _decodeStringList(map['itemsJson'] as String?);
+  }
+
+  Future<AppInfo> appInfo() async {
+    final map = await _call('app.info');
+    return AppInfo(
+      versionName: map['versionName'] as String? ?? '',
+      versionCode: (map['versionCode'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<ReleaseInfo> checkRelease() async {
+    final map = await _call('app.release');
+    return ReleaseInfo.fromJson(_decodeMap(map['releaseJson'] as String?));
+  }
+
+  Future<void> openUrl(String url) => _call('app.openUrl', {'url': url});
+
+  Future<({List<ProviderPreset> presets, String? activeId})>
+      listProviders() async {
+    final map = await _call('providers.list');
+    return (
+      presets: _decodeList(map['presetsJson'] as String?)
+          .map(ProviderPreset.fromJson)
+          .toList(growable: false),
+      activeId: map['activeId'] as String?,
+    );
+  }
+
+  Future<({AppSettings settings, ModelLabels labels})> applyProvider(
+    String presetId,
+  ) async {
+    final map = await _call('providers.apply', {'presetId': presetId});
+    return (
+      settings: AppSettings.fromJsonString(map['settingsJson'] as String?),
+      labels: ModelLabels.fromJson(_decodeMap(map['labelsJson'] as String?)),
+    );
+  }
+
+  Future<({List<String> models, List<ModelInfo> details, String endpoint})>
+      fetchModels() async {
+    final map = await _call('models.list');
+    final models = _decodeStringList(map['modelsJson'] as String?);
+    final details = _decodeList(
+      map['modelDetailsJson'] as String?,
+    ).map(ModelInfo.fromJson).toList(growable: false);
+    return (
+      models: models,
+      // An older host sends only `modelsJson`; keep the picker usable by
+      // synthesising one ID-only entry per model.
+      details: details.isEmpty
+          ? [for (final id in models) ModelInfo.idOnly(id)]
+          : details,
+      endpoint: map['endpoint'] as String? ?? '',
+    );
+  }
+
+  Future<({String endpoint, int count})> testConnection() async {
+    final map = await _call('models.test');
+    return (
+      endpoint: map['endpoint'] as String? ?? '',
+      count: (map['count'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Opens the system document picker in the host Activity. Returns workspace
+  /// relative paths (e.g. `attachments/foo.zip`); empty when cancelled.
+  Future<List<String>> pickAttachments() async {
+    final map = await _call('attachments.pick');
+    if (map['cancelled'] == true) return const [];
+    return _decodeStringList(map['relativePathsJson'] as String?);
+  }
+
+  Future<List<String>> readLogs() async =>
+      _decodeStringList((await _call('logs.read'))['linesJson'] as String?);
+
+  Future<void> clearLogs() => _call('logs.clear');
+
+  // -- workspace -----------------------------------------------------------
+
+  Future<WorkspaceListing> listWorkspace([String path = '']) async {
+    final map = await _call('workspace.list', {'path': path});
+    return WorkspaceListing(
+      path: map['path'] as String? ?? '',
+      entries: _decodeList(map['entriesJson'] as String?)
+          .map(WorkspaceEntry.fromJson)
+          .toList(growable: false),
+      totalBytes: (map['totalBytes'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<WorkspacePreview> previewWorkspace(String path) async {
+    final map = await _call('workspace.preview', {'path': path});
+    final raw = map['bytes'];
+    return WorkspacePreview(
+      path: map['path'] as String? ?? path,
+      name: map['name'] as String? ?? '',
+      kind: WorkspaceKind.fromWire(map['kind'] as String?),
+      mime: map['mime'] as String? ?? '',
+      size: (map['size'] as num?)?.toInt() ?? 0,
+      modifiedAt: (map['modifiedAt'] as num?)?.toInt() ?? 0,
+      text: map['text'] as String?,
+      bytes: raw is Uint8List ? raw : null,
+      truncated: map['truncated'] as bool? ?? false,
+      tooLarge: map['tooLarge'] as bool? ?? false,
+    );
+  }
+
+  Future<void> deleteWorkspaceFile(String path) =>
+      _call('workspace.delete', {'path': path});
+
+  Future<void> openWorkspaceFile(String path) =>
+      _call('workspace.open', {'path': path});
+
+  Future<void> shareWorkspaceFile(String path) =>
+      _call('workspace.share', {'path': path});
+
+  // -- terminal ------------------------------------------------------------
+
+  Future<TerminalInfo> terminalInfo() async {
+    final map = await _call('terminal.info');
+    return TerminalInfo(
+      label: map['label'] as String?,
+      issue: map['issue'] as String?,
+    );
+  }
+
+  Future<void> terminalRun(String command, {String cwdRel = ''}) =>
+      _call('terminal.run', {'command': command, 'cwdRel': cwdRel});
+
+  Future<void> terminalStop() => _call('terminal.stop');
+
   Future<({AppSettings settings, ModelLabels labels})> updateSettings(
     AppSettings settings,
   ) async {
@@ -128,6 +266,17 @@ class Bridge {
 
   Future<String> engineRootProbeReport() async =>
       (await _call('engine.rootProbeReport'))['report'] as String? ?? '';
+
+  Future<({bool changed, bool skipped, String dns, String message})>
+      refreshNetwork() async {
+    final map = await _call('engine.refreshNetwork');
+    return (
+      changed: map['changed'] as bool? ?? false,
+      skipped: map['skipped'] as bool? ?? false,
+      dns: map['dns'] as String? ?? '',
+      message: map['message'] as String? ?? '',
+    );
+  }
 
   Future<({int jail, int workspace, int sessions})> engineStorageUsage() async {
     final map = await _call('engine.storageUsage');
@@ -213,3 +362,10 @@ List<Map<String, dynamic>> _decodeList(String? source) {
 Map<String, dynamic> decodeJsonMap(String? source) => _decodeMap(source);
 
 List<Map<String, dynamic>> decodeJsonList(String? source) => _decodeList(source);
+
+List<String> _decodeStringList(String? source) {
+  if (source == null || source.isEmpty) return const [];
+  final decoded = jsonDecode(source);
+  if (decoded is! List) return const [];
+  return decoded.map((e) => '$e').toList(growable: false);
+}

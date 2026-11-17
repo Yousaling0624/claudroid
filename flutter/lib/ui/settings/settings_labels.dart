@@ -1,0 +1,78 @@
+import '../../models/models.dart';
+
+const apiFlavorLabels = {'ANTHROPIC': 'Anthropic 兼容', 'OPENAI': 'OpenAI 兼容'};
+
+const authStyleLabels = {
+  'BEARER': 'Authorization: Bearer',
+  'API_KEY': 'x-api-key',
+  'BOTH': '两个都发',
+};
+
+const permissionLabels = {
+  'AUTO': '自动',
+  'BYPASS': '完全放行',
+  'ACCEPT_EDITS': '自动改文件',
+  'MANUAL': '默认（只读）',
+  'PLAN': '只读规划',
+};
+
+/// The one-line caution under the composer. Mirrors the Compose composer's
+/// note, but makes the fully-bypassed mode explicit.
+String permissionFootnote(String mode) => mode == 'BYPASS'
+    ? '完全放行：Agent 的命令会直接执行，请确认任务来源可信。'
+    : 'Agent 可能修改系统文件，请确认它执行的命令。';
+
+const effortLabels = {
+  'AUTO': '自动',
+  'LOW': '低',
+  'MEDIUM': '中',
+  'HIGH': '高',
+  'XHIGH': '很高',
+  'MAX': '最高',
+};
+
+const engineModeLabels = {'AUTO': '自动', 'PROOT': 'Proot', 'ROOT': 'Root'};
+
+const themeLabels = {0: '跟随系统', 1: '浅色', 2: '深色'};
+
+const featureFlagDefaults = {
+  'agentTeams': false,
+  'workflows': true,
+  'autoMemory': true,
+  'backgroundTasks': true,
+  'extendedThinking': true,
+};
+
+String enumLabel<K>(Map<K, String> labels, K key) => labels[key] ?? '$key';
+
+String tierField(String tier) => switch (tier) {
+  'OPUS' => 'opusModel',
+  'FABLE' => 'fableModel',
+  'SONNET' => 'sonnetModel',
+  'HAIKU' => 'haikuModel',
+  _ => 'model',
+};
+
+String tierLabel(String tier) => switch (tier) {
+  '' => 'CLI 默认（不指定模型）',
+  'AUTO' => '自动（按任务路由）',
+  _ => modelTierLabels[tier] ?? tier,
+};
+
+String releaseStatusLabel(ReleaseStatus status) => switch (status) {
+  ReleaseStatus.upToDate => '已是最新',
+  ReleaseStatus.updateAvailable => '有新版本可下载',
+  ReleaseStatus.devBuild => '当前是本地构建',
+};
+
+String formatBytes(int bytes) {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return '${value.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
+}
