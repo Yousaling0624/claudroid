@@ -20,7 +20,10 @@ model: sonnet
 
 - 只改了必要文件；没有 `jniLibs/`、APK、keystore、`dist/`、`local.properties`。
 - 没有手改版本号、tag、Release；若有提交，标题符合 `Android：一句话总结`。
-- 新增/修改的纯逻辑有 `app/src/test/**` 单测；没有删测试、跳过测试、改 CI 阈值。
+- 新增/修改的纯逻辑有单测（Kotlin：`app/src/test/**`；Flutter：`flutter/test/**`）；
+  没有删测试、跳过测试、改 CI 阈值。
+- Flutter 改动遵守 `docs/DESIGN_FLUTTER.md`：只用 prism_ui、不 import Material、
+  颜色走语义角色，桥接协议未被 Dart 侧绕过。
 - `targetSdk = 28` 未变；PRoot/chroot 路径语义未被破坏。
 - OpenAI 代理的 stream、tool_calls、tool_result、block index、HTTP 状态映射规则未被破坏。
 - 流式 UI 仍自动滚底；用户上翻后不被强行拉回；错误提示可操作。
@@ -30,7 +33,8 @@ model: sonnet
 
 ## 验证
 
-- 跑 `./gradlew testDebugUnitTest assembleDebug`；失败时区分「环境问题」与「代码问题」，贴关键错误。
+- 跑 `./gradlew testDebugUnitTest assembleDebug`；动了 `flutter/` 时另跑 `flutter analyze`
+  与 `flutter test`。失败时区分「环境问题」与「代码问题」，贴关键错误。
 - 构建不可用时，至少跑受影响模块的单测并说明缺口。
 - 只运行只读命令（git diff/log、gradle、grep），绝不编辑文件、绝不 commit/push。
 

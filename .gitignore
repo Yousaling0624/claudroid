@@ -19,5 +19,3 @@ app/src/main/jniLibs/
 release-notes.md
 # Subagent git worktrees (isolated copies of this repo)
 .claude/worktrees/
-# Scratch mockups / design experiments, not shipped
-docs/demo/

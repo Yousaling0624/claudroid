@@ -18,9 +18,9 @@ model: haiku
 - 只改了预期文件；没有 `jniLibs/`、APK、keystore、`dist/`、`build/`、`local.properties`。
 - `app/build.gradle.kts` 未改：versionName / versionCode / targetSdk / minSdk 保持不变。
 - 无 API Key、密码、keystore 内容。
-- 没有删除或跳过测试；新增纯逻辑有 `app/src/test/**` 单测。
+- 没有删除或跳过测试；新增纯逻辑有单测（Kotlin：`app/src/test/**`；Flutter：`flutter/test/**`）。
 - 没有新增运行时依赖。
-- `docs/DESIGN.md` 等文档改动与任务 brief 一致（只核对是否存在与范围，不评审文风）。
+- 文档改动与任务 brief 一致（只核对是否存在与范围，不评审文风）。
 
 ## 验证
 
@@ -40,6 +40,8 @@ JAVA_HOME='C:\dev-toolchain\jdk' WSLENV=JAVA_HOME cmd.exe /c \
 ```
 
 - 只回传失败段和 `FAILURE:` 之后的尾部，不要贴全量日志。
+- 动了 `flutter/` 时，在 Windows 侧再跑 `flutter analyze` 与 `flutter test`，并跑一次
+  `assembleDebug -PflutterUi=true -Pandroid.newDsl=false`。
 - 区分「环境问题」与「代码问题」；环境偶发失败可重试一次并注明。
 - 如果构建缓存导致 `compileDebugKotlin UP-TO-DATE` 而本次有 Kotlin 改动，使用 `--rerun-tasks --no-build-cache` 复核一次。
 

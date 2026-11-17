@@ -4,7 +4,9 @@
 
 最低限度必须遵守：
 
-- 主要改 `app/`；不要提交 `app/src/main/jniLibs/`、APK、keystore。
+- 主要改 `app/`；`flutter/` 是发布 APK 实际使用的前端（`release.yml` 以 `-PflutterUi=true`
+  构建），改它需另跑 `flutter analyze` / `flutter test`，并验证带 flag 的构建。
+- 不要提交 `app/src/main/jniLibs/`、APK、keystore。
 - 改完跑 `./gradlew testDebugUnitTest assembleDebug`。
 - `targetSdk = 28` 是 PRoot 能执行的前提，不要随手升。
 - 不要手动升版本号、打 tag、发 Release；CI 自动生成 `v0.1.<run_number>`。

@@ -5,12 +5,13 @@
 
 ## 1. 项目范围
 
-- `app/`：Android 客户端（Kotlin + Jetpack Compose）。引擎、UI、数据层都在这里。
+- `app/`：Android 客户端。Kotlin 引擎、数据层，以及 Compose 回退前端都在这里。
 - `flutter/`：add-to-app 模块，**发布 APK 用的前端**（`release.yml` 以 `-PflutterUi=true` 构建）。
   业务逻辑仍全在 Kotlin，Dart 只做界面；不带 flag 的本地构建仍是 Compose 前端。
 - `tools/`：构建期工具，尤其是 `fetch-proot.py`（把 Termux PRoot 打成 `lib*.so`）。
 - `.github/`：PR 检查与 push main 自动发版。
-- `prototype/`、`docs/`：设计原型与文档。改 UI 前先看 `prototype/index.html` 与截图。
+- `prototype/`：Compose 时期的高保真原型，作为历史交互参考；Flutter 视觉以
+  `docs/DESIGN_FLUTTER.md` 与 `docs/screenshots/` 为准。
 - `dist/`、`app/build/`、`app/src/main/jniLibs/` 是生成物，不要提交。
 
 ## 2. 标准工作流
@@ -48,7 +49,9 @@
 
 - **不要自动启动 subagent**：只有用户在当次需求里明确要求分派（如「派给子代理」「用 subagent」）时才启动，否则主会话直接实现。
 - 用户要求分派时，主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
-- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`app/src/main/java/app/claudroid/ui/`、
+  `app/src/main/res/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；`flutter/lib/`、
+  `flutter/test/` → `compose-ui`（设计）或 `ui-impl`（按 spec 实现）；
   `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；例行构建/测试 → `qa-build`；高风险深度审查 → `qa-reviewer`。
 - 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push，也不能再 spawn 子 agent。
 - 纯问答、纯文档更新或一行以内的紧急修复可由主会话直接处理，但要在回复里说明。
@@ -141,7 +144,9 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 
 ## 7. 代码约定
 
-- Kotlin official style；Compose Material3；保持现有暖纸色 + 陶土橙设计。
+- Kotlin official style；Compose 前端用 Material3，Flutter 前端只用 `prism_ui`（不要 import
+  Material）。两套前端都保持暖纸色 + 陶土橙；Flutter 的视觉细则以 `docs/DESIGN_FLUTTER.md`
+  为准，Compose 以 `docs/DESIGN.md` 为准。
 - 注释解释「为什么」，不复述代码；模块顶部保留用途说明。
 - 不引入新的运行时依赖 / UI 框架；确有必要先征求用户同意。
 - 设置持久化 key 修改必须向后兼容（例如 `root_enabled` -> `engine_mode` 的迁移），
@@ -163,7 +168,8 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 
 ## 9. 测试
 
-- 新增/修改纯逻辑必须补 `app/src/test/**` 单测，并保证全量 `testDebugUnitTest` 通过。
+- 新增/修改纯逻辑必须补单测：Kotlin 放 `app/src/test/**`，Flutter 纯函数放 `flutter/test/**`，
+  并保证对应的 `testDebugUnitTest` / `flutter test` 全量通过。
 - 不 mock 网络「凑覆盖率」；把真实响应样例喂给纯解析函数。
 - 不删除、不跳过已有测试。
 - 真机验证项（PRoot 启动、chroot、DNS）无法在 CI 覆盖，改到相关路径时要在设置页
