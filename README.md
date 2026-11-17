@@ -1,13 +1,13 @@
 # Claudroid · 手机上的 Claude Code Agent
 
-一个 Android 端的 AI Agent 客户端：界面参考 Claude 客户端（暖纸色 + 陶土橙 + 卡片式会话流），
-后端把**官方 Claude Code CLI 直接跑在手机本地的 Debian 容器里**。**没有 root 也能用**
-（内置 Termux PRoot 跑 rootfs），有 root 时自动切换到 chroot，Agent 就能真正操作这台设备
-（刷 Magisk 模块、改系统文件、执行 su 命令）。
+一个 Android 端的 AI Agent 客户端：界面采用 FlClash 的结构与 Claude 的暖纸质感（陶土橙、
+衬线正文、分组列表），后端把**官方 Claude Code CLI 直接跑在手机本地的 Debian 容器里**。
+**没有 root 也能用**（内置 Termux PRoot 跑 rootfs），有 root 时自动切换到 chroot，
+Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执行 su 命令）。
 
 ```
-┌──────────────── Android App（Kotlin + Compose）────────────────┐
-│  会话列表 / 对话流 / 设置                                       │
+┌──────────── Android App（Kotlin 引擎 + Flutter 前端）────────────┐
+│  会话列表 / 对话流 / 设置（Flutter；Compose 保留为回退）           │
 │    · 流式输出、思考/工具合并折叠、消息编辑/重新回答、费用/耗时   │
 │    · Anthropic / OpenAI 兼容端点 + 服务商预设 + 模型列表         │
 ├─────────────────── 引擎层（纯 Kotlin，零第三方 SDK）─────────────┤
@@ -28,8 +28,12 @@
 
 ## 界面
 
-视觉语言对齐 Claude 官网 / Claude 客户端：暖米白纸面（#F8F4ED）、唯一陶土橙强调色（#D97757）、
-衬线标题、发丝级分割线；内容卡片保持平面，只有悬浮顶栏与输入胶囊使用玻璃和柔和阴影。
+发布 APK 使用 **Flutter 前端**（`flutter/`），视觉方向是 **FlClash 结构 + Claude 质感**：
+分组列表、液态玻璃与统一动效沿用 FlClash，底色与文字改用暖纸 + 陶土橙，助手正文与首页问候
+使用衬线。不带 `-PflutterUi=true` 的本地构建仍是 Compose 前端，作为回退与对照；两套前端
+共享同一个 Kotlin 引擎与桥接契约。Flutter 的视觉规则见
+[`docs/DESIGN_FLUTTER.md`](docs/DESIGN_FLUTTER.md)，Compose 的见
+[`docs/DESIGN.md`](docs/DESIGN.md)。
 
 | 首页 | 侧边栏抽屉 | 对话（浅色） |
 | --- | --- | --- |
@@ -43,10 +47,9 @@
 | --- | --- |
 | ![模型选择](docs/screenshots/models.png) | ![思考与工具折叠](docs/screenshots/thinking.png) |
 
-模型档位从顶栏胶囊向下展开，不再用底部弹层。
-
-上面的截图来自真实 App（MuMu 模拟器，480dp 宽），覆盖浅色 / 深色、模型下拉与嵌套折叠。
-`prototype/index.html` 仍保留为可点击原型，支持深链：`#chat` / `#settings`、`?theme=dark`、`?still=1`。
+截图来自 MuMu 模拟器上的发布前端（Flutter，720×1280），覆盖浅色 / 深色、模型下拉与嵌套折叠。
+模型档位从顶栏的模型按钮向下展开。`prototype/index.html` 是 Compose 时期的可点击原型，
+保留作历史交互参考，支持深链：`#chat` / `#settings`、`?theme=dark`、`?still=1`。
 
 ## 三个关键设计决定
 
@@ -202,28 +205,26 @@ claudroid/
 ├── app/src/main/java/app/claudroid/
 │   ├── core/Paths.kt           安装记录（版本 / jail 位置 / 模式）、工作区、会话目录
 │   ├── data/                   设置(DataStore) + 服务商预设 + 会话(JSON 文件)
-│   ├── engine/
-│   │   ├── Registry.kt         npm registry 查询 + Debian rootfs 规格（digest）
-│   │   ├── HttpUtil.kt         下载 + sha512/sha256 + OCI blob 多源回退
-│   │   ├── TarGz.kt            极简 tar.gz 抽取（有单测）
-│   │   ├── Toolchain.kt        下载/校验/组装 Debian 容器（root 脚本 or 应用侧）
-│   │   ├── ProotRunner.kt      PRoot 启动参数 + 宿主 bind（有单测）
-│   │   ├── ShellSupport.kt     直启模式下的 /bin/sh 包装
-│   │   ├── ClaudeEngine.kt     进程启动 + 四种执行路径
-│   │   ├── StreamParser.kt     stream-json 解码（有单测）
-│   │   ├── openai/             OpenAI 兼容桥：协议翻译 + 本地代理 + 模型列表
-│   │   ├── RootExec.kt         su / busybox / chroot 探测与执行，删除容器前先 umount
-│   │   └── EngineManager.kt    生命周期状态机 + 自检 + 存储统计
-│   ├── ui/                     Compose：home / chat / settings / markdown / theme
+│   ├── engine/                 容器组装、PRoot / chroot、CLI 进程与 OpenAI 兼容桥
+│   ├── ui/                     Compose 回退前端：home / chat / settings / markdown / theme
 │   └── ui/theme/               暖纸色 + 陶土橙配色
+├── app/src/main/flutter/java/app/claudroid/
+│   ├── bridge/                 Flutter 桥接：通道注册、文件与 HTML 预览平台视图
+│   └── ui/                     FlutterHostActivity：复用缓存引擎并挂载 Flutter
 ├── app/src/test/java/…         单测（协议翻译 / 解析 / tar / proot 参数 / 设置）
-├── flutter/                    发布用的 Flutter 前端（add-to-app 模块）
-├── prototype/index.html        高保真可点击 Web 原型
-├── docs/FLUTTER.md             Flutter 模块的构建配方与两个 flag 的由来
-├── docs/BRIDGE_CONTRACT.md     Kotlin ↔ Dart 桥接契约（冻结）
-├── docs/DESIGN.md             设计系统：配色 / 圆角 / 图标 / 动效 / 工具与代码折叠
-├── docs/ARCHITECTURE.md       架构与 Auto 模型、功能开关环境变量
-├── docs/screenshots/           真实 App 截图（浅色 / 深色 / 模型下拉 / 嵌套折叠）
+├── flutter/                    发布前端（add-to-app 模块）
+│   ├── lib/bridge/             MethodChannel / EventChannel 封装与事件折叠
+│   ├── lib/models/             Dart 侧数据结构
+│   └── lib/ui/                 页面、设置二级页与 prism_ui 组件
+├── prototype/index.html        Compose 时期的高保真原型（历史参考）
+├── docs/
+│   ├── ARCHITECTURE.md         引擎架构、执行路径与 Auto 模型
+│   ├── DESIGN.md               Compose 回退前端的视觉规范
+│   ├── DESIGN_FLUTTER.md       Flutter 发布前端的视觉规范
+│   ├── FLUTTER.md              Flutter 模块结构、构建配方与两个 flag 的由来
+│   ├── BRIDGE_CONTRACT.md      Kotlin ↔ Dart 桥接契约（冻结）
+│   ├── AGENT_WORKFLOW.md       subagent 分工与成本分层
+│   └── screenshots/            发布前端截图
 ├── tools/
 │   ├── fetch-proot.py          构建期下载 Termux PRoot 并改写成 jniLibs
 │   ├── setup-toolchain.sh      一键装 JDK/SDK/Gradle
@@ -255,31 +256,6 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 真实 API Key 只交给代理，CLI 拿到的是占位 token。代理随设置变化自动重建。
 请求的 `stream` 标志会原样转发；DeepSeek / OpenRouter 的 `reasoning_content` 会显示为思考过程。
 
-## 这一轮补齐的功能
-
-- **Debian 容器运行时**：安装时拉官方 `debian:13-slim` OCI layer（sha256 摘要钉死），
-  apt 装好 bash、git、grep、coreutils、sed、awk、tar、gzip、xz、curl、less；
-  CLI 用官方 glibc 平台包。官方 registry 不可达时自动回退 DaoCloud 镜像，字节仍按同一
-  摘要校验。旧的 Alpine 安装会自动识别并重装。
-- **免 root 引擎**：Termux PRoot 打包进 APK，targetSdk 28 允许在应用目录执行；
-  没有 root 也能完整跑 Debian 容器里的 Claude Code。
-- **引擎模式**：自动 / Proot / Root 三选一；设置页显示实际运行方式、PRoot 是否可用、
-  root/chroot 状态、引擎占用空间，并支持卸载（可保留会话）。
-- **删除安全**：chroot 的 bind 挂载在进程退出后仍存在，删除容器前统一先 `umount`
-  再 `rm -rf`，避免穿透挂载点清空宿主 `/dev`、`/data`。
-- **服务商预设**：Anthropic、OpenRouter、Ollama 一键填充（移除 DeepSeek 预设）；
-  本地/内网端点允许空 Key。
-- **设置选择面板**：所有「当前值 + chevron」行统一为液态玻璃菜单，只让右侧值按钮可点，
-  面板右对齐并覆盖按钮，去掉说明文字；支持下拉拖动形变与 55% 毛玻璃。
-- **OpenAI 桥修复**：非流式请求不再被强制 `stream=true`；补上图片转 `image_url`、
-  `reasoning_content` -> thinking、`finish_reason=length` -> `max_tokens`、
-  上游 401/429/400 状态映射、无 Key 时不发空 Authorization。
-- **会话健壮性**：崩溃后修复 `streaming` / `running` 状态；`--resume` 指向已删除会话时
-  自动新开会话重试；删除会话会停止正在运行的任务；并发发送会被拒绝。
-- **UI**：流式文本自动滚动（用户上翻后不打扰）；助手消息显示费用/耗时；工具行改为
-  「自动改文件」的准确描述；空状态与错误提示更新。
-- **CI/CD**：PR 单测 + debug APK；push main 自动 `v0.1.<run_number>` 发版。
-
 ## 常见问题
 
 | 现象 | 原因与处理 |
@@ -303,7 +279,7 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 - PRoot 模式受 Android 沙箱限制，不能改 `/system` 或其他应用数据；需要这些能力请用 root 模式。
 - 没有「逐条批准工具调用」的图形界面；headless 下由 CLI 的权限模式决定。
 - 一个 turn 一个进程（+ `--resume`），换来稳定；代价是每轮约 100 ms 启动开销。
-- 截图为原型渲染，真机 UI 以 Compose 实现为准（布局一致）。
+- 截图为发布前端（Flutter）的真实截图；Compose 回退前端的排版与截图略有差异。
 
 ## 许可证
 

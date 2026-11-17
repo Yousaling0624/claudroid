@@ -21,8 +21,8 @@
 | --- | --- | --- | --- |
 | `engine-dev` | Sonnet | PRoot、chroot、jail、CLI 进程、stream-json、安装升级 | OpenAI 协议、UI |
 | `proxy-dev` | Sonnet | `OpenAiProxy` / `OpenAiMapping` / `ModelCatalog`、协议单测 | 引擎启动、UI |
-| `compose-ui` | **Opus** | 设计负责人：token、信息层级、材质、动效、最终截图评审 | 全量构建与例行验证 |
-| `ui-impl` | Sonnet | 按冻结 spec 做文件级实现、组件替换、样式统一 | 审美决策、完整构建 |
+| `compose-ui` | **Opus** | 设计负责人（Compose 回退 + Flutter 发布前端）：token、信息层级、材质、动效、最终截图评审 | 全量构建与例行验证 |
+| `ui-impl` | Sonnet | 按冻结 spec 做 Compose / Flutter 的文件级实现、组件替换、样式统一 | 审美决策、完整构建 |
 | `build-release` | Sonnet | Gradle/AGP、`tools/`、CI、签名、release notes | 业务代码 |
 | `qa-build` | **Haiku** | 例行 `testDebugUnitTest assembleDebug`、`git status`/diff、AGENTS 硬性检查 | 视觉评审、架构判断 |
 | `qa-reviewer` | Sonnet | 高风险 diff 深度评审（协议、持久化兼容、并发/生命周期） | 修改代码 |
@@ -43,8 +43,8 @@
 （明确不做什么，防止范围膨胀）
 
 ## 文件范围
-- 可改：`app/src/main/java/app/claudroid/ui/...`
-- 只读参考：`docs/DESIGN.md` §5、`Theme.kt`
+- 可改：`app/src/main/java/app/claudroid/ui/...` 或 `flutter/lib/ui/...`
+- 只读参考：`docs/DESIGN.md`（Compose）/ `docs/DESIGN_FLUTTER.md`（Flutter）、对应 token 文件
 - 不要动：`engine/`、Gradle、CI
 
 ## 设计/实现约束
@@ -52,8 +52,8 @@
 
 ## 验收标准
 - [ ] 可见效果 / 行为
-- [ ] 纯逻辑有 `app/src/test/**` 单测
-- [ ] `compileDebugKotlin` 通过（实现代理）；全量验证由 qa-build 跑
+- [ ] 纯逻辑有单测（Kotlin：`app/src/test/**`；Flutter：`flutter/test/**`）
+- [ ] `compileDebugKotlin` / `flutter analyze` 通过（实现代理）；全量验证由 qa-build 跑
 
 ## 验证命令
 （本批次只需要跑的命令；完整构建不要写进实现代理的 brief）

@@ -26,6 +26,7 @@ Dart 侧不直接读文件、不直接起进程、不持有 API Key 以外的任
 | `app.claudroid/bridge` | MethodChannel，Dart → Kotlin | 所有命令，均有返回值 |
 | `app.claudroid/events` | EventChannel，Kotlin → Dart | 全局状态：设置、引擎、会话列表 |
 | `app.claudroid/chat/<sessionId>` | EventChannel，Kotlin → Dart | 单会话状态与流式增量 |
+| `app.claudroid/terminal` | EventChannel，Kotlin → Dart | 工作区终端的流式输出与结束事件 |
 
 `<sessionId>` 是 `ChatSession.id`（UUID）。通道名里的 UUID 含 `-`，符合 EventChannel 命名要求。
 
@@ -73,11 +74,16 @@ val json = Json {
   "ts": 1700000000000,
   "costUsd": 0.01|null,
   "durationMs": 1234|null,
-  "streaming": false
+  "streaming": false,
+  "model": "Opus · claude-opus-4-5"|null  // 产出这条回答时的模型签名
 }
 ```
 
 `Block` 的判别字段是 `"type"`，取值 `text|thinking|tool|error`。
+
+助手消息的 `model` 是**产出该回合时**的展示签名，由 `ChatController` 在开回合时用
+`chatModelLabel(settings)` 冻结后写入；之后切换档位/模型只影响新回合，不会改写旧回答的
+署名。该字段是后加的，旧会话文件里没有它，解码为 `null`，前端回退到当前的 `labelsJson.chat`。
 
 方法调用的参数一律是 `Map<String, Any?>`，值只允许 `String` / `bool` / `int` / `double` / `null`
 以及**复杂结构的 JSON 字符串**（字段名带 `Json` 后缀，如 `settingsJson`）。
@@ -131,8 +137,14 @@ Kotlin，Dart 不复制：
 
 ```json
 [{"id":"uuid","title":"...","createdAt":0,"updatedAt":0,
-  "claudeSessionId":"..."|null,"model":"..."|null}]
+  "claudeSessionId":"..."|null,"model":"..."|null,
+  "hasContent":true,"preview":"最后一条消息的摘要",
+  "searchText":"标题之外的可搜索文本（截断）"}]
 ```
+
+`hasContent` 与 `preview` 由 Kotlin 的 `ChatSession.hasContent/preview` 计算；`searchText`
+是全部消息文本块/工具输出的截断拼接（每会话最多 2000 字符），供抽屉做内容搜索。Dart 不读
+磁盘，也不自己拼这些字段。
 
 ## 5. 单会话事件 `app.claudroid/chat/<sessionId>`
 
@@ -206,6 +218,7 @@ Kotlin，Dart 不复制：
 | `engine.probeRoot` | — | `{ok, granted: bool}` |
 | `engine.selfTest` | — | `{ok, report}` |
 | `engine.rootProbeReport` | — | `{ok, report}` |
+| `engine.refreshNetwork` | — | `{ok, changed: bool, skipped: bool, dns, message}` |
 | `engine.storageUsage` | — | `{ok, jailBytes, workspaceBytes, sessionBytes}` |
 | `engine.uninstall` | `deleteWorkspace: bool` | `{ok}` |
 | `engine.cancel` | — | `{ok}` |
@@ -238,6 +251,118 @@ Kotlin，Dart 不复制：
 `app.claudroid.ui.chat` 里的 `internal fun`，同属 `:app` 模块，桥接层可直接调用，**不要**在
 Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来还会变）。
 
+### 6.4 应用扩展（首页 / 关于 / 附件 / 日志）
+
+| 方法 | 参数 | 返回 | Kotlin 实现 |
+| --- | --- | --- | --- |
+| `app.suggestions` | `count: int`, `context: String?` | `{ok, itemsJson}` | `SuggestionGenerator.generate`；失败返回空数组（不伪造文案） |
+| `app.info` | — | `{ok, versionName, versionCode}` | `BuildConfig` |
+| `app.release` | — | `{ok, releaseJson}` | `ReleaseCheck.fetch()` + `ReleaseCheck.status`；网络失败 `ok:false` |
+| `app.openUrl` | `url` | `{ok}` | 只接受 http/https，`Intent.ACTION_VIEW` |
+| `attachments.pick` | — | `{ok, relativePathsJson, cancelled}` | 系统 `OpenDocument` 选择器 + `Attachments.import`，返回 `attachments/<name>` 相对路径 |
+| `logs.read` | — | `{ok, linesJson}` | `Logx.lines.value` |
+| `logs.clear` | — | `{ok}` | `Logx.clear()` |
+
+`releaseJson`：
+
+```json
+{"tag":"0.1.42","url":"https://github.com/.../releases/tag/v0.1.42",
+ "publishedAt":"...","status":"UP_TO_DATE|UPDATE_AVAILABLE|DEV_BUILD",
+ "currentVersion":"0.1.40"}
+```
+
+`attachments.pick` 必须在当前 Activity 上启动选择器；用户取消时返回
+`{"ok":true,"cancelled":true,"relativePathsJson":"[]"}`。Dart 把每个路径拼成
+`@attachments/<name> ` 追加到草稿。
+
+### 6.5 服务商与模型
+
+| 方法 | 参数 | 返回 | Kotlin 实现 |
+| --- | --- | --- | --- |
+| `providers.list` | — | `{ok, presetsJson, activeId}` | `Providers.all` + `activeProviderPreset` |
+| `providers.apply` | `presetId` | `{ok, settingsJson, labelsJson}` | `Providers.apply` 后写回 DataStore（保留 API Key） |
+| `models.list` | — | `{ok, modelsJson, modelDetailsJson, endpoint}` | `ModelCatalog.fetch` |
+| `models.test` | — | `{ok, endpoint, count}` | `ModelCatalog.fetch`；HTTP/解析失败转 `ok:false` |
+
+`presetsJson`：
+
+```json
+[{"id":"anthropic","label":"Anthropic 官方","flavor":"ANTHROPIC",
+  "baseUrl":"https://api.anthropic.com","authStyle":"API_KEY",
+  "model":"claude-sonnet-5-5","hint":"..."}]
+```
+
+`activeId` 为 `null` 表示自定义端点。`modelsJson` 是模型 ID 的字符串数组，保留给
+Compose/旧前端。`modelDetailsJson` 是同一批模型的元数据数组：
+
+```json
+[{"id":"auto/dfmodel","displayName":"DeepSeek-Flash",
+  "contextWindow":1000000,"maxOutputTokens":128000,
+  "maxInputTokens":1000000,"ownedBy":"qoder-cn","reasoning":true,
+  "reasoningLevels":["low","high"],"label":"routing",
+  "modalities":["text","image"],"supportedParameters":["tools"]}]
+```
+
+所有元数据字段可为空；只返回 `modelsJson` 的实现仍可用（Dart 会合成 ID-only 条目）。
+`engine.refreshNetwork` 强制按当前网络重写 jail 的 `resolv.conf`/`gai.conf`；无安装或
+root 未授权时 `skipped=true`，`message` 可直接显示给用户。
+
+### 6.6 工作区
+
+工作区是 jail 映射到 `/work` 的 `files/workspace` 目录。Kotlin 负责路径校验、读取与系统
+Intent；Dart 只渲染。所有 `path` 都是**工作区相对路径**（`/` 分隔，`""` 表示根目录），
+`..` 逃逸、绝对路径与指向工作区外的符号链接一律拒绝。
+
+| 方法 | 参数 | 返回 | Kotlin 实现 |
+| --- | --- | --- | --- |
+| `workspace.list` | `path` | `{ok, path, entriesJson, totalBytes}` | `WorkspaceFiles.list` |
+| `workspace.preview` | `path` | `{ok, path, name, kind, mime, size, modifiedAt, text?, truncated, bytes?, tooLarge}` | `WorkspaceFiles.readPreview`；图片读原始字节 |
+| `workspace.delete` | `path` | `{ok}` | 仅允许删除文件，目录拒绝 |
+| `workspace.open` | `path` | `{ok}` | `FileProvider` + `ACTION_VIEW` |
+| `workspace.share` | `path` | `{ok}` | `FileProvider` + `ACTION_SEND` chooser |
+
+`entriesJson`：
+
+```json
+[{"name":"report.md","path":"docs/report.md","kind":"MARKDOWN",
+  "size":1234,"modifiedAt":1700000000000,"isDirectory":false}]
+```
+
+`kind` 是 `DIRECTORY | IMAGE | MARKDOWN | HTML | TEXT | ARCHIVE | OTHER`。目录在前按名称排序，
+文件按 `modifiedAt` 倒序。`totalBytes` 是当前目录直接子文件大小之和（不含子目录递归）。
+
+`workspace.preview` 的规则：
+
+- 文本/Markdown/HTML/代码：`text` 为 UTF-8 预览（最多 512 KiB），`truncated` 表示文件更长；
+  含 NUL 字节或无法按文本读取时不返回 `text`，Dart 落到二进制卡片。
+- 图片：`bytes` 是原始字节（`Uint8List`，**不经过 JSON**），最多 6 MiB；超过时 `tooLarge:true`
+  且不带 `bytes`，Dart 只显示打开/分享入口。`text` 一定为空。
+- `mime` 来自 `WorkspaceFiles.mimeOf`，供打开/分享与图标选择。
+
+### 6.7 终端
+
+终端一次只允许一条命令。Kotlin 复用 `engine/TerminalRunner`（PRoot/root/直启与 CLI 一致），
+不保留交互式 PTY；命令之间只保留工作目录。
+
+| 方法 | 参数 | 返回 | 说明 |
+| --- | --- | --- | --- |
+| `terminal.info` | — | `{ok, label, issue}` | `EngineManager.shellPlan` 的标签；`issue` 非空表示不可用 |
+| `terminal.run` | `command`, `cwdRel` | `{ok}` | 立即返回；有命令在跑时 `ok:false` |
+| `terminal.stop` | — | `{ok}` | 取消当前命令，子进程由 `TerminalRunner` 终止 |
+
+运行结果通过 `app.claudroid/terminal` 发送：
+
+```json
+{"type":"chunk","text":"...部分输出..."}
+{"type":"done","exitCode":0,"cwdRel":"docs","error":null,"truncated":false}
+{"type":"stopped"}
+{"type":"error","message":"执行失败：..."}
+```
+
+`chunk` 是 stdout+stderr 合并后的增量，最多累计 1 MiB（超出后继续排空但不追加）；Dart 侧
+再按自己的显示上限裁剪。`done.cwdRel` 是下一条命令的起始目录；`stopped` 不改目录。
+`terminal.stop` 与页面关闭都只影响终端，不影响聊天 turn。
+
 ## 7. 线程与错误
 
 - MethodChannel handler 在主线程回调。凡是 `suspend` 的 Kotlin 方法一律
@@ -253,7 +378,8 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 
 - `lib/bridge/api.dart`：`Bridge` 单例，封装 `MethodChannel`，每个方法一个强类型签名，
   内部 `jsonDecode` 成 `AppSettings` / `ChatMessage` 等模型。
-- `lib/bridge/events.dart`：把三条 EventChannel 转成 `Stream<AppState>` / `Stream<ChatState>`。
+- `lib/bridge/events.dart`：把全局、单会话与终端三类 EventChannel 转成
+  `Stream<AppState>` / `Stream<ChatState>` / `Stream<TerminalEvent>`。
 - `lib/models/`：`AppSettings`、`ChatMessage`、`Block`、`ChatSession`、`EngineState` 的
   `fromJson`，**字段名与 Kotlin 序列化输出逐字一致**。枚举用 `name` 字符串，解析失败时回退到默认值
   并记一次 warn，不要抛异常让整个界面白屏。

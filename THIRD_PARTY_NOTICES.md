@@ -21,9 +21,12 @@ of the license are met by the project's own GPLv3 terms.
 ## FlClash
 
 **FlClash** by chen08209 was used as the behavioral reference for the anchored menu
-popup motion:
+popup motion and the settings-page structure. The `key`, `cpu`, `paintbrush` and
+`sliders` glyphs in `flutter/lib/ui/glyphs.dart` are ported from FlClash's
+`AppGlyphs` (`lib/ui/icons/app_glyphs.dart`):
 
 - https://github.com/chen08209/FlClash
+- Copyright (C) chen08209
 - Licensed under the GNU General Public License, version 3
 
 ## Other dependencies

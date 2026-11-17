@@ -430,7 +430,7 @@ Claude Code 只会说 Anthropic Messages 协议，所以"支持 OpenAI 接口"�
 - 逐条工具批准卡片（可用 `--permission-prompt-tool` + MCP 回调补上）
 - 多助手 persona（"助手" = 一组 API / 模型 / 权限配置）
 - 图片直接粘贴预览（目前只做文件引用）
-- x86 模拟器上的端到端自测（本机没有可用 AVD）
+- 真机覆盖：目前主要在 MuMu（x86_64）上验证，arm64 真机与不同 root 环境仍靠用户反馈
 - PRoot 下的性能优化（大量小文件 I/O 目前受 ptrace 影响）
 
 ## 12. CI/CD

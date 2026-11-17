@@ -1,8 +1,12 @@
-# Claudroid 设计系统
+# Claudroid 设计系统（Compose 回退前端）
 
-> 本文件是 UI 迭代的唯一视觉依据。改配色、圆角、图标、动效、工具调用或代码块展示前先读这里；
-> 与 `prototype/index.html`、`docs/screenshots/` 一起看。实现落在 `ui/theme/`（token）、
-> `ui/components/`（通用控件与动效）、`ui/chat/`、`ui/md/`、`ui/settings/`。
+> 本文件只覆盖 `app/src/main/java/app/claudroid/ui/` 的 Compose 前端。发布 APK 使用的是
+> Flutter 前端，视觉规范见 [`DESIGN_FLUTTER.md`](DESIGN_FLUTTER.md)；两边共享暖纸 + 陶土橙
+> 的基调，但组件实现与排版细节不同。
+>
+> 改 Compose 前端前先读这里；`prototype/index.html` 是同一时期的交互原型。实现落在
+> `ui/theme/`（token）、`ui/components/`（通用控件与动效）、`ui/chat/`、`ui/md/`、
+> `ui/settings/`。
 
 ## 1. 设计语言
 

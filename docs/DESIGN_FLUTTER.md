@@ -1,9 +1,10 @@
 # Flutter 前端视觉规范
 
 Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖 **Flutter 前端**，它是发布
-APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`），刻意**不**沿用 `DESIGN.md` 的
-暖纸色 + 赤陶色，而是照搬
-[FlClash](https://github.com/chen08209/FlClash) 的视觉语言 —— 这是产品需求，不是疏漏：
+APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`）。视觉方向是
+**FlClash 结构 + Claude 质感**：材质、图标、动画与设置页排版沿用
+[FlClash](https://github.com/chen08209/FlClash)，页面底色、文字气质与克制的赤陶色改用
+`DESIGN.md` 的暖纸方案：
 
 > 材质、图标、动画效果照抄 flclash，设置页面的排版也要借鉴一下，聊天页面保持当前布局。
 
@@ -11,27 +12,33 @@ APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`），刻意**�
 
 | Compose（`ui/`） | Flutter（`flutter/lib/ui/`） |
 | --- | --- |
-| `Theme.kt`（暖纸 + 赤陶） | `app.dart` 的 `seededColorScheme(seedColor: kSeedColor)` |
+| `Theme.kt`（暖纸 + 赤陶） | `palette.dart` 的 `claudroidColorScheme`（seeded 主色 + 暖纸角色覆盖） |
+| `HomeScreen` | `home_page.dart` |
 | `AppDrawer` | `session_drawer.dart` 的 `SessionDrawer` |
-| `ChatScreen` / 气泡 / 工具卡 | `chat_page.dart`（**布局保持不变**） |
+| `ChatScreen` / 气泡 / 工具卡 / 工作折叠 | `chat_page.dart`（**布局保持不变**） |
+| `ChatInput` / 斜杠面板 | `composer.dart` 的 `ChatComposer` |
+| `ModelTierMenu` | `model_menu.dart` |
+| `ToolPresentation` | `tool_presentation.dart` |
+| `WebSources` | `web_sources.dart` |
+| `WorkspaceScreen` / `WorkspaceTerminal` | `workspace_page.dart` |
 | `SettingsScreen` | `settings_page.dart`（按 FlClash 分组列表排版重做） |
 | `AppIcons` | `glyphs.dart` 的 `AppGlyphs` + prism_ui 的 `Glyphs` |
 | Material 组件 | prism_ui 同名替代（见下表） |
 
 | 需要什么 | 用 prism_ui 的 |
 | --- | --- |
-| 页面骨架、顶栏 | `PrismScaffold`（需要 `ViewScope`，由 `PrismApp.builder` 提供）；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`，**不要**直接用 `ScaffoldBar` |
+| 页面骨架、顶栏 | `PrismScaffold`；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`（静态页面色背板，无玻璃胶囊），**不要**直接用 `ScaffoldBar` |
 | 容器 | `Surface`（`SurfaceLevel.page` / `.card` 取色） |
 | 设置项列表 | `generateSection` / `generateGroup` / `ListRow` / `DecorationListItem` |
 | 分组行间距 | `ItemPosition.get(index, length)` 或 `ItemPositionProvider` |
 | 搜索框 | `SearchField` |
 | 弹出菜单 | `PopupAnchor` + `PopupMenu` + `PopupMenuItem` |
 | 对话框 | `AlertDialog` + `showFloatingDialog` |
-| 输入框 | prism_ui 的 `TextField`（镜像 Flutter 构造器） |
+| 输入框 | prism_ui 的 `TextField`（镜像 Flutter 构造器）；聊天输入框外层是单个 `LiquidGlass` 胶囊 |
 | 可点击卡片 | `Card`（`onPressed`）/ `PressSurface` |
-| 按钮 | `TextButton` / `TonalButton` |
+| 按钮 | `TextButton` / `GlassTonalButton`（主操作）/ `TonalButton`（危险操作） |
 | 长列表 | `PrismListView` |
-| 侧边抽屉 | `showModalSideSheet` + `SideSheet` |
+| 侧边抽屉 | `showLeftSideSheet` + prism_ui 的 `SideSheet`（左缘锚定） |
 | 图标 | `GlyphIcon(Glyphs.x)`，**必须** `import 'package:prism_ui/icons/icons.dart';` |
 | Markdown（`ui/md/Markdown.kt`） | `markdown.dart` 的 `MarkdownText`（Dart 移植，无外部依赖） |
 
@@ -41,28 +48,83 @@ APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`），刻意**�
 
 ## 2. 色板
 
-固定 seed：
+`palette.dart` 先取 `seededColorScheme(seedColor: kSeedColor)` 生成主色、容器与玻璃底纹，
+再用 `copyWith` 把表面/文字/描边角色覆盖成固定暖色（`claudroidColorScheme(Brightness)`）。
+`PrismApp` 与外观页的三张预览卡都只走这一个入口，不各自建 scheme。
 
 ```dart
 const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
 ```
 
-`PrismApp` 里 light / dark 各建一份 `seededColorScheme`，跟随 `settings.themeMode`
-（0 跟随系统 / 1 亮 / 2 暗）。**取色只用语义角色**（`context.colorScheme.primary`、
-`.onSurface`、`.onSurfaceVariant`、`.surface`），不要在组件里写十六进制字面量 ——
-prism_ui 的主题是按 seed 生成的，写死颜色会在暗色模式下失去对比度。
+浅色：
 
-> 注：种子沿用 Compose 的赤陶 `0xFFD97757`，这样两套前端在系统栏、通知、启动图上
-> 不打架；prism_ui 由它派生出的面板、描边、玻璃底纹则是 FlClash 的观感。
+| 角色 | 值 | 用途 |
+| --- | --- | --- |
+| `surface` / `surfaceContainer` | `#F8F4ED` | 页面背景 |
+| `surfaceBright` | `#FBF9F4` | 卡片 |
+| `surfaceContainerLowest` | `#FFFDF9` | 最亮层 |
+| `surfaceContainerHigh` | `#F0EAE0` | 用户气泡、次级填充、搜索框 |
+| `surfaceContainerHighest` | `#E8E0D2` | 按下态、内嵌块 |
+| `onSurface` | `#2D2520` | 主文本 |
+| `onSurfaceVariant` | `#5A4F44` | 次要文本 |
+| `outline` | `#B5AB9E` | 发丝边 |
+| `outlineVariant` | `#DDD2BD` | 更淡分隔线 |
+| `primary` | `#D97757` | 焦点、发送/停止 |
+| `primaryContainer` | `#F2DDD0` | 选中底 |
+| `onPrimaryContainer` | `#A64C2F` | 选中底上的文字 |
+
+深色：`surface #1B1815`、`surfaceBright #24201C`、`surfaceContainerHigh #2A251F`、
+`surfaceContainerHighest #332D26`、`onSurface #F2EAE0`、`onSurfaceVariant #C9BFB3`、
+`outline #8A7D6E`、`outlineVariant #443C34`、`primary #E08B6C`、`onPrimary #33170E`、
+`primaryContainer #5A2E1E`、`onPrimaryContainer #F6D8C9`。
+
+两条取色规则：
+
+- **取色只用语义角色**（`context.colorScheme.primary`、`.onSurface`、`.onSurfaceVariant`、
+  `.surface`），不要在组件里写十六进制字面量 —— 唯一例外是 `palette.dart` 本身。卡片参照
+  prism_ui 的 `SurfaceLevel`：`.page` = `surfaceContainer`、`.card` = `surfaceBright`、
+  `.block` = `surfaceContainer`、`.inset` = `surfaceContainerHighest`。
+- 橙色 `primary` 只做**填充与图标**（发送/停止、当前会话标记、聚焦描边），单屏填充面积
+  不超过 5%；正文里的链接、裸 URL、来源标题等**文字**场景用 `linkColor(scheme)`（浅色
+  `#A64C2F`、深色 `#E8A184`），保证对比度。
 
 ## 3. 材质与动画
 
 - `PrismApp(liquidGlass: LiquidGlassQuality.standard)`：液态玻璃统一在这个层级开，
-  组件侧不单独配。高端机可以按需上调，低端机下调 —— 这是唯一允许按设备分档的视觉参数。
-- 弹层（菜单、对话框、侧边抽屉）用 prism_ui 自带的转场与玻璃模糊，不要手写
-  `AnimatedOpacity` / `BackdropFilter`。
+  组件侧不单独配。**顶栏不用玻璃**：它是一层静态的页面色背板（整条 bar 覆盖，末尾
+  约 16% 高度淡出），标题、模型键与图标都直接排在这一层上，不再有胶囊。玻璃只留给
+  聊天输入框（单个胶囊，内部按钮不叠 pane）和页面主操作按钮（`GlassTonalButton`）。
+  无 `LiquidGlassScope` 时这些按钮降级为 `raisedSurface` 填充。
+- 顶栏 `preferredSize` 必须保持 72dp（compact sheet 48dp），否则 `contentTopPadding`
+  会算错；静态背板让滚动内容从标题下方干净地滑过，就是设置页标题不跟着列表移动的
+  实现方式。
+- **动作材质词汇**（同类操作必须同一个组件）：
+
+  | 角色 | 组件 | 材质 |
+  | --- | --- | --- |
+  | 页面主操作 | `GlassTonalButton` | 液态玻璃 |
+  | 危险操作 | `TonalButton` | 红色实色 |
+  | 行内次要动作 | `TextButton` | 无填充 |
+  | 行尾值/编辑 | `SettingsValueButton` | 文本 + glyph |
+  | 顶栏图标 | `IconButton` | 无填充 |
+  | 对话框动作 | `AlertDialog` actions | 末位自动填色 |
+
+- 弹层（菜单、对话框）用 prism_ui 自带的转场与玻璃模糊；左侧抽屉是
+  `showLeftSideSheet` 的 `PopupRoute`，复用 `SideSheet` 与 `SheetCoverRouteMixin`。
+  **不要手写** `AnimatedOpacity` / `BackdropFilter`。
 - 动效时长统一走 `context.motionDuration`，无障碍「减少动效」打开时它自动归零；
   `context.disableAnimations` 可作显式判断。**不要**写死 `Duration(milliseconds: …)`。
+- **按钮不能在自己的点击回调里把自己置为 `onPressed: null`**：prism_ui 的
+  `PressSurface` 会在「按下 → 禁用」的这次更新里取消按压动画并经 states controller
+  回调按钮自己的 `setState`，debug 构建直接触发框架断言（红屏）。主操作按钮用
+  `DeferredDisable`（`press_guard.dart`）包一层，把置灰推迟到 250ms 按压动画结束之后；
+  发送/附件这类高频切换的按钮则始终保留非空回调，在回调内判断是否能执行。
+- 思考/工具折叠用 `fold.dart` 的 `AnimatedFold`：展开 180ms、收起 120ms，
+  曲线 `Cubic(0,0,0.2,1)`，淡入先于高度完成；chevron 用 `FoldChevron` 旋转 90°，
+  不换图标。展开状态由聊天页按 `work:<messageId>` / `think:<messageId>:<block>`
+  / `tool:<blockId>` 记忆，列表回收后不丢。折叠头不允许再次手写 `if (open)`。
+- 「实时思考/活动行 → 最终 WorkDisclosure」是状态驱动的结构性切换，用
+  `AnimatedFold(fade: false)` 只做高度过渡，不做整块淡入淡出；用户手动展开折叠时仍保留淡入。
 - 图标一律矢量 glyph，不用 emoji、不用位图，不随字号放大而变糊。
 
 ## 4. 字体与排版
@@ -81,47 +143,145 @@ prism_ui 的主题是按 seed 生成的，写死颜色会在暗色模式下失�
 列表行的高度、内边距交给 `ListRow` / `DecorationListItem` 的默认值，不要逐行覆写 ——
 FlClash 的观感来自这些统一的行高。
 
+**衬线**只用于单行展示型文字：首页问候语（约 30/38、字重 500）与空对话标题「开始对话」。
+用 `typography.dart` 的 `claudroidSerif(style)`（`fontFamily: 'serif'`，以
+`Noto Serif CJK SC` / `Noto Serif SC` 兜底）。**助手正文不用衬线**：Android 的系统级中文
+衬线只登记了 regular 字重，标题与 `**粗体**` 会回退到黑体，正文出现「细宋体 + 粗黑体」
+混排；正文改用主题的无衬线栈后，中英文与 400/600 字重都来自同一族。用户气泡、设置、
+工具卡、行内代码、代码块与表格同样保持无衬线或 mono，不引入字体包。
+
+**阅读宽度**用 `layout.dart` 的 `ContentWidth`：聊天 `760`、首页 `640`、设置 `840`、
+工作区 `820`。顶栏保持通栏，正文、输入胶囊与预览在宽屏上居中收窄，不随窗口无限拉伸。
+
 ## 5. 各页面约束
 
-### 聊天页 —— 保持当前布局
+### 首页
 
-用户明确要求聊天页**不跟着改**。因此：
+- 问候语衬线、副标题无衬线；问候语左侧的有机光晕（`organic_halo.dart`）做 5.6s 呼吸与
+  42s 缓慢旋转，主色约 13% 透明度，减少动效时固定形状且不旋转。
+- 最近一条有内容的会话显示为「继续上次对话」卡（标题、预览、相对时间、chevron），
+  没有会话时不占位；时间格式由 `time_format.dart` 的 `sessionTimeLabel` 统一生成。
+- AI 建议加载中用 `SkeletonPill`（自带呼吸并尊重减少动效），chip 高度 40dp；没有建议就
+  整条隐藏，不伪造。
+- 输入胶囊与聊天页共用 `composer.dart`，下方脚注由 `permissionFootnote` 生成 ——
+  `BYPASS` 时写明「命令会直接执行」。
 
-- 消息气泡、助手正文、工具调用卡、思考折叠、流式光标、错误条、回到底部按钮，
-  位置与信息层级照 `ChatScreen.kt` 的现有结构，只把 Compose 组件换成 prism_ui 等价物。
-- 助手气泡仍用**衬线**，与用户气泡的区分保留。
-- 助手正文由 `MarkdownText` 渲染（标题/列表/引用/表格/代码块/行内样式），用户气泡仍是纯文本；
-  链接只做样式（accent + 下划线），Flutter 侧没有打开 URL 的桥接方法。
-- 橙色（`colorScheme.primary`）只用于焦点与当前会话标记，占屏不超过 5%。
+### 聊天页 —— 保留信息层级，精修交互
+
+信息层级与 `ChatScreen.kt` 一致（气泡、工具卡、思考折叠、流式光标、错误条、回到底部），
+只把 Compose 组件换成 prism_ui 等价物，并补上可见交互：
+
+- 用户气泡用 `surfaceContainerHigh` 填充、`onSurface` 文字，最大宽度为**内容宽度的 80%**，
+  不铺橙色底。空闲时气泡下方有「编辑」动作（编辑 glyph + 文案），运行中隐藏；点气泡编辑的
+  隐藏手势保留。动作行与来源行触控目标 ≥ 44dp。
+- 助手正文用无衬线（见 §4，避免中文衬线粗体回退造成混排），由 `MarkdownText` 渲染
+  （标题/列表/引用/表格/代码块/行内样式）；标题是 22/20/17/16 的四级半粗梯度，列表项间距
+  5dp、段落 9dp，行内代码底比代码块浅一档。列表符号用 `onSurfaceVariant`，赤陶色只留给
+  链接与裸 URL；用户气泡仍是纯文本。Markdown 链接经 `app.openUrl`（仅 http/https）交给
+  系统浏览器。
+- 助手输出前的实时思考胶囊与活动行、输出后的 `WorkDisclosure` 嵌套折叠，语义照
+  `ChatScreen.kt`：「输出前实时，输出后合并」；展开后仍按 blocks 原始顺序排列。
+  活动行在本地化动词后显示工具输入摘要（`toolCallDetail`，command / file_path / query /
+  url 等首个可用字段），思考阶段也能看出正在做什么。
+- 工具卡标题用 `tool_presentation.dart` 的本地化动词 + 工具名，完成/失败用勾叉 glyph；
+  输入与输出都可复制，失败工具用错误色描边。错误条用 `errorContainer` 淡底 + `error` 描边。
+- 顶栏搜索图标进入会话内搜索（`chat_search.dart`）：只保留命中正文/错误的消息并显示匹配
+  数，搜索时暂停自动跟随与回到底部。顶栏菜单的「复制整段对话」用
+  `conversation_export.dart` 导出纯文本（剥掉尾部 `Sources:`，跳过思考/工具）。
+- 回到底部是 48dp 可按压按钮，用 `AnimatedVisibility.bottomNavigation` 淡入并轻微缩放，
+  列表底部预留 56dp，最后一条消息不会被遮住。
+- 流式更新按帧合并：`ChatState` 每帧最多刷新一次，顶栏只在可见签名变化时重建，Markdown
+  解析按「文本 + 配色 + 回调 + 衬线」缓存，每条消息包一层 `RepaintBoundary`。
+- 橙色只用于焦点、发送/停止与当前会话标记，占屏不超过 5%。
 
 ### 设置页 —— 借鉴 FlClash 排版
 
 FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列表，不是 Material 的卡片堆叠。
-落点：
+设置页分两层：
 
-- 每个分组一个 `generateSection(title: …)`，组内用 `ListRow` 或 `DecorationListItem`。
-- 选择类设置用 `PopupAnchor` 弹出 `PopupMenu`，**行尾只显示当前值**，不写解释性副标题
+- **根页**只放入口行：三组「模型与引擎 / 应用 / 其他」，每行是
+  `SettingsEntryRow(glyph, title, subtitle, pageBuilder)`，用 `OpenContainer` 做行 → 页
+  展开转场。副标题只放一行实时状态（服务商 · 模型、引擎版本/进度、开关数、主题、
+  自动更新/轮数、版本/发布状态）；不写长篇说明。
+- **二级页**沿用 FlClash 的 `ListRow` 语言：`SettingsScaffold` + `generateSection`，
+  选择类设置用 `PopupAnchor` 弹出 `PopupMenu`，**行尾只显示当前值**，不写解释性副标题
   （用户要求「去除所有说明文字来降低行长」）。
 - 选择框右边缘对齐按钮右边缘，宽度受控（不要撑满整行）。
-- 开关用 `_SwitchRow`，数值用 `_ValueRow`，纯展示用 `_InfoRow`。
+- 开关用 `SettingsSwitchRow`，纯展示用 `SettingsInfoRow`，提示/错误用 `SettingsNote`。
+- 从外部快捷入口进设置时用 `SettingsDestination` 深链，不再先落根页：模型菜单的
+  「接口与模型…」直接打开服务与模型页，首页引擎提示与抽屉引擎胶囊直接打开引擎页；
+  只有 `/settings` 与抽屉齿轮按钮进根页。
+- **行尾语义**：`chevronForward` = 进入下一页，`Glyphs.picker`（上下双箭头）= 打开菜单/
+  模型选择器，`AppGlyphs.edit`（铅笔）= 弹出文本输入，`AppGlyphs.refresh` = 原地执行动作。
+  `SettingsValueRow` 默认铅笔；模型字段显式传 picker。这样列表行按钮与可输入设置项
+  不再用同一个图标。
+- **输入弹窗**统一用 `SettingsTextPrompt`（会话重命名也用它）：`Form` 校验、错误行内
+  显示并带 `AnimatedSize`；API Key 用 `SecretTextFormField` 的 eye/eyeOff 切换，Base URL
+  用 URL 键盘并校验 `http(s)://`，数字项用数字键盘与范围校验，只有多行文本才允许换行。
+- **模型选择器**在打开时自动（或按按钮强制）拉取，loading / error / empty / 列表
+  四种状态用 `AnimatedSwitcher` 过渡固定高度内容区；失败时给出「确认 Base URL、API Key
+  与协议后重试」并保留重试按钮；元数据 chip 用 `TonalChip`。
+- 二级页标题固定在顶栏，**不要**把页面标题放进列表内容里。
+- 模型选择器显示 `displayName`、ID、上下文/输出/推理 chips，按 `owned_by` 分组并支持
+  搜索；「手动输入」保留纯文本回退。选默认模型会同时清空 `activeTier`。
+- 二级页不再逐行加图标；图标只作为根页的导航语言，避免设置项列表变成图标墙。
+- 引擎页把「安装 / 升级」做成分区顶部的整行 `GlassTonalButton`；「检查更新、自检、
+  Root 探测、刷新网络配置、取消」改成各占一行的动作行（行尾 glyph，运行中禁用，取消只在
+  `phase == 'Working'` 时出现）；「卸载引擎」单独放「危险操作」分区。安装位置整行可点复制。
+  「官方最新」与「已安装」不一致时，状态区显示主色「可更新」chip。
+- 服务与模型页在选中预设带有非空 `hint` 时，用该 hint 作为服务商分区的 footer。
+- 日志页顶部是过滤框（`filterLogLines`，大小写不敏感），并显示「N / M 行」；复制与清空
+  仍作用于全部日志，空日志隐藏过滤框。
+- 外观页的三张主题预览卡是唯一例外：预览本身就是内容，用 `claudroidColorScheme` 的
+  浅/深 scheme 画迷你界面，选中态用主色描边与勾选徽标。
+
+### 工作区
+
+- 目录与文件行用 `Card`（左侧图标块、名称、大小/时间、chevron），不是 Material ListTile；
+  目录在前，文件按修改时间倒序，顺序与 `WorkspaceFiles.list` 一致。
+- 路径导航是可横向滚动的 breadcrumb chip（`/work` 到当前层），点任意 chip 跳回该层；
+  工具条的搜索按名称过滤，排序菜单提供名称/时间/大小与升降序，目录永远在前
+  （纯函数在 `workspace_logic.dart`）。
+- 预览按 Kotlin 返回的 `kind` 分派：Markdown 用 `MarkdownText`，代码/文本用等宽
+  `SelectableText`，图片用 `Image.memory` + `InteractiveViewer`，HTML 用 Kotlin 注册的
+  平台视图（`AndroidView` 承载系统 `WebView`）渲染、顶栏可切「源码」，二进制落到打开/
+  分享卡片。`truncated == true` 时顶部提示「内容过大，仅显示前 N 字节」；文本/代码与
+  HTML 源码可复制并切换自动换行。
+- 终端是独立子页：等宽输出、命令/错误/提示三种颜色，输入框前带 `$` 提示，底部一个玻璃
+  输入胶囊；硬件键盘的上/下键召回最近 50 条命令，顶栏可复制全部输出；离开页面时必须
+  `terminal.stop`，不能让子进程留在后台。
 
 ### 会话抽屉
 
-- 结构照 `SessionDrawer.kt`：品牌行 + 收起、新对话胶囊、搜索、按日分组、底部引擎状态。
+- 结构照 `SessionDrawer.kt`：品牌行 + 收起、新对话胶囊、搜索、按日分组、底部固定引擎状态
+  胶囊与工作区/设置圆钮。搜索同时匹配标题与 Kotlin 传来的 `searchText`，没有内容的会话不显示。
 - 分组语义与 `SessionGrouping.kt` 完全一致：今天 / 昨天 / 过去 7 天 / 更早，`updatedAt` 倒序。
+- 每行的副标题是 `session.preview`（为空时回退时间），时间以 caption 放在 `…` 左侧；
+  选中行在左侧加 3dp 主色细条，不铺底。
+- 底部引擎胶囊在 `latestVersion` 存在且不等于 `installedVersion` 时追加「可更新」并点亮
+  主色圆点；点击仍进设置。
 - 每行的 `…` 菜单只有「重命名」「删除对话」两项；删除是**红色且立即执行**，不弹二次确认。
-- 已知差异：`showModalSideSheet` 的宽度是 `(屏宽 * 0.4).clamp(360, 560)`，而 Compose 抽屉
-  是屏宽的 88%。在 720px 宽的机型上 Flutter 抽屉约 360px，比 Compose 版窄。若需要
-  对齐 88%，要在 prism_ui 外面包一层自定义 sheet，而不是改包内常量。
+- 左侧抽屉用 `left_side_sheet.dart`：宽 `屏宽 * 0.88` 夹在 300–560dp，300ms 从
+  `Offset(-1, 0)` 滑入、200ms 滑出；barrier 点击、返回键与抽屉内按钮均可关闭。
+  prism_ui 的 `showModalSideSheet` 写死右缘锚点，不能用于左上角菜单。v1 不做拖拽关闭。
 
 ## 6. 图标
 
 `prism_ui` 的 `Glyphs` 只有通用图标（`arrowBack`、`chevronForward`、`close`、`check`、
 `more`、`search`、`eye`、`copy`、`paste`、`sort`、`pin`、`dragHandle` 等）。业务图标
-（`plus`、`send`、`stop`、`sparkle`、`trash`、`edit`、`refresh`、`menu`）放在
+（`plus`、`send`、`stop`、`sparkle`、`trash`、`edit`、`refresh`、`menu`、`settings`、
+`attachment`、`search`、`globe`、`terminal`、`folder`、`checklist`、`agents`、`plug`、
+`read`）放在
 `flutter/lib/ui/glyphs.dart` 的 `AppGlyphs`，沿用 24 单位网格、`GlyphRole.line` /
 `GlyphRole.detail` 的描边角色，与内置图标同视觉重量。新增图标按同样网格画，不要混入
 Material Icons。
+
+设置根页的分类图标继续用同一套线条拟物语言（24 单位网格、1.8 主体描边、detail 次级
+描边）：`key`（服务与模型）、`cpu`（引擎）、`flask`（功能与实验）、`paintbrush`（外观）、
+`sliders`（高级）、`clipboardPulse`（关于与诊断），工作区复用 `folder`。其中 `key`、
+`cpu`、`paintbrush`、`sliders` 移植自 FlClash 的 `AppGlyphs`，来源与 GPLv3 声明见
+[`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)；`flask` 与 `clipboardPulse` 按同一
+网格新画。
 
 ## 7. 许可与发布
 
