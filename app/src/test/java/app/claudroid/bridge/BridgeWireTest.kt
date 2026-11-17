@@ -1,23 +1,35 @@
 package app.claudroid.bridge
 
+import app.claudroid.data.ApiFlavor
+import app.claudroid.data.AppRelease
 import app.claudroid.data.AppSettings
+import app.claudroid.data.AuthStyle
 import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
+import app.claudroid.data.ProviderPreset
 import app.claudroid.data.Role
+import app.claudroid.core.WorkspaceFiles
+import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.ui.chat.ChatEvent
 import app.claudroid.ui.chat.DeltaBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /**
  * Pins the wire format of docs/BRIDGE_CONTRACT.md §3 and §5. The Dart side decodes
  * these names literally, so a rename here must break a test, not the UI.
  */
 class BridgeWireTest {
+
+    @get:Rule
+    val temp = TemporaryFolder()
 
     private val richMessage = ChatMessage(
         id = "m1",
@@ -32,6 +44,7 @@ class BridgeWireTest {
         costUsd = 0.01,
         durationMs = 1234L,
         streaming = false,
+        model = "Opus · claude-opus-4-5",
     )
 
     @Test
@@ -39,6 +52,17 @@ class BridgeWireTest {
         val encoded = BridgeWire.messageJson(richMessage)
         val decoded = BridgeJson.json.decodeFromString(ChatMessage.serializer(), encoded)
         assertEquals(richMessage, decoded)
+    }
+
+    @Test
+    fun `assistant model label is part of the wire format`() {
+        val encoded = BridgeWire.messageJson(richMessage)
+        assertTrue(encoded.contains("\"model\":\"Opus · claude-opus-4-5\""))
+        // Older records omit the field entirely; decoding keeps it null rather
+        // than failing, so the frontend can fall back to the live label.
+        val legacy = encoded.replace(",\"model\":\"Opus · claude-opus-4-5\"", "")
+        val decoded = BridgeJson.json.decodeFromString(ChatMessage.serializer(), legacy)
+        assertNull(decoded.model)
     }
 
     @Test
@@ -112,6 +136,113 @@ class BridgeWireTest {
         assertEquals("n", BridgeWire.chatEvent(ChatEvent.TitleNotice("n"), model = "m")["notice"])
         assertNull(BridgeWire.chatEvent(ChatEvent.TitleNotice(null), model = "m")["notice"])
         assertEquals(true, BridgeWire.chatEvent(ChatEvent.Running(true), model = "m")["running"])
+    }
+
+    @Test
+    fun `session list carries the drawer summary fields`() {
+        val used = ChatSession(
+            id = "s1",
+            title = "t",
+            messages = listOf(richMessage),
+        )
+        val empty = ChatSession(id = "s2", title = "empty")
+        val json = BridgeWire.sessionsJson(listOf(used, empty))
+        assertTrue(json.contains("\"hasContent\":true"))
+        assertTrue(json.contains("\"hasContent\":false"))
+        assertTrue(json.contains("\"preview\":"))
+        assertTrue(json.contains("\"searchText\":"))
+        assertFalse("searchText must not leak the tool JSON verbatim", json.contains("\"messages\":"))
+    }
+
+    @Test
+    fun `search text walks newest messages first and respects the budget`() {
+        val session = ChatSession(
+            id = "s",
+            messages = listOf(
+                ChatMessage(id = "old", role = Role.USER, blocks = listOf(Block.Text("older words"))),
+                ChatMessage(id = "new", role = Role.ASSISTANT, blocks = listOf(Block.Text("newest words"))),
+            ),
+        )
+        val text = BridgeWire.searchText(session)
+        assertTrue(text.indexOf("newest") < text.indexOf("older"))
+        assertTrue(BridgeWire.searchText(session, limit = 10).length <= 10)
+    }
+
+    @Test
+    fun `model details json carries the picker metadata`() {
+        val json = BridgeWire.modelDetailsJson(
+            listOf(
+                ModelCatalog.ModelInfo(
+                    id = "auto/dfmodel",
+                    displayName = "DeepSeek-Flash",
+                    contextWindow = 1_000_000,
+                    maxOutputTokens = 128_000,
+                    ownedBy = "qoder-cn",
+                    reasoning = true,
+                    reasoningLevels = listOf("low", "high"),
+                    label = "routing",
+                    modalities = listOf("text", "image"),
+                    supportedParameters = listOf("tools"),
+                ),
+            ),
+        )
+        assertTrue(json.contains("\"id\":\"auto/dfmodel\""))
+        assertTrue(json.contains("\"displayName\":\"DeepSeek-Flash\""))
+        assertTrue(json.contains("\"contextWindow\":1000000"))
+        assertTrue(json.contains("\"reasoning\":true"))
+        assertTrue(json.contains("\"reasoningLevels\":[\"low\",\"high\"]"))
+        assertTrue(json.contains("\"modalities\":[\"text\",\"image\"]"))
+    }
+
+    @Test
+    fun `providers json keeps the preset fields the picker renders`() {
+        val json = BridgeWire.providersJson(
+            listOf(
+                ProviderPreset(
+                    id = "x",
+                    label = "X",
+                    flavor = ApiFlavor.OPENAI,
+                    baseUrl = "https://example.invalid/v1",
+                    authStyle = AuthStyle.BEARER,
+                    model = "m",
+                    hint = "h",
+                ),
+            ),
+        )
+        assertTrue(json.contains("\"id\":\"x\""))
+        assertTrue(json.contains("\"flavor\":\"OPENAI\""))
+        assertTrue(json.contains("\"authStyle\":\"BEARER\""))
+        assertTrue(json.contains("\"baseUrl\":\"https://example.invalid/v1\""))
+    }
+
+    @Test
+    fun `release json distinguishes update dev and current builds`() {
+        val release = AppRelease(tag = "0.1.9", url = "https://example.invalid")
+        assertTrue(
+            BridgeWire.releaseJson(release, currentVersion = "0.1.8")
+                .contains("\"status\":\"UPDATE_AVAILABLE\""),
+        )
+        assertTrue(
+            BridgeWire.releaseJson(release, currentVersion = "0.1.10")
+                .contains("\"status\":\"DEV_BUILD\""),
+        )
+        assertTrue(
+            BridgeWire.releaseJson(release, currentVersion = "0.1.9")
+                .contains("\"status\":\"UP_TO_DATE\""),
+        )
+    }
+
+    @Test
+    fun `workspace entries carry root-relative paths`() {
+        val root = temp.newFolder("workspace")
+        File(root, "docs").mkdirs()
+        File(root, "note.md").writeText("# hi")
+        val json = BridgeWire.workspaceEntriesJson(WorkspaceFiles.list(root), root)
+        assertTrue(json.contains("\"path\":\"docs\""))
+        assertTrue(json.contains("\"path\":\"note.md\""))
+        assertTrue(json.contains("\"kind\":\"MARKDOWN\""))
+        assertTrue(json.contains("\"isDirectory\":true"))
+        assertTrue(json.contains("\"isDirectory\":false"))
     }
 
     @Test

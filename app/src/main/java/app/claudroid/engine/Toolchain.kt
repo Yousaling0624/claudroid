@@ -862,7 +862,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
      *
      * Only IPv4 servers are written: see [dnsLines] for why the address family matters.
      */
-    private fun dnsConfig(): String {
+    private fun networkServers(): List<String> {
         val servers = mutableListOf<String>()
         runCatching {
             val manager = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -873,8 +873,13 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             }
         }
         servers += listOfNotNull(prop("net.dns1"), prop("net.dns2"))
-        return dnsLines(servers)
+        return servers
     }
+
+    /** Stable representation of the resolver configuration a jail should have. */
+    fun networkFingerprint(): String = dnsConfig()
+
+    private fun dnsConfig(): String = dnsLines(networkServers())
 
     /**
      * The two files that decide which address family the container resolves to.
@@ -899,24 +904,24 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
      * with the WebFetch check failing. The content is compared first, so an already
      * correct jail costs no `su` call.
      */
-    fun refreshNetworkConfig(installation: Installation) {
+    /** Returns true when at least one of the two files was rewritten. */
+    fun refreshNetworkConfig(installation: Installation): Boolean {
         val files = networkFiles()
         if (!installation.rootMode) {
             // The app owns filesDir/engine/jail and can write it directly.
-            files.forEach { (relative, content) ->
+            return files.map { (relative, content) ->
                 writeIfChanged(File(installation.jail(), relative), content)
-            }
-            return
+            }.any { it }
         }
         // /data/adb is root-owned; without a grant the jail is unreadable anyway and the
         // engine cannot run, so there is nothing to fix here.
-        if (!rootExec.isGranted()) return
+        if (!rootExec.isGranted()) return false
         // Readable only when the app happens to have access; otherwise the root shell
         // decides and we pay one `su -c` per launch.
         if (files.all { (relative, content) ->
                 runCatching { File(installation.jail(), relative).readText() }.getOrNull() == content
             }
-        ) return
+        ) return false
         val result = rootExec.run(netConfigScript(installation.jailPath, files), 30_000)
         if (!result.out.contains(NETCONF_OK)) {
             Logx.e(
@@ -924,16 +929,20 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                     "${result.combined.takeLast(200)}）",
                 ctx,
             )
+            return false
         }
+        return true
     }
 
     /** Writes [content] unless the file already holds exactly that text; failures log. */
-    private fun writeIfChanged(file: File, content: String) {
-        if (runCatching { file.readText() }.getOrNull() == content) return
-        runCatching {
+    private fun writeIfChanged(file: File, content: String): Boolean {
+        if (runCatching { file.readText() }.getOrNull() == content) return false
+        return runCatching {
             file.parentFile?.mkdirs()
             file.writeText(content)
+            true
         }.onFailure { Logx.e("写入 ${file.absolutePath} 失败：${it.message}", ctx) }
+            .getOrDefault(false)
     }
 
     private fun prop(name: String): String? = runCatching {

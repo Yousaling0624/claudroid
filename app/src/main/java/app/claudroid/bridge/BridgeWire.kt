@@ -1,10 +1,18 @@
 package app.claudroid.bridge
 
+import app.claudroid.data.AppRelease
 import app.claudroid.data.AppSettings
+import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
 import app.claudroid.data.ModelTier
+import app.claudroid.data.ProviderPreset
+import app.claudroid.data.ReleaseCheck
+import app.claudroid.core.WorkspaceEntry
+import app.claudroid.core.WorkspaceFiles
 import app.claudroid.engine.EngineManager
+import app.claudroid.engine.openai.ModelCatalog
+import java.io.File
 import app.claudroid.ui.chat.ChatEvent
 import app.claudroid.ui.chat.chatStatusLine
 import app.claudroid.ui.components.activeTierSummary
@@ -13,6 +21,7 @@ import app.claudroid.ui.components.composerModelLabel
 import app.claudroid.ui.components.shortModelLabel
 import app.claudroid.ui.components.tierMappingLabel
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -68,7 +77,90 @@ object BridgeWire {
         put("updatedAt", session.updatedAt)
         put("claudeSessionId", session.claudeSessionId)
         put("model", session.model)
+        put("hasContent", session.hasContent)
+        put("preview", session.preview)
+        put("searchText", searchText(session))
     }.toString()
+
+    /**
+     * Drawer search runs in Dart but the transcripts never leave Kotlin. The newest
+     * messages are the ones users search for, so walk backwards and stop at a budget
+     * that keeps the sessions payload small even with hundreds of conversations.
+     */
+    fun searchText(session: ChatSession, limit: Int = 2000): String = buildString {
+        for (message in session.messages.asReversed()) {
+            for (block in message.blocks) {
+                val piece = when (block) {
+                    is Block.Text -> block.text
+                    is Block.Thinking -> block.text
+                    is Block.Error -> block.text
+                    is Block.Tool -> listOfNotNull(block.name, block.input, block.output).joinToString(" ")
+                }
+                if (piece.isBlank()) continue
+                if (length > 0) append(' ')
+                append(piece)
+                if (length >= limit) return@buildString
+            }
+        }
+    }.take(limit)
+
+    fun workspaceEntriesJson(entries: List<WorkspaceEntry>, root: File): String =
+        entries.joinToString(prefix = "[", postfix = "]") { entry ->
+            buildJsonObject {
+                put("name", entry.name)
+                put("path", WorkspaceFiles.relativePath(root, entry.file))
+                put("kind", entry.kind.name)
+                put("size", entry.size)
+                put("modifiedAt", entry.modifiedAt)
+                put("isDirectory", entry.isDirectory)
+            }.toString()
+        }
+
+    fun providersJson(presets: List<ProviderPreset>): String =        presets.joinToString(prefix = "[", postfix = "]") { preset ->
+            buildJsonObject {
+                put("id", preset.id)
+                put("label", preset.label)
+                put("flavor", preset.flavor.name)
+                put("baseUrl", preset.baseUrl)
+                put("authStyle", preset.authStyle.name)
+                put("model", preset.model)
+                put("hint", preset.hint)
+            }.toString()
+        }
+
+    fun releaseJson(release: AppRelease, currentVersion: String): String = buildJsonObject {
+        put("tag", release.tag)
+        put("url", release.url)
+        put("publishedAt", release.publishedAt)
+        put("status", ReleaseCheck.status(currentVersion, release.tag).name)
+        put("currentVersion", currentVersion)
+    }.toString()
+
+    fun stringListJson(values: List<String>): String =
+        buildJsonArray { values.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }.toString()
+
+    /** §6.5 `modelDetailsJson`; labels and metadata come from the endpoint verbatim. */
+    fun modelDetailsJson(details: List<ModelCatalog.ModelInfo>): String =
+        buildJsonArray {
+            details.forEach { model ->
+                add(buildJsonObject {
+                    put("id", model.id)
+                    put("displayName", model.displayName)
+                    put("contextWindow", model.contextWindow)
+                    put("maxOutputTokens", model.maxOutputTokens)
+                    put("maxInputTokens", model.maxInputTokens)
+                    put("ownedBy", model.ownedBy)
+                    put("reasoning", model.reasoning)
+                    put("label", model.label)
+                    put("reasoningLevels", stringArray(model.reasoningLevels))
+                    put("modalities", stringArray(model.modalities))
+                    put("supportedParameters", stringArray(model.supportedParameters))
+                })
+            }
+        }.toString()
+
+    private fun stringArray(values: List<String>) =
+        buildJsonArray { values.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }
 
     /** §4 `engineJson`; `engineLabel` is derived here because it needs `settings`. */
     fun engineJson(state: EngineManager.State, settings: AppSettings): String = buildJsonObject {

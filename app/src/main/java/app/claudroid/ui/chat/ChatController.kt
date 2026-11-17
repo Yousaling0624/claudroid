@@ -9,10 +9,12 @@ import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
 import app.claudroid.data.ApiFlavor
 import app.claudroid.data.Role
+import app.claudroid.engine.CancelReason
 import app.claudroid.engine.ClaudeEngine
 import app.claudroid.engine.EngineEvent
 import app.claudroid.engine.TitleGenerator
 import app.claudroid.engine.TurnService
+import app.claudroid.ui.components.chatModelLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -167,20 +169,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         titleIsTemporary = isPlaceholderTitle(session.title, session.messages)
 
         // A process killed mid-turn leaves streaming=true and tool cards spinning forever.
-        // Repair them the first time the transcript is opened after a crash.
-        var changed = false
-        val repaired = session.messages.map { msg ->
-            val blocks = msg.blocks.map { block ->
-                if (block is Block.Tool && block.running) {
-                    changed = true
-                    block.copy(running = false, isError = true, output = block.output ?: "（任务中断）")
-                } else {
-                    block
-                }
-            }
-            if (msg.streaming) changed = true
-            msg.copy(streaming = false, blocks = blocks)
-        }
+        // Repair them the first time the transcript is opened after a crash; an empty
+        // interrupted answer also gets a visible note instead of a blank Claude bubble.
+        val (repaired, changed) = TurnRepair.repair(session.messages)
         _messages.value = repaired
         emitMessages()
         if (changed) persist()
@@ -301,7 +292,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     fun stop() {
         if (!_running.value) return
         setStatus("正在停止…")
-        container.engine.cancel()
+        container.engine.cancel(CancelReason.USER)
     }
 
     /**
@@ -312,7 +303,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         dismissed = true
         // The engine is app-wide: deleting an idle conversation must not cancel a turn
         // that belongs to another controller.
-        if (_running.value) container.engine.cancel()
+        if (_running.value) container.engine.cancel(CancelReason.USER)
         job?.cancel()
         loaded = true
         container.forgetChat(sessionId)
@@ -394,6 +385,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private data class PreparedTurn(
         val settings: AppSettings,
         val plan: ClaudeEngine.LaunchPlan,
+        /** The engine cancellation token registered when this turn was accepted. */
+        val cancelToken: Long,
     )
 
     /**
@@ -404,11 +397,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private fun launchTurn(block: suspend (PreparedTurn) -> Unit): Boolean {
         if (!_running.compareAndSet(false, true)) return false
         setRunning(true)
-        // A stop from the previous turn must not leak into this one.
-        container.engine.resetCancel()
+        // Every turn gets its own token: a stop aimed at the previous turn (or at an
+        // engine install) can no longer leak into this one.
+        val cancelToken = container.engine.beginTurn()
         job = scope.launch {
             try {
-                val prepared = prepareTurn() ?: return@launch
+                val prepared = prepareTurn(cancelToken) ?: return@launch
                 block(prepared)
             } finally {
                 withContext(NonCancellable) {
@@ -422,7 +416,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         return true
     }
 
-    private suspend fun prepareTurn(): PreparedTurn? {
+    private suspend fun prepareTurn(cancelToken: Long): PreparedTurn? {
         val settings = container.settings.flow.first()
         if (!settings.isConfigured) {
             appendError("还没有配置 API Key：请到「设置 → 接口」填写 Base URL 与 Key（本地地址可留空）")
@@ -437,11 +431,18 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             appendError("后端尚未就绪：请到「设置 → Claude Code 引擎」安装或修复内置 CLI")
             return null
         }
+        // A network switch can leave the jail on stale DNS; refresh before the
+        // CLI performs WebFetch's domain check, but never block a turn on it.
+        runCatching {
+            kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                container.engine.ensureNetworkConfig()
+            }
+        }.onFailure { Logx.e("本轮刷新容器 DNS 失败：${it.message}", container.appContext) }
         if (settings.apiFlavor == ApiFlavor.OPENAI && plan.proxyBaseUrl == null) {
             appendError("OpenAI 兼容代理启动失败，请检查端口占用后重试。")
             return null
         }
-        return PreparedTurn(settings, plan)
+        return PreparedTurn(settings, plan, cancelToken)
     }
 
     private suspend fun executeTurn(
@@ -454,6 +455,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     ) {
         val settings = prepared.settings
         val plan = prepared.plan
+        // Resolve the signature once: a later settings change must not retitle
+        // answers that this turn already produced.
+        val turnModel = chatModelLabel(settings)
         if (resetCliSession) claudeSessionId = null
 
         setStatus("准备中…")
@@ -475,7 +479,11 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             role = Role.USER,
             blocks = listOf(Block.Text(userText)),
         )
-        val assistant = ChatMessage(role = Role.ASSISTANT, streaming = true)
+        val assistant = ChatMessage(
+            role = Role.ASSISTANT,
+            streaming = true,
+            model = turnModel,
+        )
         _messages.value = baseMessages + userMsg + assistant
         emitMessages()
         persist()
@@ -494,6 +502,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                     resumeSessionId = resumeId,
                     settings = settings,
                     plan = plan,
+                    cancelToken = prepared.cancelToken,
                 ) { ev ->
                     // 「清空上下文」 during a turn must win over late stdout events.
                     if (turnGeneration != generation) return@runTurn
@@ -607,8 +616,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         if (turnGeneration != generation) return
 
         if (exitCode == -2) {
-            // Stop pressed: keep whatever the model produced, but close the message and
-            // any tool card so nothing keeps spinning after the turn is over.
+            // Stop pressed (or an engine install/uninstall): keep whatever the model
+            // produced, close the message and any tool card so nothing keeps spinning.
             mutateAssistant(assistant.id) {
                 it.copy(
                     streaming = false,
@@ -620,6 +629,23 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                         }
                     },
                 )
+            }
+            // A stopped turn that produced nothing used to close silently: the transcript
+            // kept an empty assistant bubble with no explanation. Always say what happened.
+            val stopped = _messages.value.firstOrNull { it.id == assistant.id }
+            val producedSomething = stopped?.blocks?.any {
+                (it is Block.Text && it.text.isNotBlank()) || it is Block.Tool || it is Block.Error
+            } == true
+            if (!producedSomething) {
+                val text = when (container.engine.cancelReason()) {
+                    CancelReason.ENGINE_INSTALL ->
+                        "引擎正在更新，本轮被中断。等更新完成后重新发送。"
+                    CancelReason.ENGINE_UNINSTALL ->
+                        "引擎已被卸载，本轮被中断。到「设置 → 引擎」重新安装后可以继续。"
+                    else -> "已停止本轮，模型还没有输出内容。可以重新发送。"
+                }
+                mutateAssistant(assistant.id) { appendError(it, text) }
+                emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
             }
             emitMessages()
             return
@@ -653,7 +679,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             val text = "CLI 退出码 $exitCode$tail$hint"
             mutateAssistant(assistant.id) { appendError(it, text) }
             emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
-        } else if (current?.blocks.isNullOrEmpty() && exitCode == 0) {
+        } else if (exitCode == 0 && !producedText && !alreadyReported &&
+            current?.blocks?.any { it is Block.Tool } != true
+        ) {
             val text = "模型没有返回任何内容。请确认接口支持工具调用，或换一个模型试试。"
             mutateAssistant(assistant.id) { appendError(it, text) }
             emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
@@ -678,7 +706,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     fun clear() {
         if (_running.value) {
-            container.engine.cancel()
+            container.engine.cancel(CancelReason.OTHER)
             job?.cancel()
         }
         generation += 1

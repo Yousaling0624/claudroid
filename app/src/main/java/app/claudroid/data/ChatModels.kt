@@ -43,6 +43,14 @@ data class ChatMessage(
     val costUsd: Double? = null,
     val durationMs: Long? = null,
     val streaming: Boolean = false,
+    /**
+     * Display label of the model that answered this turn, frozen when the turn
+     * started. The assistant header reads it instead of the live settings label,
+     * so switching tiers later does not rewrite the signatures of past answers.
+     * Null for messages written before this field existed; the UI falls back to
+     * the current label.
+     */
+    val model: String? = null,
 )
 
 @Serializable

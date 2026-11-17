@@ -4,6 +4,7 @@ import android.content.Context
 import app.claudroid.core.Paths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -205,23 +206,32 @@ class TerminalRunner(
             // The reader lives inside the try so the finally below always pairs chrootBegin
             // with chrootEnd: a stuck counter would permanently disable mount sweeps.
             val reader = launch {
-                process.inputStream.reader(Charsets.UTF_8).use { input ->
-                    val buffer = CharArray(4096)
-                    while (true) {
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        if (n == 0) continue
-                        val chunk = String(buffer, 0, n)
-                        val accepted = synchronized(output) {
-                            appendCapped(output, chunk, MAX_OUTPUT_CHARS)
+                try {
+                    process.inputStream.reader(Charsets.UTF_8).use { input ->
+                        val buffer = CharArray(4096)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            if (n == 0) continue
+                            val chunk = String(buffer, 0, n)
+                            val accepted = synchronized(output) {
+                                appendCapped(output, chunk, MAX_OUTPUT_CHARS)
+                            }
+                            if (accepted == null || accepted.length < chunk.length) {
+                                // Keep draining the pipe so the command can finish normally, but
+                                // stop growing memory and stop feeding the UI callback.
+                                truncated.set(true)
+                            }
+                            if (accepted != null) onOutput(accepted)
                         }
-                        if (accepted == null || accepted.length < chunk.length) {
-                            // Keep draining the pipe so the command can finish normally, but
-                            // stop growing memory and stop feeding the UI callback.
-                            truncated.set(true)
-                        }
-                        if (accepted != null) onOutput(accepted)
                     }
+                } catch (e: Exception) {
+                    // Cancellation closes the pipe from another thread, so the blocking
+                    // read wakes up with an IOException. That is a normal stop; letting
+                    // it escape would replace the parent's CancellationException and the
+                    // UI would report a failure instead of "已停止".
+                    if (!isActive) return@launch
+                    throw e
                 }
             }
 

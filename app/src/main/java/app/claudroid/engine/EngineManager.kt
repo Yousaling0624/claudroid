@@ -1,6 +1,11 @@
 package app.claudroid.engine
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
 import app.claudroid.core.Installation
 import app.claudroid.core.Logx
 import app.claudroid.core.Paths
@@ -10,13 +15,19 @@ import app.claudroid.data.AuthStyle
 import app.claudroid.data.EngineMode
 import app.claudroid.data.SettingsRepository
 import app.claudroid.engine.openai.OpenAiProxy
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -95,6 +106,21 @@ class EngineManager(
     @Volatile private var proxySignature: String = ""
     private val installLock = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** WebFetch's domain check fails when the jail keeps resolvers from a network
+     *  that has since gone away. These keep the jail's DNS files in step with Android. */
+    data class NetworkRefreshResult(
+        val changed: Boolean,
+        val skipped: Boolean,
+        val dns: String,
+        val message: String,
+    )
+
+    private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val networkLock = Mutex()
+    @Volatile private var lastNetworkFingerprint = ""
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkDebounce: Job? = null
+
     val rootExec = RootExec(ctx)
     val toolchain = Toolchain(ctx, rootExec)
     val engine = ClaudeEngine(ctx, rootExec)
@@ -104,6 +130,102 @@ class EngineManager(
     val state: StateFlow<State> = _state.asStateFlow()
 
     private fun installation(): Installation? = Paths.installation(ctx)
+
+    /**
+     * Ensures the jail uses the current network's DNS. Called on app start, on
+     * network changes, before a turn, and by the settings "刷新网络配置" action.
+     */
+    suspend fun ensureNetworkConfig(force: Boolean = false): NetworkRefreshResult =
+        networkLock.withLock {
+            val install = installation()
+                ?: return@withLock NetworkRefreshResult(
+                    changed = false,
+                    skipped = true,
+                    dns = toolchain.networkFingerprint(),
+                    message = "引擎尚未安装，网络配置会在安装完成后写入",
+                )
+            if (install.rootMode && !rootExec.isGranted()) {
+                return@withLock NetworkRefreshResult(
+                    changed = false,
+                    skipped = true,
+                    dns = toolchain.networkFingerprint(),
+                    message = "root 目录中的引擎需要 root 授权才能刷新 DNS",
+                )
+            }
+            val fingerprint = toolchain.networkFingerprint()
+            if (!force && fingerprint == lastNetworkFingerprint) {
+                return@withLock NetworkRefreshResult(
+                    changed = false,
+                    skipped = false,
+                    dns = fingerprint,
+                    message = "容器 DNS 已是最新",
+                )
+            }
+            val changed = runCatching { toolchain.refreshNetworkConfig(install) }
+                .onFailure { Logx.e("刷新容器 DNS 配置失败：${it.message}", ctx) }
+                .getOrDefault(false)
+            if (lastNetworkFingerprint != fingerprint) {
+                Logx.i(
+                    "网络 DNS 变化，已刷新容器配置" +
+                        if (changed) "" else "（文件无需改动）",
+                    ctx,
+                )
+            }
+            lastNetworkFingerprint = fingerprint
+            NetworkRefreshResult(
+                changed = changed,
+                skipped = false,
+                dns = fingerprint,
+                message = when {
+                    changed -> "已按当前网络刷新容器 DNS"
+                    install.rootMode && !rootExec.isGranted() ->
+                        "root 目录中的引擎需要 root 授权才能刷新 DNS"
+                    else -> "容器 DNS 已是最新，无需改动"
+                },
+            )
+        }
+
+    /** Watches default-network changes; DNS can change without the process restarting. */
+    fun startNetworkMonitoring() {
+        if (networkCallback != null) return
+        val manager = runCatching {
+            ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        }.getOrNull() ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = scheduleRefresh()
+
+            override fun onLinkPropertiesChanged(
+                network: Network,
+                linkProperties: LinkProperties,
+            ) = scheduleRefresh()
+
+            override fun onLost(network: Network) = scheduleRefresh()
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.registerDefaultNetworkCallback(callback)
+            } else {
+                @Suppress("DEPRECATION")
+                manager.registerNetworkCallback(
+                    android.net.NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build(),
+                    callback,
+                )
+            }
+            networkCallback = callback
+            scheduleRefresh()
+        }.onFailure { Logx.e("注册网络监听失败：${it.message}", ctx) }
+    }
+
+    private fun scheduleRefresh() {
+        networkDebounce?.cancel()
+        networkDebounce = networkScope.launch {
+            delay(300)
+            runCatching { ensureNetworkConfig(force = true) }
+                .onFailure { Logx.e("网络变化后刷新 DNS 失败：${it.message}", ctx) }
+        }
+    }
 
     /** Called once from Application.onCreate. */
     suspend fun bootstrap() = withContext(Dispatchers.IO) {
@@ -146,11 +268,10 @@ class EngineManager(
             }
             install(force = existing != null)
         } else {
-            // Existing installs never re-run configureJail, so the container's DNS config
-            // is refreshed here on every start (IPv4-first resolv.conf + gai.conf).
-            // Best-effort: a failure only logs, a stale resolver must not block startup.
-            runCatching { toolchain.refreshNetworkConfig(existing) }
-                .onFailure { Logx.e("刷新容器 DNS 配置失败：${it.message}", ctx) }
+            // Existing installs never re-run configureJail, so refresh the DNS
+            // for the current network and remember what we wrote.
+            runCatching { ensureNetworkConfig(force = true) }
+                .onFailure { Logx.e("启动时刷新容器 DNS 失败：${it.message}", ctx) }
             refreshChroot(existing)
             _state.update { it.copy(phase = Phase.Ready, stage = "就绪", fraction = 1f) }
             if (settings.autoUpdate) checkForUpdate(quiet = true)
@@ -178,7 +299,16 @@ class EngineManager(
         // than simply ignoring the second request.
         if (!installLock.compareAndSet(false, true)) return@withContext
         try {
-            engine.cancel()
+            // An install replaces the jail under the CLI's feet. Rather than silently
+            // cancelling a live conversation (the old behaviour), refuse and say why;
+            // the user can stop the turn or wait for it to finish and press again.
+            if (engine.isRunning) {
+                val message = "有对话正在进行，等本轮结束或先停止后再更新引擎。"
+                Logx.e(message, ctx)
+                _state.update { it.copy(error = message) }
+                return@withContext
+            }
+            engine.cancel(CancelReason.ENGINE_INSTALL)
             _state.update { it.copy(phase = Phase.Working, error = null, stage = "准备中", fraction = 0f) }
             runCatching {
                 val settings = settingsRepo.flow.first()
@@ -202,10 +332,10 @@ class EngineManager(
                 // The install swapped the jail into its official name; any su/busybox/
                 // chroot probe from an earlier attempt was for a different path.
                 rootExec.resetCache()
-                // An in-place CLI upgrade reuses the existing rootfs, so configureJail did
-                // not run; refresh the resolver config here as well (no-op when correct).
-                runCatching { toolchain.refreshNetworkConfig(installation) }
-                    .onFailure { Logx.e("刷新容器 DNS 配置失败：${it.message}", ctx) }
+                // An in-place CLI upgrade reuses the existing rootfs, so
+                // configureJail did not run; refresh DNS for this network.
+                runCatching { ensureNetworkConfig(force = true) }
+                    .onFailure { Logx.e("安装后刷新容器 DNS 失败：${it.message}", ctx) }
                 refreshChroot(installation)
                 _state.update {
                     it.copy(
@@ -528,7 +658,7 @@ class EngineManager(
 
     /** Removes the installed CLI. Sessions and the workspace survive unless asked for. */
     suspend fun uninstall(deleteWorkspace: Boolean = false) = withContext(Dispatchers.IO) {
-        engine.cancel()
+        engine.cancel(CancelReason.ENGINE_UNINSTALL)
         // cancel() only sets a flag and starts a reaper; the turn's `finally` (which
         // releases the jail and its chroot session) has not run yet. Deleting the tree
         // now would pull the rootfs out from under a live CLI, so wait for the turn.
@@ -680,10 +810,15 @@ class EngineManager(
         return env
     }
 
-    fun cancel() = engine.cancel()
+    fun cancel(reason: CancelReason = CancelReason.USER) = engine.cancel(reason)
 
-    /** Clears a stop from the previous turn before a new one starts. */
-    fun resetCancel() = engine.resetCancel()
+    /** Registers a turn; the token lets a later stop target exactly that turn. */
+    fun beginTurn(): Long = engine.beginTurn()
+
+    fun isCancelled(token: Long): Boolean = engine.isCancelled(token)
+
+    /** Why the turn was stopped, or null when it ran to completion. */
+    fun cancelReason(): CancelReason? = engine.cancelReason()
 
     /**
      * True while a chat turn holds the engine. The settings screen uses this to keep the

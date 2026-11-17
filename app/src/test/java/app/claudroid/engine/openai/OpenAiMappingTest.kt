@@ -228,6 +228,69 @@ class ModelCatalogTest {
     }
 
     @Test
+    fun `parses gateway metadata without dropping id-only entries`() {
+        val details = ModelCatalog.parseDetails(
+            """
+            {"data":[
+              {
+                "id":"auto/dfmodel","display_name":"DeepSeek-Flash",
+                "context_window":1000000,"max_output_tokens":128000,
+                "max_input_tokens":1000000,"owned_by":"qoder-cn",
+                "reasoning":true,"reasoning_levels":["low","high"],
+                "magpie_label":"DeepSeek routing","modalities":{"input":["text","image"]},
+                "supported_parameters":["tools","reasoning"]
+              },
+              {"id":"plain-model"}
+            ]}
+            """,
+        )
+        assertEquals(listOf("auto/dfmodel", "plain-model"), details.map { it.id })
+        val rich = details.first()
+        assertEquals("DeepSeek-Flash", rich.displayName)
+        assertEquals(1000000L, rich.contextWindow)
+        assertEquals(128000L, rich.maxOutputTokens)
+        assertEquals(1000000L, rich.maxInputTokens)
+        assertEquals("qoder-cn", rich.ownedBy)
+        assertTrue(rich.reasoning)
+        assertEquals(listOf("low", "high"), rich.reasoningLevels)
+        assertEquals("DeepSeek routing", rich.label)
+        assertEquals(listOf("text", "image"), rich.modalities)
+        assertEquals(listOf("tools", "reasoning"), rich.supportedParameters)
+        assertEquals("plain-model", details.last().id)
+    }
+
+    @Test
+    fun `merges duplicate ids and tolerates bad fields`() {
+        val details = ModelCatalog.parseDetails(
+            """
+            {"models":[
+              {"id":"dup","display_name":""},
+              {"id":"dup","display_name":"Dup","context_window":"1200","owned_by":"owner"},
+              {"id":"","display_name":"no id"},
+              {"name":"named"},
+              {"id":"bad","context_window":"many","reasoning":"true"}
+            ]}
+            """,
+        )
+        assertEquals(listOf("bad", "dup", "named"), details.map { it.id })
+        val dup = details.first { it.id == "dup" }
+        assertEquals("Dup", dup.displayName)
+        assertEquals(1200L, dup.contextWindow)
+        assertEquals("owner", dup.ownedBy)
+        val bad = details.first { it.id == "bad" }
+        assertEquals(null, bad.contextWindow)
+        assertTrue(bad.reasoning)
+    }
+
+    @Test
+    fun `parse still returns only ids in sorted order`() {
+        assertEquals(
+            listOf("a", "b"),
+            ModelCatalog.parse("""{"data":[{"id":"b","display_name":"B"},{"id":"a"}]}"""),
+        )
+    }
+
+    @Test
     fun `chat completions url handles both base forms`() {
         assertEquals(
             "https://gw.example.com/v1/chat/completions",

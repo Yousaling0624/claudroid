@@ -72,6 +72,18 @@ class WorkspaceFilesTest {
     }
 
     @Test
+    fun `resolve accepts workspace paths and rejects escapes`() {
+        val root = temp.newFolder("root")
+        val file = File(root, "sub/file.txt").apply { parentFile?.mkdirs(); writeText("ok") }
+        assertEquals(file, WorkspaceFiles.resolve(root, "sub/file.txt"))
+        assertEquals(file, WorkspaceFiles.resolve(root, "./sub/../sub/file.txt"))
+        assertEquals(root, WorkspaceFiles.resolve(root, ""))
+        assertNull(WorkspaceFiles.resolve(root, "../outside.txt"))
+        assertNull(WorkspaceFiles.resolve(root, "/etc/passwd"))
+        assertNull(WorkspaceFiles.resolve(root, "sub/\u0000file"))
+    }
+
+    @Test
     fun `mime types and sizes are human readable`() {
         val png = WorkspaceEntry(File("a.png"), "a.png", FileKind.IMAGE, 0, 0)
         assertEquals("image/png", WorkspaceFiles.mimeOf(png))

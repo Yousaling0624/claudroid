@@ -56,6 +56,18 @@ class ToolchainDnsTest {
     }
 
     @Test
+    fun `resolver fingerprints change with the network and stay stable otherwise`() {
+        val wifi = Toolchain.dnsLines(listOf("198.18.0.2", "192.168.2.1"))
+        val cellular = Toolchain.dnsLines(listOf("10.0.0.2"))
+        assertEquals(wifi, Toolchain.dnsLines(listOf("198.18.0.2", "192.168.2.1")))
+        assertTrue(wifi != cellular)
+        // The fingerprint includes the IPv4-first resolver list, so a DNS-only
+        // change on the same network still triggers a jail rewrite.
+        assertTrue(wifi.contains("198.18.0.2"))
+        assertFalse(cellular.contains("198.18.0.2"))
+    }
+
+    @Test
     fun `isIpv4 accepts only a strict dotted quad`() {
         listOf("1.2.3.4", "0.0.0.0", "255.255.255.255", "198.18.0.2")
             .forEach { assertTrue(it, Toolchain.isIpv4(it)) }

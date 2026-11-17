@@ -9,6 +9,9 @@ import app.claudroid.data.AuthStyle
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/** Who asked to stop the current turn; the controller turns this into the error text. */
+enum class CancelReason { USER, ENGINE_INSTALL, ENGINE_UNINSTALL, OTHER }
+
 /**
  * Owns the CLI child process for one conversation turn and turns its stdout into
  * [EngineEvent]s. One process per turn: the CLI is started with `-p` plus
@@ -42,7 +45,13 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
     }
 
     @Volatile private var process: Process? = null
-    @Volatile private var cancelled = false
+    /**
+     * Every stop bumps this counter. A turn remembers the value it started with and is
+     * cancelled only when the counter has moved past it, so a stop meant for an earlier
+     * turn can never leak into the next one (the old shared boolean did exactly that).
+     */
+    private val cancelGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var lastCancelReason: CancelReason? = null
     /** Pid file written by the launch wrapper: it holds the real CLI pid after `exec`. */
     @Volatile private var turnPidFile: File? = null
     @Volatile private var turnPidNeedsRoot = false
@@ -50,18 +59,27 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
 
     val isRunning: Boolean get() = process?.isAlive == true || turnLock.get()
 
-    /** Clears a stop left over from the previous turn; a new user turn starts un-cancelled. */
-    fun resetCancel() {
-        // Never clear the stop of a turn that is still winding down: another chat
-        // controller may send while this one is being stopped.
-        if (turnLock.get() || process != null) return
-        cancelled = false
+    /**
+     * Registers a new turn and returns its cancellation token. A stop pressed before this
+     * call has already moved the counter, but the returned token is the new value, so the
+     * pending turn still starts cleanly — unlike `resetCancel`, which refused to clear
+     * while a previous process was winding down and let that stop leak forward.
+     */
+    fun beginTurn(): Long {
+        lastCancelReason = null
+        return cancelGeneration.get()
     }
 
-    fun cancel() {
-        cancelled = true
+    fun isCancelled(token: Long): Boolean = cancelGeneration.get() > token
+
+    /** Why the current (or just-finished) turn was stopped, for a visible explanation. */
+    fun cancelReason(): CancelReason? = lastCancelReason
+
+    fun cancel(reason: CancelReason = CancelReason.USER) {
+        lastCancelReason = reason
+        cancelGeneration.incrementAndGet()
         // The process is set before the cancelled check after start, so either this sees
-        // it, or runTurn sees the flag and kills the process itself. No lost stops.
+        // it, or runTurn sees the token change and kills the process itself. No lost stops.
         val p = process ?: return
         reapAsync(p, turnPidFile, turnPidNeedsRoot)
     }
@@ -136,12 +154,13 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         }
     }
 
-    /** Blocks until the turn finishes. Returns the exit code, or -2 when the user stopped it. */
+    /** Blocks until the turn finishes. Returns the exit code, or -2 when [cancelToken] was stopped. */
     fun runTurn(
         prompt: String,
         resumeSessionId: String?,
         settings: AppSettings,
         plan: LaunchPlan,
+        cancelToken: Long,
         onEvent: (EngineEvent) -> Unit,
     ): Int {
         if (!turnLock.compareAndSet(false, true)) {
@@ -152,9 +171,9 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         // leaves bind mounts behind, and those must be swept even when the turn throws.
         val chrootSession = plan.useRoot && plan.useChroot
         try {
-            // A stop that arrived before this call (while settings/proxy were prepared)
-            // must win; resetCancel() is called by the controller before a new turn.
-            if (cancelled) return -2
+            // A stop that arrived after beginTurn() (while settings/proxy were prepared)
+            // must win.
+            if (isCancelled(cancelToken)) return -2
             val inst = plan.installation
             val binary = inst.binary()
             val loader = inst.loader()
@@ -282,7 +301,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             // Print mode never reads stdin. Closing it avoids the CLI's 3 s "no stdin data
             // received" grace period before the first request (and a warning on stderr).
             runCatching { p.outputStream.close() }
-            if (cancelled) {
+            if (isCancelled(cancelToken)) {
                 // Stop landed while the process was starting: cancel() saw no process, so
                 // this side owns the kill.
                 killTurn(p, pidFile, plan.useRoot || plan.prootViaRoot)
@@ -292,7 +311,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val stderrThread = Thread {
                 runCatching {
                     p.errorStream.bufferedReader().forEachLine { line ->
-                        if (line.isNotBlank() && !cancelled) {
+                        if (line.isNotBlank() && !isCancelled(cancelToken)) {
                             onEvent(EngineEvent.Log(line, isError = true))
                         }
                     }
@@ -302,13 +321,13 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val parser = StreamParser()
             TurnOutputPump(
                 stream = p.inputStream,
-                isCancelled = { cancelled },
+                isCancelled = { isCancelled(cancelToken) },
                 isProcessAlive = { p.isAlive },
                 onLine = { line -> parser.parse(line).forEach(onEvent) },
                 onFailure = { t -> onEvent(EngineEvent.Failed("读取输出失败：${t.message}")) },
             ).run()
 
-            if (cancelled) {
+            if (isCancelled(cancelToken)) {
                 // cancel()'s worker is already killing the pid/wrapper; wait a bounded
                 // amount so a new turn cannot start on top of a still-running CLI.
                 runCatching { p.waitFor(2_500, TimeUnit.MILLISECONDS) }
@@ -316,7 +335,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                 runCatching { p.waitFor() }
             }
             stderrThread.join(1_500)
-            val code = if (cancelled) -2 else runCatching { p.exitValue() }.getOrDefault(-1)
+            val code = if (isCancelled(cancelToken)) -2 else runCatching { p.exitValue() }.getOrDefault(-1)
             onEvent(EngineEvent.Exited(code))
             return code
         } finally {

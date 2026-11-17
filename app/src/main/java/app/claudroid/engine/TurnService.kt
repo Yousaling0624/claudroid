@@ -45,7 +45,7 @@ class TurnService : Service() {
         val open = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java).apply {
+            Intent(this, hostActivity()).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -77,11 +77,21 @@ class TurnService : Service() {
     private fun notificationManager(): NotificationManager =
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+    /**
+     * Flutter builds ship a different host: tapping the notification must land on the
+     * Flutter Activity directly, otherwise MainActivity's trampoline stacks a second
+     * Flutter host on top of the existing one. A class lookup keeps this file free of
+     * any Flutter type in the default build.
+     */
+    private fun hostActivity(): Class<*> =
+        runCatching { Class.forName(FLUTTER_HOST) }.getOrDefault(MainActivity::class.java)
+
     companion object {
         private const val CHANNEL_ID = "claudroid_turns"
         private const val NOTIFICATION_ID = 1001
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_DETAIL = "detail"
+        private const val FLUTTER_HOST = "app.claudroid.ui.FlutterHostActivity"
 
         fun start(context: Context, title: String, detail: String) {
             val intent = Intent(context, TurnService::class.java)

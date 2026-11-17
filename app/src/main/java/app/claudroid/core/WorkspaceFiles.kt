@@ -177,6 +177,26 @@ object WorkspaceFiles {
         canonicalTarget == canonicalRoot || canonicalTarget.path.startsWith(canonicalRoot.path + File.separator)
     }.getOrDefault(false)
 
+    /**
+     * Resolves a workspace-relative path (`""` is the root) and returns it only when it
+     * is still inside [root] after canonicalisation. Absolute paths, NUL bytes and
+     * symlinks pointing outside the workspace are rejected.
+     */
+    fun resolve(root: File, relative: String): File? {
+        val value = relative.trim().replace('\\', '/')
+        if (value.startsWith("/") || value.contains('\u0000')) return null
+        val parts = ArrayList<String>()
+        for (part in value.split('/')) {
+            when (part) {
+                "", "." -> Unit
+                ".." -> if (parts.isEmpty()) return null else parts.removeAt(parts.lastIndex)
+                else -> parts.add(part)
+            }
+        }
+        val target = if (parts.isEmpty()) root else File(root, parts.joinToString("/"))
+        return target.takeIf { isInside(root, it) }
+    }
+
     fun humanSize(bytes: Long): String = when {
         bytes >= 1L shl 30 -> "%.1f GB".format(bytes.toDouble() / (1L shl 30))
         bytes >= 1L shl 20 -> "%.1f MB".format(bytes.toDouble() / (1L shl 20))
