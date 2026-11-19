@@ -30,7 +30,7 @@
 | --- | --- |
 | 页面骨架、顶栏 | `PrismScaffold`；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`（静态页面色背板，图标键由内部 `TonalButtonTheme` 给玻璃胶囊），**不要**直接用 `ScaffoldBar` |
 | 容器 | `Surface`（`SurfaceLevel.page` / `.card` 取色） |
-| 设置项列表 | `generateSection` / `generateGroup` / `ListRow` / `DecorationListItem` |
+| 设置项列表 | `generateSection` / `generateGroup` / `ListRow` / `DecorationListItem`；根页用 `SettingsGroup` + `SettingsEntryRow` |
 | 分组行间距 | `ItemPosition.get(index, length)` 或 `ItemPositionProvider` |
 | 搜索框 | `SearchField` |
 | 弹出菜单 | `PopupAnchor` + `PopupMenu` + `PopupMenuItem` |
@@ -88,6 +88,9 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
 - 橙色 `primary` 只做**填充与图标**（发送/停止、当前会话标记、聚焦描边），单屏填充面积
   不超过 5%；正文里的链接、裸 URL、来源标题等**文字**场景用 `linkColor(scheme)`（浅色
   `#A64C2F`、深色 `#E8A184`），保证对比度。
+- 设置根页的图标徽章用 `palette.dart` 的 `SettingsTone`（clay / honey / sage）：每组一个
+  去饱和的暖色，`fill` 是圆形底、`ink` 是描边图标色，浅深色各有一套。不要在页面里另写
+  十六进制色值。
 
 ## 3. 材质与动画
 
@@ -223,15 +226,19 @@ FlClash 的观感来自这些统一的行高。
   解析按「文本 + 配色 + 回调 + 衬线」缓存，每条消息包一层 `RepaintBoundary`。
 - 橙色只用于焦点、发送/停止与当前会话标记，占屏不超过 5%。
 
-### 设置页 —— 借鉴 FlClash 排版
+### 设置页 —— 分组卡片 + 图标徽章
 
-FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列表，不是 Material 的卡片堆叠。
-设置页分两层：
+设置页借鉴 FlClash 的「分组标题 + 一组行 + 行尾值/箭头」结构，但根页改为一屏可读完的
+入口卡片，不再用 Material 的卡片堆叠：
 
-- **根页**只放入口行：三组「模型与引擎 / 应用 / 其他」，每行是
-  `SettingsEntryRow(glyph, title, subtitle, pageBuilder)`，用 `OpenContainer` 做行 → 页
-  展开转场。副标题只放一行实时状态（服务商 · 模型、引擎版本/进度、开关数、主题、
-  自动更新/轮数、版本/发布状态）；不写长篇说明。
+- **根页**只放入口行：三组「模型与引擎 / 应用 / 其他」，每组是 `SettingsGroup`
+  （组标题 + 圆角 22dp 的 `surfaceBright` 卡片 + 发丝分隔线）。每行是
+  `SettingsEntryRow(glyph, title, value, tone, pageBuilder)`，左侧 42dp 圆形图标徽章，
+  行尾只放一行实时值（服务商 · 模型、引擎版本/进度、开关数、主题、自动更新/轮数、
+  版本/发布状态）与 chevron，长值省略；不写第二行说明。行 → 页仍用 `OpenContainer`
+  做展开转场。
+- 根页顶栏标题居中、字号放大到 `AppTextStyle.headline`（`ClaudroidBar.centerTitle`），
+  与分组卡片一起构成参考稿的层级。二级页也复用同一个居中标题，标题始终固定在顶栏。
 - **二级页**沿用 FlClash 的 `ListRow` 语言：`SettingsScaffold` + `generateSection`，
   选择类设置用 `PopupAnchor` 弹出 `PopupMenu`，**行尾只显示当前值**，不写解释性副标题
   （用户要求「去除所有说明文字来降低行长」）。
@@ -251,7 +258,6 @@ FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列�
 - **模型选择器**在打开时自动（或按按钮强制）拉取，loading / error / empty / 列表
   四种状态用 `AnimatedSwitcher` 过渡固定高度内容区；失败时给出「确认 Base URL、API Key
   与协议后重试」并保留重试按钮；元数据 chip 用 `TonalChip`。
-- 二级页标题固定在顶栏，**不要**把页面标题放进列表内容里。
 - 模型选择器显示 `displayName`、ID、上下文/输出/推理 chips，按 `owned_by` 分组并支持
   搜索；「手动输入」保留纯文本回退。选默认模型会同时清空 `activeTier`。
 - 二级页不再逐行加图标；图标只作为根页的导航语言，避免设置项列表变成图标墙。
@@ -285,11 +291,18 @@ FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列�
 
 - 结构照 `SessionDrawer.kt`：品牌行 + 收起、新对话胶囊、搜索、按日分组、底部固定引擎状态
   胶囊与工作区/设置圆钮。搜索同时匹配标题与 Kotlin 传来的 `searchText`，没有内容的会话不显示。
+- 品牌行是 38dp 主色圆形徽章 + `AppTextStyle.headline` 的「Claudroid」，右侧收起键走
+  `TonalButtonTheme(glass: true)` 的玻璃圆钮；「新对话」是整行 `primaryContainer` 胶囊
+  （加号 + 文案），不再用白卡片。
+- 搜索框是 `surfaceContainerHigh` 的整圆胶囊（高 50dp），内部复用 `SearchField`；下方
+  「全部对话」行只显示实时条数，不放假 chevron/筛选菜单。
 - 分组语义与 `SessionGrouping.kt` 完全一致：今天 / 昨天 / 过去 7 天 / 更早，`updatedAt` 倒序。
-- 每行的副标题是 `session.preview`（为空时回退时间），时间以 caption 放在 `…` 左侧；
-  选中行在左侧加 3dp 主色细条，不铺底。
-- 底部引擎胶囊在 `latestVersion` 存在且不等于 `installedVersion` 时追加「可更新」并点亮
-  主色圆点；点击仍进设置。
+- 会话行只显示标题、时间与 `…`；不再显示 `session.preview` 的第二行。选中行铺
+  `surfaceContainerHigh` 圆角胶囊并加粗标题（不再画左侧细条），未选中行透明。
+- 底部引擎胶囊是两行结构：左侧圆形 cpu 徽章，中间 `engineLabel` + 状态行（运行中 /
+  准备中 / 可更新 / 不可用 / 未就绪），行尾 `Glyphs.picker`；`latestVersion` 存在且不等于
+  `installedVersion` 时状态行显示「可更新」并点亮主色圆点。点击仍进设置。
+- 工作区与设置是 44dp 玻璃圆钮，与顶栏图标键同材质。
 - 每行的 `…` 菜单只有「重命名」「删除对话」两项；删除是**红色且立即执行**，不弹二次确认。
 - 左侧抽屉用 `left_side_sheet.dart`：宽 `屏宽 * 0.88` 夹在 300–560dp，300ms 从
   `Offset(-1, 0)` 滑入、200ms 滑出；barrier 点击、返回键与抽屉内按钮均可关闭。
@@ -307,9 +320,11 @@ FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列�
 Material Icons。
 
 设置根页的分类图标继续用同一套线条拟物语言（24 单位网格、1.8 主体描边、detail 次级
-描边）：`key`（服务与模型）、`cpu`（引擎）、`flask`（功能与实验）、`paintbrush`（外观）、
-`sliders`（高级）、`clipboardPulse`（关于与诊断），工作区复用 `folder`。其中 `key`、
-`cpu`、`paintbrush`、`sliders` 移植自 FlClash 的 `AppGlyphs`，来源与 GPLv3 声明见
+描边）：`key`（服务与模型）、`cpu`（引擎，也用于抽屉底部状态胶囊）、`flask`（功能与实验）、
+`paintbrush`（外观）、`sliders`（高级）、`clipboardPulse`（关于与诊断），工作区复用
+`folder`。根页图标一律装进 42dp 的 `SettingsTone` 圆形徽章（clay / honey / sage，按分组），
+徽章负责颜色识别，图标本身仍用 `ink` 色描边。其中 `key`、`cpu`、`paintbrush`、`sliders`
+移植自 FlClash 的 `AppGlyphs`，来源与 GPLv3 声明见
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)；`flask` 与 `clipboardPulse` 按同一
 网格新画。
 

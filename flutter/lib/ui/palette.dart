@@ -99,3 +99,35 @@ ColorScheme _buildScheme(Brightness brightness) {
 /// for fills and icons; it is too light for body-size text on paper.
 Color linkColor(ColorScheme scheme) =>
     scheme.brightness == Brightness.dark ? _accentInkDark : _accentInkLight;
+
+/// Accent pairs for the settings hub's icon badges.
+///
+/// The reference layout gives every section its own colour, but Claude's
+/// palette is all paper and clay: these three tones stay desaturated enough
+/// to sit on the warm surfaces without turning the hub into a colour wall.
+enum SettingsTone { clay, honey, sage }
+
+class ToneColors {
+  const ToneColors({required this.ink, required this.fill});
+
+  /// Glyph colour; tuned for contrast against [fill].
+  final Color ink;
+
+  /// Circular badge behind the glyph.
+  final Color fill;
+}
+
+ToneColors settingsTone(ColorScheme scheme, SettingsTone tone) {
+  final dark = scheme.brightness == Brightness.dark;
+  return switch (tone) {
+    SettingsTone.clay => dark
+        ? const ToneColors(ink: Color(0xFFE8A184), fill: Color(0xFF3A241B))
+        : const ToneColors(ink: Color(0xFFB4543A), fill: Color(0xFFF4E1D5)),
+    SettingsTone.honey => dark
+        ? const ToneColors(ink: Color(0xFFE0B96A), fill: Color(0xFF342B18))
+        : const ToneColors(ink: Color(0xFF94660F), fill: Color(0xFFF3E8CC)),
+    SettingsTone.sage => dark
+        ? const ToneColors(ink: Color(0xFFA9C0AA), fill: Color(0xFF232C22))
+        : const ToneColors(ink: Color(0xFF55705A), fill: Color(0xFFE4EBE1)),
+  };
+}

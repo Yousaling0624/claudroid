@@ -22,6 +22,7 @@ class ClaudroidBar extends StatefulWidget implements PreferredSizeWidget {
     this.leading,
     this.title,
     this.actions = const [],
+    this.centerTitle = false,
   });
 
   final bool isCompact;
@@ -32,6 +33,10 @@ class ClaudroidBar extends StatefulWidget implements PreferredSizeWidget {
   final WidgetBuilder? leading;
   final WidgetBuilder? title;
   final List<WidgetBuilder> actions;
+
+  /// Settings uses the reference layout's screen-centred title; chat and home
+  /// keep the title beside the menu key so the model capsule stays reachable.
+  final bool centerTitle;
 
   @override
   Size get preferredSize =>
@@ -148,34 +153,63 @@ class _ClaudroidBarState extends State<ClaudroidBar> {
                           const SizedBox(width: 4),
                         if (title != null)
                           Expanded(
-                            child: Align(
-                              alignment: AlignmentDirectional.centerStart,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                ),
-                                child: MediaQuery.withClampedTextScaling(
-                                  maxScaleFactor: 1.34,
-                                  child: DefaultTextStyle(
-                                    style: AppTextStyle.title3
-                                        .of(context)
-                                        .copyWith(color: scheme.onSurface),
-                                    softWrap: false,
-                                    overflow: TextOverflow.ellipsis,
-                                    child: Semantics(
-                                      namesRoute: true,
-                                      header: true,
-                                      child: title(context),
-                                    ),
-                                  ),
-                                ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
                               ),
+                              child: widget.centerTitle
+                                  ? Center(
+                                      child: MediaQuery.withClampedTextScaling(
+                                        maxScaleFactor: 1.34,
+                                        child: DefaultTextStyle(
+                                          style: AppTextStyle.title3
+                                              .of(context)
+                                              .copyWith(
+                                                color: scheme.onSurface,
+                                              ),
+                                          softWrap: false,
+                                          overflow: TextOverflow.ellipsis,
+                                          child: Semantics(
+                                            namesRoute: true,
+                                            header: true,
+                                            child: title(context),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : Align(
+                                      alignment:
+                                          AlignmentDirectional.centerStart,
+                                      child: MediaQuery.withClampedTextScaling(
+                                        maxScaleFactor: 1.34,
+                                        child: DefaultTextStyle(
+                                          style: AppTextStyle.title3
+                                              .of(context)
+                                              .copyWith(
+                                                color: scheme.onSurface,
+                                              ),
+                                          softWrap: false,
+                                          overflow: TextOverflow.ellipsis,
+                                          child: Semantics(
+                                            namesRoute: true,
+                                            header: true,
+                                            child: title(context),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                             ),
                           ),
                         for (final action in actions) ...[
                           const SizedBox(width: 4),
                           LiquidGlassMorph(child: action),
                         ],
+                        // Keep a centred title truly centred when there is no
+                        // trailing action to balance the back key.
+                        if (widget.centerTitle &&
+                            leading != null &&
+                            actions.isEmpty)
+                          const SizedBox(width: 44),
                       ],
                     ),
                   ),

@@ -82,6 +82,8 @@ class _SessionDrawerState extends State<SessionDrawer> {
     final scheme = context.colorScheme;
     final safe = MediaQuery.paddingOf(context);
     final groups = _group(widget.sessions, _query);
+    final count =
+        groups.fold<int>(0, (sum, group) => sum + group.sessions.length);
 
     return Surface(
       color: SurfaceLevel.page.colorOf(scheme),
@@ -93,22 +95,30 @@ class _SessionDrawerState extends State<SessionDrawer> {
             _header(context),
             _newChat(context),
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: SearchField(
-                controller: _search,
-                hintText: '搜索对话',
-                height: 44,
-                onChanged: (value) => setState(() => _query = value),
-                trailing: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _search.clear();
-                          setState(() => _query = '');
-                        },
-                        icon: const GlyphIcon(Glyphs.close, size: 16),
-                        tooltip: '清空搜索',
-                      ),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+              child: Container(
+                height: 50,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh,
+                  borderRadius: AppRadius.full,
+                ),
+                child: SearchField(
+                  controller: _search,
+                  hintText: '搜索对话',
+                  height: 50,
+                  onChanged: (value) => setState(() => _query = value),
+                  trailing: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          onPressed: () {
+                            _search.clear();
+                            setState(() => _query = '');
+                          },
+                          icon: const GlyphIcon(Glyphs.close, size: 16),
+                          tooltip: '清空搜索',
+                        ),
+                ),
               ),
             ),
             Expanded(
@@ -117,20 +127,30 @@ class _SessionDrawerState extends State<SessionDrawer> {
                   : ListView(
                       padding: const EdgeInsets.only(bottom: 8),
                       children: [
-                        for (final group in groups)
-                          generateSection(
-                            title: group.label,
-                            items: [
-                              for (final session in group.sessions)
-                                _SessionRow(
-                                  session: session,
-                                  selected: session.id == widget.activeId,
-                                  onPressed: () => widget.onSelect(session.id),
-                                  onRename: () => _rename(session),
-                                  onDelete: () => _delete(session),
-                                ),
-                            ],
+                        _allConversations(context, count),
+                        for (final group in groups) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+                            child: Text(
+                              group.label,
+                              style: AppTextStyle.footnote
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: scheme.onSurfaceVariant),
+                            ),
                           ),
+                          for (final session in group.sessions)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                              child: _SessionRow(
+                                session: session,
+                                selected: session.id == widget.activeId,
+                                onPressed: () => widget.onSelect(session.id),
+                                onRename: () => _rename(session),
+                                onDelete: () => _delete(session),
+                              ),
+                            ),
+                        ],
                       ],
                     ),
             ),
@@ -141,26 +161,60 @@ class _SessionDrawerState extends State<SessionDrawer> {
     );
   }
 
+  /// The reference drawer's "all conversations" row: a quiet list title with
+  /// the live count, so the grouping below reads as a drill-down not a flat
+  /// log. There is no filter menu yet, so no chevron advertises one.
+  Widget _allConversations(BuildContext context, int count) {
+    final scheme = context.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: Row(
+        children: [
+          Text(
+            '全部对话',
+            style: AppTextStyle.callout.of(context, emphasized: true),
+          ),
+          const Spacer(),
+          Text(
+            '$count 条',
+            style: AppTextStyle.caption2
+                .of(context)
+                .copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Pinned footer, the same shape as `DrawerEnginePill` in the Compose drawer:
-  /// a status capsule that opens settings, then workspace and settings buttons.
+  /// a two-line status capsule that opens settings, then workspace and settings
+  /// glass buttons.
   Widget _footer(BuildContext context) {
     final scheme = context.colorScheme;
     final engine = widget.engine;
-    final dot = engine.phase == 'Failed'
-        ? scheme.error
-        : engine.ready
-            ? scheme.success
-            : engine.phase == 'Working'
-                ? scheme.primary
-                : scheme.onSurfaceVariant;
-    final baseLabel = engine.engineLabel.isEmpty ? '引擎状态' : engine.engineLabel;
     final updateAvailable = engine.installedVersion != null &&
         engine.latestVersion != null &&
         engine.latestVersion != engine.installedVersion;
-    final label = updateAvailable ? '$baseLabel · 可更新' : baseLabel;
-    final dotColor = updateAvailable
-        ? scheme.primary
-        : dot;
+    final title = engine.engineLabel.isEmpty ? '引擎状态' : engine.engineLabel;
+    final String status;
+    final Color dot;
+    if (engine.phase == 'Failed') {
+      status = '不可用';
+      dot = scheme.error;
+    } else if (engine.phase == 'Working') {
+      final stage = engine.stage.isEmpty ? '正在准备' : engine.stage;
+      status = '$stage ${(engine.fraction * 100).round()}%';
+      dot = scheme.primary;
+    } else if (updateAvailable) {
+      status = '可更新';
+      dot = scheme.primary;
+    } else if (engine.ready) {
+      status = '运行中';
+      dot = scheme.success;
+    } else {
+      status = '未就绪';
+      dot = scheme.onSurfaceVariant;
+    }
     return Padding(
       padding: EdgeInsets.fromLTRB(
         12,
@@ -173,38 +227,80 @@ class _SessionDrawerState extends State<SessionDrawer> {
           Expanded(
             child: Semantics(
               button: true,
-              label: '引擎状态：$label，打开引擎设置',
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () =>
+              label: '引擎状态：$title · $status，打开引擎设置',
+              child: PressSurface(
+                fill: scheme.surfaceContainerHigh,
+                shape: AppShape.full,
+                onPressed: () =>
                     widget.onSettings(SettingsDestination.engine),
-                child: Container(
-                  height: 46,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHigh,
-                    borderRadius: AppRadius.full,
-                  ),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: SizedBox(
+                  height: 56,
                   child: Row(
                     children: [
                       Container(
-                        width: 7,
-                        height: 7,
+                        width: 36,
+                        height: 36,
                         decoration: BoxDecoration(
-                          color: dotColor,
+                          color: scheme.surfaceBright,
                           shape: BoxShape.circle,
                         ),
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.footnote.of(context).copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
+                        child: Center(
+                          child: GlyphIcon(
+                            AppGlyphs.cpu,
+                            size: 18,
+                            color: scheme.primary,
+                          ),
                         ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyle.footnote
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: scheme.onSurface),
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: dot,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                                Expanded(
+                                  child: Text(
+                                    status,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyle.caption2
+                                        .of(context)
+                                        .copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GlyphIcon(
+                        Glyphs.picker,
+                        size: 14,
+                        color: scheme.onSurfaceVariant,
                       ),
                     ],
                   ),
@@ -213,14 +309,15 @@ class _SessionDrawerState extends State<SessionDrawer> {
             ),
           ),
           const SizedBox(width: 8),
-          IconButton(
+          _GlassIconButton(
             onPressed: widget.onWorkspace,
-            icon: const GlyphIcon(AppGlyphs.folder, size: 19),
+            glyph: AppGlyphs.folder,
             tooltip: '工作区',
           ),
-          IconButton(
+          const SizedBox(width: 8),
+          _GlassIconButton(
             onPressed: () => widget.onSettings(SettingsDestination.root),
-            icon: const GlyphIcon(AppGlyphs.settings, size: 19),
+            glyph: AppGlyphs.settings,
             tooltip: '设置',
           ),
         ],
@@ -230,28 +327,40 @@ class _SessionDrawerState extends State<SessionDrawer> {
 
   Widget _header(BuildContext context) {
     final scheme = context.colorScheme;
-    return SizedBox(
-      height: 56,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 18, right: 8),
-        child: Row(
-          children: [
-            GlyphIcon(AppGlyphs.sparkle, size: 17, color: scheme.primary),
-            const SizedBox(width: 7),
-            Text(
-              'Claudroid',
-              style: AppTextStyle.headline
-                  .of(context)
-                  .copyWith(color: scheme.onSurface),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 10, 0),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              shape: BoxShape.circle,
             ),
-            const Spacer(),
-            IconButton(
-              onPressed: widget.onClose,
-              icon: const GlyphIcon(Glyphs.close, size: 18),
-              tooltip: '收起',
+            child: Center(
+              child: GlyphIcon(
+                AppGlyphs.sparkle,
+                size: 20,
+                color: scheme.primary,
+              ),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'Claudroid',
+            style: AppTextStyle.headline
+                .of(context)
+                .copyWith(color: scheme.onSurface),
+          ),
+          const Spacer(),
+          _GlassIconButton(
+            onPressed: widget.onClose,
+            glyph: Glyphs.close,
+            size: 18,
+            tooltip: '收起',
+          ),
+        ],
       ),
     );
   }
@@ -259,19 +368,28 @@ class _SessionDrawerState extends State<SessionDrawer> {
   Widget _newChat(BuildContext context) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Card(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+      child: PressSurface(
+        fill: scheme.primaryContainer,
+        shape: AppShape.full,
         onPressed: widget.onNew,
+        padding: EdgeInsets.zero,
         child: SizedBox(
-          height: 52,
+          height: 50,
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              GlyphIcon(AppGlyphs.plus, size: 18, color: scheme.primary),
+              GlyphIcon(
+                AppGlyphs.plus,
+                size: 18,
+                color: scheme.onPrimaryContainer,
+              ),
               const SizedBox(width: 8),
               Text(
                 '新对话',
-                style: AppTextStyle.callout.of(context, emphasized: true),
+                style: AppTextStyle.callout
+                    .of(context, emphasized: true)
+                    .copyWith(color: scheme.onPrimaryContainer),
               ),
             ],
           ),
@@ -334,71 +452,88 @@ class _SessionRowState extends State<_SessionRow> {
   Widget build(BuildContext context) {
     final session = widget.session;
     final scheme = context.colorScheme;
-    final preview = session.preview.trim();
-    return DecorationListItem(
-      isSelected: widget.selected,
+    return PressSurface(
+      fill: widget.selected
+          ? scheme.surfaceContainerHigh
+          : const Color(0x00000000),
+      shape: AppShape.all(AppCorner.md),
       onPressed: widget.onPressed,
-      title: Row(
-        children: [
-          if (widget.selected) ...[
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: scheme.primary,
-                shape: BoxShape.circle,
+      padding: EdgeInsets.zero,
+      child: SizedBox(
+        height: 52,
+        child: Row(
+          children: [
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                session.title.isEmpty ? '新对话' : session.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyle.callout
+                    .of(context, emphasized: widget.selected)
+                    .copyWith(color: scheme.onSurface),
               ),
             ),
-            const SizedBox(width: 7),
+            const SizedBox(width: 8),
+            Text(
+              sessionTimeLabel(session.updatedAt),
+              style: AppTextStyle.caption2
+                  .of(context)
+                  .copyWith(color: scheme.onSurfaceVariant),
+            ),
+            PopupAnchor(
+              targetBuilder: (open) => IconButton(
+                onPressed: open,
+                icon: const GlyphIcon(Glyphs.more, size: 18),
+                tooltip: '对话选项',
+              ),
+              popupBuilder: (_) => PopupMenu(
+                items: [
+                  PopupMenuItem(
+                    label: '重命名',
+                    glyph: AppGlyphs.edit,
+                    onPressed: widget.onRename,
+                  ),
+                  PopupMenuItem(
+                    label: '删除对话',
+                    glyph: AppGlyphs.trash,
+                    danger: true,
+                    onPressed: widget.onDelete,
+                  ),
+                ],
+              ),
+            ),
           ],
-          Expanded(
-            child: Text(
-              session.title.isEmpty ? '新对话' : session.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+        ),
       ),
-      subtitle: preview.isEmpty
-          ? null
-          : Text(
-              preview,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            sessionTimeLabel(session.updatedAt),
-            style: AppTextStyle.caption2.of(context).copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-          ),
-          PopupAnchor(
-            targetBuilder: (open) => IconButton(
-              onPressed: open,
-              icon: const GlyphIcon(Glyphs.more, size: 18),
-              tooltip: '对话选项',
-            ),
-            popupBuilder: (_) => PopupMenu(
-              items: [
-                PopupMenuItem(
-                  label: '重命名',
-                  glyph: AppGlyphs.edit,
-                  onPressed: widget.onRename,
-                ),
-                PopupMenuItem(
-                  label: '删除对话',
-                  glyph: AppGlyphs.trash,
-                  danger: true,
-                  onPressed: widget.onDelete,
-                ),
-              ],
-            ),
-          ),
-        ],
+    );
+  }
+}
+
+/// A circular glass icon key, the same material as the bar's icon buttons.
+class _GlassIconButton extends StatelessWidget {
+  const _GlassIconButton({
+    required this.onPressed,
+    required this.glyph,
+    required this.tooltip,
+    this.size = 19,
+  });
+
+  final VoidCallback onPressed;
+  final Glyph glyph;
+  final String tooltip;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return TonalButtonTheme(
+      glass: true,
+      grouped: false,
+      size: TonalButtonSize.bar,
+      child: IconButton(
+        onPressed: onPressed,
+        icon: GlyphIcon(glyph, size: size),
+        tooltip: tooltip,
       ),
     );
   }

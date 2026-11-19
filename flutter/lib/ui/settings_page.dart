@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import 'glyphs.dart';
+import 'palette.dart';
 import 'settings/about_page.dart';
 import 'settings/advanced_page.dart';
 import 'settings/appearance_page.dart';
@@ -84,62 +85,69 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '设置',
       listenable: _controller,
       builder: (context) => [
-        generateSection(
+        SettingsGroup(
           title: '模型与引擎',
-          items: [
+          first: true,
+          children: [
             SettingsEntryRow(
               key: const ValueKey('settings-service'),
               glyph: AppGlyphs.key,
               title: '服务与模型',
-              subtitle: _controller.providerSummary,
+              value: _controller.providerSummary,
+              tone: SettingsTone.clay,
               pageBuilder: (_) => ServiceModelsPage(controller: _controller),
             ),
             SettingsEntryRow(
               key: const ValueKey('settings-engine'),
               glyph: AppGlyphs.cpu,
               title: 'Claude Code 引擎',
-              subtitle: _controller.engineSummary,
+              value: _controller.engineSummary,
+              tone: SettingsTone.clay,
               pageBuilder: (_) => EnginePage(controller: _controller),
             ),
             SettingsEntryRow(
               key: const ValueKey('settings-features'),
               glyph: AppGlyphs.flask,
               title: '功能与实验',
-              subtitle: _controller.featuresSummary,
+              value: _controller.featuresSummary,
+              tone: SettingsTone.clay,
               pageBuilder: (_) => FeaturesPage(controller: _controller),
             ),
           ],
         ),
-        generateSection(
+        SettingsGroup(
           title: '应用',
-          items: [
+          children: [
             SettingsEntryRow(
               key: const ValueKey('settings-appearance'),
               glyph: AppGlyphs.paintbrush,
               title: '外观',
-              subtitle: enumLabel(
+              value: enumLabel(
                 themeLabels,
                 _controller.settings.intOr('themeMode'),
               ),
+              tone: SettingsTone.honey,
               pageBuilder: (_) => AppearancePage(controller: _controller),
             ),
             SettingsEntryRow(
               key: const ValueKey('settings-advanced'),
               glyph: AppGlyphs.sliders,
               title: '高级',
-              subtitle: _controller.advancedSummary,
+              value: _controller.advancedSummary,
+              tone: SettingsTone.honey,
               pageBuilder: (_) => AdvancedPage(controller: _controller),
             ),
           ],
         ),
-        generateSection(
+        SettingsGroup(
           title: '其他',
-          items: [
+          children: [
             SettingsEntryRow(
               key: const ValueKey('settings-workspace'),
               glyph: AppGlyphs.folder,
               title: '工作区',
-              subtitle: '文件、预览与终端',
+              value: '文件与预览',
+              tone: SettingsTone.sage,
               onTap: () => BaseNavigator.push<void>(
                 context,
                 WorkspacePage(bridge: widget.bridge, onToast: widget.onToast),
@@ -149,7 +157,8 @@ class _SettingsPageState extends State<SettingsPage> {
               key: const ValueKey('settings-about'),
               glyph: AppGlyphs.clipboardPulse,
               title: '关于与诊断',
-              subtitle: _controller.aboutSummary,
+              value: _controller.aboutSummary,
+              tone: SettingsTone.sage,
               pageBuilder: (_) => AboutPage(controller: _controller),
             ),
           ],

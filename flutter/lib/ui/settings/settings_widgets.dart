@@ -5,6 +5,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../glyphs.dart';
 import '../layout.dart';
+import '../palette.dart';
 import '../scaffold_bar.dart';
 
 /// A settings page: floating bar, back button, and a grouped list that rebuilds
@@ -30,6 +31,7 @@ class SettingsScaffold extends StatelessWidget {
     return PrismScaffold(
       bar: ClaudroidBar(
         isCompact: context.isInCompactSheet,
+        centerTitle: true,
         listenable: listenable,
         loading: settingsNeverValue,
         leading: (context) => IconButton(
@@ -37,7 +39,12 @@ class SettingsScaffold extends StatelessWidget {
           icon: const GlyphIcon(Glyphs.arrowBack),
           tooltip: '返回',
         ),
-        title: (context) => Text(title),
+        title: (context) => Text(
+          title,
+          style: AppTextStyle.headline
+              .of(context)
+              .copyWith(color: context.colorScheme.onSurface),
+        ),
         actions: [for (final action in actions) (context) => action],
       ),
       body: ContentWidth(
@@ -59,49 +66,176 @@ class SettingsScaffold extends StatelessWidget {
   }
 }
 
-/// A root-settings entry: icon, title, live subtitle, chevron. On mobile it
-/// opens [pageBuilder] with prism_ui's container transition, the way FlClash's
-/// `ListItem.open` does; a row with [onTap] stays plain.
+/// A settings hub section: a quiet header, then one rounded card holding the
+/// rows. The hub deliberately leaves FlClash's flush list behind — the card
+/// carries the grouping, so the rows can breathe and lead with a tinted glyph
+/// badge the way the reference layout does.
+class SettingsGroup extends StatelessWidget {
+  const SettingsGroup({
+    super.key,
+    required this.title,
+    required this.children,
+    this.first = false,
+  });
+
+  final String title;
+  final List<Widget> children;
+
+  /// First group sits closer to the bar; the rest get the section gap.
+  final bool first;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final radius = BorderRadius.circular(22);
+    final divider = scheme.outlineVariant.withValues(alpha: 0.55);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(8, first ? 4 : 26, 8, 10),
+            child: Text(
+              title,
+              style: AppTextStyle.callout
+                  .of(context, emphasized: true)
+                  .copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: scheme.surfaceBright,
+              borderRadius: radius,
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.6),
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: radius,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var index = 0; index < children.length; index++) ...[
+                    if (index > 0)
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(start: 66),
+                        child: Container(height: 1, color: divider),
+                      ),
+                    children[index],
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A root-settings entry: tinted glyph badge, title, live status value and a
+/// chevron. On mobile it opens [pageBuilder] with prism_ui's container
+/// transition, the way FlClash's `ListItem.open` does; a row with [onTap]
+/// stays plain.
 class SettingsEntryRow extends StatelessWidget {
   const SettingsEntryRow({
     super.key,
     required this.glyph,
     required this.title,
-    this.subtitle,
+    this.value,
+    this.tone = SettingsTone.clay,
     this.pageBuilder,
     this.onTap,
   }) : assert(pageBuilder != null || onTap != null);
 
   final Glyph glyph;
   final String title;
-  final String? subtitle;
+
+  /// One-line live status on the trailing side; long values ellipsize.
+  final String? value;
+  final SettingsTone tone;
   final WidgetBuilder? pageBuilder;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = this.subtitle;
-    Widget row(VoidCallback? open) => DecorationListItem(
-      leading: GlyphIcon(glyph),
-      title: Text(title),
-      subtitle: subtitle == null
-          ? null
-          : Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: const GlyphIcon(Glyphs.chevronForward),
+    final scheme = context.colorScheme;
+    final value = this.value;
+    Widget row(VoidCallback open) => PressSurface(
+      fill: const Color(0x00000000),
+      shape: AppShape.all(AppCorner.md),
       onPressed: open,
+      padding: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+        child: Row(
+          children: [
+            _GlyphBadge(glyph: glyph, tone: tone),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyle.callout.of(context),
+              ),
+            ),
+            if (value != null && value.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 100),
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: AppTextStyle.footnote
+                      .of(context)
+                      .copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+            const SizedBox(width: 4),
+            GlyphIcon(
+              Glyphs.chevronForward,
+              size: 16,
+              color: scheme.onSurfaceVariant.withValues(alpha: 0.8),
+            ),
+          ],
+        ),
+      ),
     );
 
     final pageBuilder = this.pageBuilder;
     if (pageBuilder == null) {
-      return row(onTap);
+      return row(onTap!);
     }
-    final position = ItemPositionProvider.of(context)?.position;
     return OpenContainer<void>(
-      closedShape: position == null
-          ? null
-          : AppShape.of(listItemRadiusOf(position)),
+      closedShape: AppShape.all(AppCorner.md),
       closedBuilder: (context, open) => row(open),
       openBuilder: (context, _) => pageBuilder(context),
+    );
+  }
+}
+
+/// The circular, tinted badge that gives each hub section its colour.
+class _GlyphBadge extends StatelessWidget {
+  const _GlyphBadge({required this.glyph, required this.tone});
+
+  final Glyph glyph;
+  final SettingsTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = settingsTone(context.colorScheme, tone);
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: BoxDecoration(color: colors.fill, shape: BoxShape.circle),
+      child: Center(
+        child: GlyphIcon(glyph, size: 20, color: colors.ink),
+      ),
     );
   }
 }
@@ -246,7 +380,8 @@ class SettingsCopyRow extends StatelessWidget {
   }
 }
 
-class SettingsSwitchRow extends StatelessWidget {  const SettingsSwitchRow({
+class SettingsSwitchRow extends StatelessWidget {
+  const SettingsSwitchRow({
     super.key,
     required this.label,
     required this.value,
