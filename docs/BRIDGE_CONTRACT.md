@@ -99,7 +99,7 @@ val json = Json {
 | `sessions` | `sessionsJson` | 会话列表变化（增删改序） |
 | `ready` | `settingsJson`, `labelsJson`, `engineJson`, `sessionsJson` | `onListen` 时立即发一次，让 Dart 无需额外请求 |
 
-`labelsJson` 是**派生展示文案**，由 Kotlin 用现有 `ui/components/ModelLabels.kt` 算好后附上。
+`labelsJson` 是**派生展示文案**，由 Kotlin 用 `data/ModelLabels.kt` 算好后附上。
 模型档位（`ModelTier`）的解析规则（`usesAutoModel` / `resolvedActiveTier` / `tierModel`）留在
 Kotlin，Dart 不复制：
 
@@ -132,6 +132,10 @@ Kotlin，Dart 不复制：
 `engineLabel` 是派生值：桥接层用当前 `settings.engineMode` 调 `state.engineLabel(mode)`，
 省掉 Dart 侧复制那套判定逻辑（那段逻辑有注释说明过「用户选择的模式优先于探测到的能力」，
 复制一份必然漂移）。
+
+安装/升级期间 `fraction` **最多每 120ms 推一次**，`stage` / `detail` 变化仍立即推送：
+下载回调按 256 KiB 触发、解包回调按条目触发，原样转发会让设置页每秒重建几十次，
+表现为界面反复停顿零点几秒。限流在 `EngineManager.install` 里做，桥接层不再二次缓冲。
 
 `sessionsJson` 是 `ChatSession` 数组（不含 `messages`，会话列表不需要）：
 

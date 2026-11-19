@@ -6,6 +6,7 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.SystemClock
 import app.claudroid.core.Installation
 import app.claudroid.core.Logx
 import app.claudroid.core.Paths
@@ -326,8 +327,22 @@ class EngineManager(
                 if (!useRoot && !proot.available()) {
                     Logx.e("未打包 PRoot 组件：免 root 模式只能退回应用目录直启，部分设备会拒绝执行", ctx)
                 }
+                var lastProgressAt = 0L
+                var lastStage = ""
+                var lastDetail = ""
                 val installation = toolchain.ensure(force = force, useRoot = useRoot) { p ->
-                    _state.update { s -> s.copy(stage = p.stage, detail = p.detail, fraction = p.fraction) }
+                    // The downloader reports every 256 KiB. Forwarding every tick floods
+                    // the Flutter channel, and each event rebuilds the settings page, which
+                    // reads as the interface freezing for a fraction of a second. Rate-limit
+                    // fraction updates; stage/detail changes still go through immediately.
+                    val now = SystemClock.elapsedRealtime()
+                    val stageChanged = p.stage != lastStage || p.detail != lastDetail
+                    if (stageChanged || now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+                        lastProgressAt = now
+                        lastStage = p.stage
+                        lastDetail = p.detail
+                        _state.update { s -> s.copy(stage = p.stage, detail = p.detail, fraction = p.fraction) }
+                    }
                 }
                 // The install swapped the jail into its official name; any su/busybox/
                 // chroot probe from an earlier attempt was for a different path.
@@ -831,5 +846,8 @@ class EngineManager(
         /** How long uninstall waits for a cancelled turn to release the jail. */
         private const val UNINSTALL_TURN_WAIT_MS = 15_000L
         private const val POLL_MS = 100L
+
+        /** At most one progress state update per this interval (~8/s). */
+        private const val PROGRESS_INTERVAL_MS = 120L
     }
 }

@@ -37,7 +37,17 @@ const _accentInkDark = Color(0xFFE8A184);
 
 /// The app's colour scheme: FlClash's generated structure and liquid-glass
 /// tints, with Claude's warm neutral paper swapped in for every surface role.
-ColorScheme claudroidColorScheme(Brightness brightness) {
+///
+/// Both schemes are built once: `seededColorScheme` runs a full seed palette
+/// derivation, and progress events rebuild the settings pages (and the theme
+/// preview) many times per second.
+ColorScheme claudroidColorScheme(Brightness brightness) =>
+    brightness == Brightness.dark ? _darkScheme : _lightScheme;
+
+final ColorScheme _lightScheme = _buildScheme(Brightness.light);
+final ColorScheme _darkScheme = _buildScheme(Brightness.dark);
+
+ColorScheme _buildScheme(Brightness brightness) {
   final base = seededColorScheme(seedColor: kSeedColor, brightness: brightness);
   if (brightness == Brightness.dark) {
     return base.copyWith(

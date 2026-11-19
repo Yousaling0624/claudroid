@@ -81,11 +81,16 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
 
   void _onEvent(AppEvent event) {
     if (!mounted) return;
-    setState(() {
-      _state.value = event.apply(_state.value);
-      // The shell stays on whatever page the user is looking at. A cold start
-      // lands on home (`_sessionId` is null); a session event never steals it.
-    });
+    final previous = _state.value;
+    final next = event.apply(previous);
+    _state.value = next;
+    // `_Shell` rebuilds through the ValueListenableBuilder inside `home`, so an
+    // engine progress tick no longer rebuilds PrismApp and its theme. ThemeMode
+    // lives above that builder; only a theme change needs the whole shell rebuilt.
+    if (next.settings.intOr('themeMode') !=
+        previous.settings.intOr('themeMode')) {
+      setState(() {});
+    }
   }
 
   /// "New chat" is the home page, not an empty session: the session is created
@@ -184,11 +189,12 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
       },
       localizationsDelegates: const [ZhUiLocalizations.delegate],
       supportedLocales: const [Locale('zh'), Locale('en')],
-      home: Builder(
-        builder: (context) {
+      home: ValueListenableBuilder<AppState>(
+        valueListenable: _state,
+        builder: (context, state, _) {
           _hostContext = context;
           return _Shell(
-            state: _state.value,
+            state: state,
             stateListenable: _state,
             sessionId: _sessionId,
             homeEpoch: _homeEpoch,
