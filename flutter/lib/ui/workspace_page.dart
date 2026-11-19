@@ -936,7 +936,11 @@ class _ErrorState extends StatelessWidget {
               style: context.listSubtitleStyle.copyWith(color: scheme.error),
             ),
             const SizedBox(height: 16),
-            TextButton(onPressed: onRetry, child: const Text('重试')),
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const GlyphIcon(AppGlyphs.refresh, size: 16),
+              label: const Text('重试'),
+            ),
           ],
         ),
       ),

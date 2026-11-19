@@ -207,7 +207,7 @@ class EnginePage extends StatelessWidget {
         ),
         SettingsActionRow(
           label: controller.networkRefreshing ? '正在刷新网络配置…' : '刷新网络配置',
-          glyph: AppGlyphs.plug,
+          glyph: AppGlyphs.refresh,
           busy: controller.networkRefreshing,
           onPressed: busy || controller.networkRefreshing
               ? null

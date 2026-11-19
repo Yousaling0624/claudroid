@@ -66,6 +66,7 @@ class AboutPage extends StatelessWidget {
                   builder: (context, onPressed) => GlassTonalButton(
                     size: TonalButtonSize.compact,
                     label: controller.checkingRelease ? '检查中…' : '检查',
+                    glyph: AppGlyphs.refresh,
                     onPressed: onPressed,
                   ),
                 )

@@ -1,6 +1,9 @@
 import 'package:claudroid_ui/ui/glass_controls.dart';
+import 'package:claudroid_ui/ui/glyphs.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prism_ui/icons/icons.dart';
+import 'package:prism_ui/prism_ui.dart';
 
 const _offsetKey = ValueKey('liquidGlassMorphOffset');
 const _scaleKey = ValueKey('liquidGlassMorphScale');
@@ -63,6 +66,41 @@ void main() {
 
     await gesture.up();
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('a glass button can lead with the refresh glyph', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(
+      PrismApp(
+        home: ViewScope(
+          size: const Size(400, 800),
+          isMobile: true,
+          child: Builder(
+            builder: (context) => Center(
+              child: Surface(
+                color: context.colorScheme.surface,
+                child: GlassTonalButton(
+                  label: '重试',
+                  glyph: AppGlyphs.refresh,
+                  onPressed: () => taps++,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is GlyphIcon && widget.glyph == AppGlyphs.refresh,
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('重试'));
+    await tester.pumpAndSettle();
+    expect(taps, 1);
   });
 
   testWidgets('reduce motion leaves the glass still', (tester) async {

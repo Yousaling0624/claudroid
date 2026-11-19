@@ -4,6 +4,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/models.dart';
 import '../glass_controls.dart';
+import '../glyphs.dart';
 import '../model_menu.dart';
 import '../press_guard.dart';
 import 'model_picker.dart';
@@ -206,6 +207,7 @@ class ServiceModelsPage extends StatelessWidget {
                 builder: (context, onPressed) => GlassTonalButton(
                   size: TonalButtonSize.compact,
                   label: controller.modelsLoading ? '拉取中…' : '拉取模型列表',
+                  glyph: AppGlyphs.refresh,
                   onPressed: onPressed,
                 ),
               ),

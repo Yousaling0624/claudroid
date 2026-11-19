@@ -243,7 +243,8 @@ FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列�
 - **行尾语义**：`chevronForward` = 进入下一页，`Glyphs.picker`（上下双箭头）= 打开菜单/
   模型选择器，`AppGlyphs.edit`（铅笔）= 弹出文本输入，`AppGlyphs.refresh` = 原地执行动作。
   `SettingsValueRow` 默认铅笔；模型字段显式传 picker。这样列表行按钮与可输入设置项
-  不再用同一个图标。
+  不再用同一个图标。所有刷新、重新拉取、检查更新与重试动作（含按钮图标和
+  `SettingsActionRow`）统一用 `AppGlyphs.refresh`，不要另画或借用 `plug` 等图标。
 - **输入弹窗**统一用 `SettingsTextPrompt`（会话重命名也用它）：`Form` 校验、错误行内
   显示并带 `AnimatedSize`；API Key 用 `SecretTextFormField` 的 eye/eyeOff 切换，Base URL
   用 URL 键盘并校验 `http(s)://`，数字项用数字键盘与范围校验，只有多行文本才允许换行。

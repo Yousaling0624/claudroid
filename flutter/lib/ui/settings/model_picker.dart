@@ -415,7 +415,11 @@ class _PickerState extends StatelessWidget {
             ),
             if (onRetry != null) ...[
               const SizedBox(height: 14),
-              GlassTonalButton(label: '重试', onPressed: onRetry),
+              GlassTonalButton(
+                label: '重试',
+                glyph: AppGlyphs.refresh,
+                onPressed: onRetry,
+              ),
             ],
           ],
         ),
