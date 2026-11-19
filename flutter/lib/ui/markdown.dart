@@ -725,7 +725,9 @@ class _MarkdownTextState extends State<MarkdownText> {
         );
     final styled = widget.serif ? claudroidSerif(base) : base;
     final span = showCaret ? _withCaret(block.span) : block.span;
-    final child = SelectableText.rich(
+    // 选择域由调用方（一条回复的 SelectionArea）统一提供；这里只负责排版，
+    // 每个段落再包一层 SelectableText 会让“全选”只能选中当前段落。
+    final child = Text.rich(
       span,
       style: styled.merge(_styleFor(context, block.kind)),
     );
@@ -759,8 +761,8 @@ class _MarkdownTextState extends State<MarkdownText> {
   }
 
   /// 在末尾追加空格 + 光标块。整段正文作为子 span 嵌套而不是摊平，样式才能原样保留。
-  /// WidgetSpan 里不能放手势组件：`SelectableText` 背后是只读 `EditableText`，
-  /// 会把点击吞掉。
+  /// 整条回复由外层 SelectionArea 统一选择；WidgetSpan 的子组件不进入选择域，
+  /// 所以这里只放纯展示、不接手势的光标块。
   TextSpan _withCaret(TextSpan span) => TextSpan(
         children: [
           span,
@@ -1017,12 +1019,10 @@ class _CodeBlockState extends State<_CodeBlock> {
       scrollDirection: Axis.horizontal,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        // prism 的 SelectableText 是只读 EditableText，放进横向滚动会被喂无界
-        // 宽度、布局断言失败且不画字。折叠时用 Text 保留「点正文展开」，展开
-        // 后再用 SelectionArea 让代码可选中。
-        child: long && !_expanded
-            ? Text(widget.code, style: mono)
-            : SelectionArea(child: Text(widget.code, style: mono)),
+        // 代码的选择交给外层 SelectionArea：这里不再自建选择域，否则一条回复的
+        // “全选”会被截断在代码块。横向滚动里用 Text 也能量出真实宽度；
+        // 折叠态由外层 GestureDetector 负责点击展开。
+        child: Text(widget.code, style: mono),
       ),
     );
     if (long && !_expanded) {
@@ -1138,7 +1138,7 @@ class _TableBlock extends StatelessWidget {
                             horizontal: 10,
                             vertical: 9,
                           ),
-                          child: SelectableText.rich(
+                          child: Text.rich(
                             table.headers[column],
                             style: headerStyle,
                           ),
@@ -1159,7 +1159,7 @@ class _TableBlock extends StatelessWidget {
                             horizontal: 10,
                             vertical: 9,
                           ),
-                          child: SelectableText.rich(
+                          child: Text.rich(
                             column < row.length ? row[column] : const TextSpan(),
                             style: cellStyle,
                           ),

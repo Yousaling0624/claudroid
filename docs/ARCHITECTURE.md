@@ -90,8 +90,10 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
         "/opt/claude/<ver>/claude", ...]
 ```
 
-没有 root 时，PRoot 把工作区、HOME、`/dev`、`/proc`、`/sys`、`/system`、`/apex`、
-`/vendor`、`/odm`、`/product`（存在才 bind）和可读的 `/sdcard` 映射进 guest。
+没有 root 时，PRoot 把工作区、HOME、`/dev`、`/dev/pts`、`/proc`、`/sys`、`/system`、
+`/apex`、`/vendor`、`/odm`、`/product`（存在才 bind）和可读的 `/sdcard` 映射进 guest。
+`/dev/pts` 必须单独列出：Android 的 devpts 是 `/dev` 下的独立挂载，只映射 `/dev`
+不会把 PTY 从机带进 guest，`script(1)` 会以 `failed to create pseudo-terminal` 退出。
 
 
 ## 4. 容器里有什么
@@ -160,14 +162,16 @@ R=/data/adb/claudroid
 bind_mount() { grep -qs " $2 " /proc/mounts || mount --bind "$1" "$2" 2>/dev/null; }
 bind_mount /proc   "$R/proc"
 bind_mount /dev    "$R/dev"
+bind_mount /dev/pts "$R/dev/pts"   # devpts 是 /dev 下的独立挂载，必须单独 bind
 bind_mount /sys    "$R/sys"
 bind_mount /system "$R/system"
 bind_mount /data   "$R/data"
 bind_mount /storage/emulated/0 "$R/sdcard"
 bind_mount <workspace> "$R/work"
 bind_mount <filesDir>/home "$R/root"
-cd "$R/work"
-exec /data/adb/magisk/busybox chroot "$R" /opt/claude/<version>/claude -p '…' --output-format stream-json …
+# chroot(1) 会 chdir("/")，cwd 必须在 guest 内设置；默认 /work，设置可指向子目录。
+exec /data/adb/magisk/busybox chroot "$R" /bin/sh -c \
+  "cd '<guestCwd>' 2>/dev/null || cd /work; exec /opt/claude/<version>/claude -p '…' --output-format stream-json …"
 ```
 
 刻意的设计：
@@ -181,6 +185,10 @@ exec /data/adb/magisk/busybox chroot "$R" /opt/claude/<version>/claude -p '…' 
 - **用 `grep /proc/mounts` 而不是 `mountpoint`**：toybox 不保证有 `mountpoint`。
 - **每个 turn 一个进程 + `--resume <session_id>`**：CLI 自己保存会话，我们不维护 PTY；
   崩溃或切后台都不会污染下一次对话，代价是每轮约 100 ms 启动。
+- **CLI 的 cwd 是「工作区根 / 可选子目录」**：设置 `claudeWorkDir` 存工作区相对路径，
+  `ClaudeWorkDir` 做规范化与 canonical 越界校验（拒绝 `..`、绝对路径和逃出工作区的
+  符号链接），各启动模式都落到同一目录：PRoot 用 `-w /work/<rel>`，chroot 在 guest 内
+  `cd`，直接启动用 ProcessBuilder 的目录。它只改 CLI 的 cwd，`/work` bind 不变。
 - **脚本先写 pid 再 `exec`**：我们持有的直接子进程只是 `su`（或 proot），杀掉它并不会
   带走真正写 stdout 的 CLI。停止时按 pid 精确结束 CLI，否则读循环会一直等不到 EOF，
   UI 就卡在「正在停止…」。proot 模式同理：包装脚本 `.claudroid-turn.sh` 放在 HOME
@@ -205,6 +213,10 @@ namespace，**chroot 进程退出后它们仍然存在**。此时对容器目录
    取 jail 自身及其下所有挂载点，按层级**从深到浅** `umount -l`。
 3. 再读一次挂载表，若仍有残留就**拒绝删除**，而不是硬删。
 4. `rm -rf --`，最后 `[ -e ]` 断言目录真的没了。
+
+工作区终端另有一个常驻 PTY：guest 里的 util-linux `script(1)` 用 `/dev/pts` 分配伪终端。
+启动前会先跑一次 `script -q -c true` 探测；guest 没有可用 devpts 时（例如旧 jail 的
+`/dev/pts` 未挂载）降级为无 PTY 的持久 shell 并在终端里提示，而不是直接以退出码 1 结束。
 
 此外每个 chroot turn / 终端命令结束后，App 会调 `RootExec.unmountJail()` 清掉这次留下的
 挂载；终端和对话可能并发，所以用 `chrootBegin()/chrootEnd()` 计数，只要还有别的 chroot

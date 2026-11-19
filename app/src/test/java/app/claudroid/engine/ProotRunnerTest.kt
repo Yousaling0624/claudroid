@@ -127,4 +127,33 @@ class ProotRunnerTest {
         val argv = spec().argv
         assertEquals("/work", argv[argv.indexOf("-w") + 1])
     }
+
+    @Test
+    fun `a custom guest workdir is passed to proot`() {
+        val argv = ProotRunner.build(
+            proot = proot,
+            loader = loader,
+            jail = jail,
+            workspace = workspace,
+            home = home,
+            version = "2.1.0",
+            hasBash = true,
+            args = listOf("-p", "hello"),
+            baseEnv = emptyMap(),
+            binds = listOf(workspace.absolutePath to "/work"),
+            tmpDir = tmp,
+            workDir = "/work/sub",
+        ).argv
+
+        assertEquals("/work/sub", argv[argv.indexOf("-w") + 1])
+    }
+
+    @Test
+    fun `devpts is exposed separately and right after dev`() {
+        val binds = ProotRunner.systemBinds()
+        // A PTY needs the devpts mount, not just a /dev translation; order matters so
+        // the more specific /dev/pts mapping wins over the /dev prefix.
+        assertEquals("/dev" to "/dev", binds[0])
+        assertEquals("/dev/pts" to "/dev/pts", binds[1])
+    }
 }

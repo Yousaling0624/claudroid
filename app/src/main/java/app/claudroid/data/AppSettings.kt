@@ -66,6 +66,8 @@ data class AppSettings(
     val haikuModel: String = "",
     val permissionMode: PermissionMode = PermissionMode.BYPASS,
     val engineMode: EngineMode = EngineMode.AUTO,
+    /** Claude 工作目录：相对当前工作区的子目录，空串表示工作区根目录（guest /work）。 */
+    val claudeWorkDir: String = "",
     val autoUpdate: Boolean = true,
     val maxTurns: Int = 0,
     val themeMode: Int = 0, // 0 system, 1 light, 2 dark

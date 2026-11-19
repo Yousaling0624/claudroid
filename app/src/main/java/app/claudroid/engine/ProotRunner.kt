@@ -49,6 +49,7 @@ class ProotRunner(private val ctx: Context) {
         baseEnv: Map<String, String>,
         workspace: File,
         pidFile: String? = null,
+        workDir: String = "/work",
     ): Spec {
         val bundle = requireBundle()
         val home = Paths.home(ctx)
@@ -76,6 +77,7 @@ class ProotRunner(private val ctx: Context) {
             binds = binds,
             tmpDir = tmp,
             turnScript = guestScript,
+            workDir = workDir,
         )
     }
 
@@ -246,12 +248,29 @@ class ProotRunner(private val ctx: Context) {
             }
             add(workspace.absolutePath, "/work")
             add(home.absolutePath, "/root")
-            listOf("/dev", "/proc", "/sys", "/system", "/apex", "/vendor", "/odm", "/product")
-                .forEach { add(it, it) }
+            systemBinds().forEach { (host, guest) -> add(host, guest) }
             // Shared storage is optional; without the runtime permission the bind is skipped
             // instead of aborting the whole turn.
             add("/storage/emulated/0", "/sdcard")
             return binds.map { (host, guest) -> host to guest }
         }
+
+        /**
+         * Fixed host paths mapped 1:1 into the guest. `/dev/pts` is listed separately
+         * because it is a devpts mount on Android: a PRoot path translation of `/dev`
+         * alone resolves `/dev/ptmx` (a symlink) inconsistently, leaving `script(1)`
+         * without a usable PTY. Order matters — `/dev/pts` follows `/dev`.
+         */
+        internal fun systemBinds(): List<Pair<String, String>> = listOf(
+            "/dev" to "/dev",
+            "/dev/pts" to "/dev/pts",
+            "/proc" to "/proc",
+            "/sys" to "/sys",
+            "/system" to "/system",
+            "/apex" to "/apex",
+            "/vendor" to "/vendor",
+            "/odm" to "/odm",
+            "/product" to "/product",
+        )
     }
 }

@@ -8,7 +8,7 @@ import org.junit.Test
 class TerminalSessionTest {
 
     @Test
-    fun `outer script starts a pty shell and records the exit code`() {
+    fun `outer script probes the pty and records the exit code`() {
         val script = TerminalSession.outerScript(
             guestCwd = "/work/my dir",
             shell = "/bin/bash",
@@ -19,9 +19,13 @@ class TerminalSessionTest {
         assertEquals(
             listOf(
                 "cd '/work/my dir' 2>/dev/null || cd '/work'",
-                "if command -v script >/dev/null 2>&1; then",
+                "if command -v script >/dev/null 2>&1 && " +
+                    "script -q -c true /dev/null >/dev/null 2>&1; then",
                 "  script -q -f -e -c '/bin/bash /root/term-1.inner' /dev/null",
                 "else",
+                "  printf '%s\\n' " +
+                    "'[claudroid] 容器内无法创建 PTY，已回退为普通交互 shell" +
+                    "（vim/top 等全屏程序不可用）。' >&2",
                 "  '/bin/bash' '/root/term-1.inner'",
                 "fi",
                 "__claudroid_exit=\$?",
@@ -32,6 +36,36 @@ class TerminalSessionTest {
     }
 
     @Test
+    fun `outer script only starts script after a successful devpts probe`() {
+        val script = TerminalSession.outerScript(
+            guestCwd = "/work",
+            shell = "/bin/sh",
+            innerFile = "/root/a.inner",
+            exitFile = "/root/a.exit",
+        )
+
+        // `script` existing is not enough: without a usable devpts the launch dies with
+        // "failed to create pseudo-terminal", so the probe runs before the real start.
+        assertTrue(
+            script.contains(
+                "if command -v script >/dev/null 2>&1 && " +
+                    "script -q -c true /dev/null >/dev/null 2>&1; then",
+            ),
+        )
+        // The probe must not use -e (busybox compatibility); the real start still does.
+        assertTrue(!script.contains("script -q -e -c true"))
+        assertTrue(script.contains("  script -q -f -e -c '/bin/sh /root/a.inner' /dev/null"))
+        // The fallback names itself and runs the shell directly, without a PTY.
+        assertTrue(
+            script.contains(
+                "printf '%s\\n' " +
+                    TurnScripts.quote(TerminalSession.PTY_FALLBACK_NOTICE) + " >&2",
+            ),
+        )
+        assertTrue(script.contains("  '/bin/sh' '/root/a.inner'"))
+    }
+
+    @Test
     fun `outer script keeps both the pty and the plain fallback branch`() {
         val script = TerminalSession.outerScript(
             guestCwd = "/work",
@@ -39,8 +73,8 @@ class TerminalSessionTest {
             innerFile = "/root/a.inner",
             exitFile = "/root/a.exit",
         )
-        // `script(1)` exists in the Debian rootfs, but the branch must still work on a
-        // truncated rootfs: the fallback runs the shell directly (no PTY, still usable).
+        // `script(1)` exists in the Debian rootfs, but the branch must still work when
+        // the devpts probe fails: the fallback runs the shell directly (no PTY).
         assertTrue(script.contains("  script -q -f -e -c '/bin/sh /root/a.inner' /dev/null"))
         assertTrue(script.contains("  '/bin/sh' '/root/a.inner'"))
         // The exit file is written after PTY teardown so a natural `exit 3` is visible.
@@ -77,12 +111,37 @@ class TerminalSessionTest {
         assertEquals(
             listOf(
                 "echo \$\$ > '/root/t.pid'",
-                "tty > '/root/t.tty' 2>/dev/null",
-                "stty rows 24 cols 80 2>/dev/null",
+                "if [ -t 0 ]; then",
+                "  tty > '/root/t.tty' 2>/dev/null",
+                "  stty rows 24 cols 80 2>/dev/null",
+                "fi",
                 "exec '/bin/bash' -i",
             ),
             script.trimEnd('\n').lines(),
         )
+    }
+
+    @Test
+    fun `inner script probes tty only when stdin is a terminal`() {
+        val script = TerminalSession.innerScript(
+            pidFile = "/root/t.pid",
+            ttyFile = "/root/t.tty",
+            rows = 24,
+            cols = 80,
+            shell = "/bin/sh",
+        )
+
+        // On the no-PTY fallback the shell reads from a pipe; tty/stty would fail and
+        // print errors into the terminal stream, so they must stay behind the guard.
+        val guardAt = script.indexOf("if [ -t 0 ]; then")
+        val ttyAt = script.indexOf("tty >")
+        val sttyAt = script.indexOf("stty rows")
+        val endAt = script.indexOf("fi")
+        assertTrue("guard missing:\n$script", guardAt >= 0)
+        assertTrue("tty probe must be inside the guard:\n$script", guardAt < ttyAt)
+        assertTrue("stty must be inside the guard:\n$script", guardAt < sttyAt)
+        assertTrue("guard must close before exec:\n$script", endAt > sttyAt)
+        assertTrue(endAt < script.indexOf("exec '/bin/sh' -i"))
     }
 
     @Test

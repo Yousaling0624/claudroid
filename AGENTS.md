@@ -122,8 +122,9 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
   `libtalloc.so` / `libandroid-shmem.so`。
 - 有 root：`Toolchain` 用 `su` 把容器组装到 `/data/adb/claudroid`，`ClaudeEngine`
   用 Magisk busybox `chroot` 启动；没有 `chroot(1)` 时降级为 `su` 下跑 PRoot。
-  Root 模式会把宿主 `/dev`、`/proc`、`/sys`、`/system`、`/data`、`/sdcard` bind 进容器，
-  这是「Agent 能操作设备」的能力来源，不要为了省事删掉。
+  Root 模式会把宿主 `/dev`、`/dev/pts`、`/proc`、`/sys`、`/system`、`/data`、`/sdcard`
+  bind 进容器，这是「Agent 能操作设备」的能力来源，不要为了省事删掉。`/dev/pts` 必须
+  单独 bind：devpts 是 `/dev` 下的独立挂载，漏掉它 guest 里的 `script(1)` 无法创建 PTY。
 - **删除容器目录前必须先卸载 bind 挂载**：chroot 包装脚本把宿主目录挂进 jail 后，挂载
   在进程退出后仍然存在；此时 `rm -rf` 会穿过挂载点删掉宿主 `/dev`、`/data`（已在真机
   上造成过一次数据清空事故）。所有删除 jail 的路径必须走 `RootExec.deleteJail()`：

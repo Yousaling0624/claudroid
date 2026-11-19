@@ -74,6 +74,7 @@ internal object TurnScripts {
         args: List<String>,
         hasBash: Boolean,
         pidFile: String?,
+        guestCwd: String = "/work",
     ): String = buildString {
         appendLine("#!/system/bin/sh")
         appendLine("R=${quote(jail)}")
@@ -83,11 +84,11 @@ internal object TurnScripts {
         appendLine("export TMPDIR=/tmp")
         appendLine("export SHELL=" + quote(if (hasBash) "/bin/bash" else "/bin/sh"))
         appendMounts(this, workspace, home)
-        appendLine("cd \"\$R/work\" 2>/dev/null || cd \"\$R\"")
-        appendLine(
-            "exec ${quote(chrootTool)} chroot \"\$R\" ${quote(binary)} " +
-                args.joinToString(" ") { quote(it) }
-        )
+        // busybox/toybox chroot(1) chdir("/") before exec, so the working directory has
+        // to be selected inside the guest. `exec` keeps the pid recorded above.
+        val guestCommand = "cd ${quote(guestCwd)} 2>/dev/null || cd /work; exec ${quote(binary)} " +
+            args.joinToString(" ") { quote(it) }
+        appendLine("exec ${quote(chrootTool)} chroot \"\$R\" /bin/sh -c ${quote(guestCommand)}")
     }
 
     /**
@@ -116,13 +117,17 @@ internal object TurnScripts {
 
     /** Shared jail mount setup; order is stable so the generated scripts stay diffable. */
     private fun appendMounts(out: StringBuilder, workspace: String, home: String) {
-        listOf("work", "proc", "dev", "sys", "system", "data", "sdcard", "tmp", "root").forEach {
+        // dev/pts is a separate devpts mount on Android and is not carried by a
+        // non-recursive /dev bind; without it openpty()/grantpt() fails inside the jail.
+        listOf(
+            "work", "proc", "dev", "dev/pts", "sys", "system", "data", "sdcard", "tmp", "root",
+        ).forEach {
             out.appendLine("mkdir -p \"\$R/$it\" 2>/dev/null")
         }
         out.appendLine("bind_mount() { grep -qs \" \$2 \" /proc/mounts || mount --bind \"\$1\" \"\$2\" 2>/dev/null; }")
         listOf(
-            "/proc" to "proc", "/dev" to "dev", "/sys" to "sys", "/system" to "system",
-            "/data" to "data", "/storage/emulated/0" to "sdcard",
+            "/proc" to "proc", "/dev" to "dev", "/dev/pts" to "dev/pts", "/sys" to "sys",
+            "/system" to "system", "/data" to "data", "/storage/emulated/0" to "sdcard",
         ).forEach { (src, dst) -> out.appendLine("bind_mount $src \"\$R/$dst\"") }
         out.appendLine("bind_mount ${quote(workspace)} \"\$R/work\"")
         out.appendLine("bind_mount ${quote(home)} \"\$R/root\"")

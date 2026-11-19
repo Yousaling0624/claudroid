@@ -10,6 +10,7 @@ import '../bridge/events.dart';
 import '../models/models.dart';
 import 'attachments.dart';
 import 'chat_search.dart';
+import 'claude_dir_dialog.dart';
 import 'composer.dart';
 import 'conversation_export.dart';
 import 'drafts.dart';
@@ -433,6 +434,29 @@ class _ChatPageState extends State<ChatPage> {
     unawaited(widget.onUpdateSettings(patch));
   }
 
+  /// Picks the directory Claude Code runs in; the host applies it to the next
+  /// turn's CLI cwd, so a running engine does not need a restart.
+  Future<void> _chooseClaudeDir() async {
+    final current = widget.settings.str('claudeWorkDir');
+    final chosen = await showClaudeDirDialog(
+      context,
+      bridge: widget.bridge,
+      current: current,
+      onToast: widget.onToast,
+    );
+    if (chosen == null || !mounted) return;
+    if (claudeDirLabel(chosen) == claudeDirLabel(current)) {
+      widget.onToast('未变');
+      return;
+    }
+    _patch({'claudeWorkDir': chosen});
+    widget.onToast(
+      chosen.isEmpty
+          ? 'Claude 工作目录已重置为 /work（工作区根目录）'
+          : 'Claude 工作目录已切换到 ${claudeDirLabel(chosen)}',
+    );
+  }
+
   ChatMessage? get _lastAssistant {
     for (final message in _chat.messages.reversed) {
       if (message.role == Role.assistant) return message;
@@ -506,6 +530,12 @@ class _ChatPageState extends State<ChatPage> {
           bridge: widget.bridge,
           onToast: widget.onToast,
         ),
+      ),
+      SlashAction(
+        command: 'cwd',
+        label: 'Claude 工作目录',
+        glyph: AppGlyphs.folder,
+        onPressed: _chooseClaudeDir,
       ),
       SlashAction(
         command: 'search',
@@ -638,6 +668,12 @@ class _ChatPageState extends State<ChatPage> {
                     glyph: Glyphs.copy,
                     onPressed: _copyConversation,
                   ),
+                PopupMenuItem(
+                  label: 'Claude 工作目录 · '
+                      '${claudeDirLabel(widget.settings.str('claudeWorkDir'))}',
+                  glyph: AppGlyphs.folder,
+                  onPressed: _chooseClaudeDir,
+                ),
                 PopupMenuItem(
                   label: '清空对话上下文',
                   glyph: AppGlyphs.trash,
@@ -1300,13 +1336,24 @@ class _AssistantMessage extends StatelessWidget {
             onOpenUrl: onOpenUrl,
           ),
         ),
-        for (var index = 0; index < blocks.length; index++)
-          _contentBlock(
-            context,
-            blocks[index],
-            visibleTexts[index],
-            message.streaming && index == lastTextIndex,
+        // 一条回复的全部正文共用一个选择域：长按“全选”才能选中整段回答，
+        // 而不是每个段落各选一段。标题行、思考过程与工具卡留在这个区域外，
+        // 它们内部已有自己的选择域，嵌套进来反而会把全选截断。
+        SelectionArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var index = 0; index < blocks.length; index++)
+                _contentBlock(
+                  context,
+                  blocks[index],
+                  visibleTexts[index],
+                  message.streaming && index == lastTextIndex,
+                ),
+            ],
           ),
+        ),
         if (!message.streaming && (meta.isNotEmpty || showActions))
           Padding(
             padding: const EdgeInsets.only(top: 2),

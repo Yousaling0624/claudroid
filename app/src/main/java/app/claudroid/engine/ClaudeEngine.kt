@@ -1,6 +1,7 @@
 package app.claudroid.engine
 
 import android.content.Context
+import app.claudroid.core.ClaudeWorkDir
 import app.claudroid.core.Installation
 import app.claudroid.core.Logx
 import app.claudroid.core.Paths
@@ -182,6 +183,10 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val args = buildArgs(prompt, resumeSessionId, settings, inst.version)
             val env = buildEnv(settings, plan)
             val home = Paths.home(ctx)
+            // The workspace is always bound to /work; the optional setting selects a
+            // subdirectory of it that must stay inside the bind (see ClaudeWorkDir).
+            val claudeDir = ClaudeWorkDir.resolve(workspace, settings.claudeWorkDir)
+            val guestCwd = ClaudeWorkDir.guestPath(workspace, claudeDir)
             // WebFetch's domain preflight hits api.anthropic.com before every fetch and
             // fails outright when that host is blocked; the CLI's own settings switch is
             // the supported way out, and HOME is the same in every launch mode.
@@ -200,7 +205,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             // does not.
             turnPidNeedsRoot = plan.useRoot || plan.prootViaRoot
 
-            var cwd = workspace
+            var cwd = claudeDir
             val command: List<String>
             val processEnv = env.toMutableMap()
             val script = File(ctx.filesDir, "engine/turn.sh").apply { parentFile?.mkdirs() }
@@ -213,24 +218,28 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                     // Root but no chroot(1). PRoot still needs to run as root so the CLI
                     // sees the container files; the script exports PRoot's own env (the
                     // su shell does not inherit our ProcessBuilder env reliably).
-                    val spec = ProotRunner(ctx).spec(inst, args, env, workspace, pidFile = "/root/$pidName")
+                    val spec = ProotRunner(ctx).spec(
+                        inst, args, env, workspace, pidFile = "/root/$pidName", workDir = guestCwd,
+                    )
                     script.writeText(
                         TurnScripts.rootExec(
                             env = spec.env,
                             argv = spec.argv,
                             pidFile = pidFile?.absolutePath,
-                            cwd = workspace.absolutePath,
+                            cwd = claudeDir.absolutePath,
                         )
                     )
                     command = listOf(root.suBinary() ?: "su", "-c", "sh ${script.absolutePath}")
-                    cwd = workspace
+                    cwd = claudeDir
                 }
                 plan.useProot -> {
                     // The wrapper writes its pid to /root (bound to filesDir/home) and
                     // execs the CLI, so Stop can kill the real process inside proot.
-                    val spec = ProotRunner(ctx).spec(inst, args, env, workspace, pidFile = "/root/$pidName")
+                    val spec = ProotRunner(ctx).spec(
+                        inst, args, env, workspace, pidFile = "/root/$pidName", workDir = guestCwd,
+                    )
                     command = spec.argv
-                    cwd = spec.cwd
+                    cwd = claudeDir
                     processEnv.clear()
                     processEnv.putAll(spec.env)
                 }
@@ -247,6 +256,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                             args = args,
                             hasBash = inst.hasBash,
                             pidFile = pidFile?.absolutePath,
+                            guestCwd = guestCwd,
                         )
                     )
                     command = listOf(root.suBinary() ?: "su", "-c", "sh ${script.absolutePath}")
@@ -260,7 +270,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                     script.writeText(
                         TurnScripts.rootDirect(
                             env = env,
-                            cwd = workspace.absolutePath,
+                            cwd = claudeDir.absolutePath,
                             binary = loader.absolutePath,
                             args = loaderOptions(inst.libraryPath()) + binary.absolutePath + args,
                             pidFile = pidFile?.absolutePath,

@@ -772,9 +772,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
         preview,
         SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(18, 2, 18, 28 + context.bottomInset),
-          child: MarkdownText(
-            text,
-            onLinkTap: (url) => unawaited(_openUrl(url)),
+          // MarkdownText 只负责排版，选择域由这里统一提供。
+          child: SelectionArea(
+            child: MarkdownText(
+              text,
+              onLinkTap: (url) => unawaited(_openUrl(url)),
+            ),
           ),
         ),
       );

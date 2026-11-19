@@ -28,6 +28,7 @@ class SettingsRepository(private val context: Context) {
         val haikuModel = stringPreferencesKey("haiku_model")
         val permissionMode = stringPreferencesKey("permission_mode")
         val engineMode = stringPreferencesKey("engine_mode")
+        val claudeWorkDir = stringPreferencesKey("claude_work_dir")
         // Replaced by engine_mode; read only to migrate existing installs.
         val rootEnabled = booleanPreferencesKey("root_enabled")
         val autoUpdate = booleanPreferencesKey("auto_update")
@@ -68,6 +69,7 @@ class SettingsRepository(private val context: Context) {
                 ?: d.permissionMode,
             engineMode = p[K.engineMode]?.let { runCatching { EngineMode.valueOf(it) }.getOrNull() }
                 ?: legacyEngineMode(p),
+            claudeWorkDir = p[K.claudeWorkDir] ?: d.claudeWorkDir,
             autoUpdate = p[K.autoUpdate] ?: d.autoUpdate,
             maxTurns = p[K.maxTurns] ?: d.maxTurns,
             themeMode = p[K.themeMode] ?: d.themeMode,
@@ -111,6 +113,7 @@ class SettingsRepository(private val context: Context) {
             p[K.haikuModel] = next.haikuModel
             p[K.permissionMode] = next.permissionMode.name
             p[K.engineMode] = next.engineMode.name
+            p[K.claudeWorkDir] = next.claudeWorkDir
             p[K.autoUpdate] = next.autoUpdate
             p[K.maxTurns] = next.maxTurns
             p[K.themeMode] = next.themeMode

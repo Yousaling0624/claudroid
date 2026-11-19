@@ -8,6 +8,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../models/models.dart';
 import 'attachments.dart';
+import 'claude_dir_dialog.dart';
 import 'composer.dart';
 import 'fold.dart';
 import 'glyphs.dart';
@@ -157,6 +158,29 @@ class _HomePageState extends State<HomePage> {
     unawaited(widget.onUpdateSettings(patch));
   }
 
+  /// Picks the directory Claude Code runs in; applied by the host on the next
+  /// turn, so no new conversation or engine restart is needed.
+  Future<void> _chooseClaudeDir() async {
+    final current = widget.settings.str('claudeWorkDir');
+    final chosen = await showClaudeDirDialog(
+      context,
+      bridge: widget.bridge,
+      current: current,
+      onToast: widget.onToast,
+    );
+    if (chosen == null || !mounted) return;
+    if (claudeDirLabel(chosen) == claudeDirLabel(current)) {
+      widget.onToast('未变');
+      return;
+    }
+    _patch({'claudeWorkDir': chosen});
+    widget.onToast(
+      chosen.isEmpty
+          ? 'Claude 工作目录已重置为 /work（工作区根目录）'
+          : 'Claude 工作目录已切换到 ${claudeDirLabel(chosen)}',
+    );
+  }
+
   List<SlashAction> _slashActions() => [
         SlashAction(
           command: 'new',
@@ -220,6 +244,12 @@ class _HomePageState extends State<HomePage> {
             bridge: widget.bridge,
             onToast: widget.onToast,
           ),
+        ),
+        SlashAction(
+          command: 'cwd',
+          label: 'Claude 工作目录',
+          glyph: AppGlyphs.folder,
+          onPressed: _chooseClaudeDir,
         ),
         SlashAction(
           command: 'settings',

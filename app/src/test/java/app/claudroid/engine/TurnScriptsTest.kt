@@ -72,6 +72,75 @@ class TurnScriptsTest {
     }
 
     @Test
+    fun `chroot binds devpts after dev so the guest can allocate a pty`() {
+        val script = TurnScripts.chroot(
+            env = mapOf("PATH" to "/usr/bin:/bin"),
+            jail = "/data/adb/claudroid",
+            workspace = "/data/user/0/app/files/workspace",
+            home = "/data/user/0/app/files/home",
+            chrootTool = "/data/adb/magisk/busybox",
+            binary = "/opt/claude/2.1.0/claude",
+            args = listOf("-p", "hello"),
+            hasBash = true,
+            pidFile = null,
+        )
+        // `script(1)` in the guest uses openpty(); /dev/pts is a separate devpts mount
+        // on Android, so a plain /dev bind is not enough.
+        assertTrue(script.contains("mkdir -p \"\$R/dev/pts\" 2>/dev/null"))
+        val devAt = script.indexOf("bind_mount /dev \"\$R/dev\"")
+        val ptsAt = script.indexOf("bind_mount /dev/pts \"\$R/dev/pts\"")
+        assertTrue("dev bind missing:\n$script", devAt >= 0)
+        assertTrue("devpts bind missing:\n$script", ptsAt >= 0)
+        assertTrue("devpts must be mounted after /dev:\n$script", devAt < ptsAt)
+    }
+
+    @Test
+    fun `chroot changes into the guest cwd before execing the cli`() {
+        val script = TurnScripts.chroot(
+            env = emptyMap(),
+            jail = "/data/adb/claudroid",
+            workspace = "/data/user/0/app/files/workspace",
+            home = "/data/user/0/app/files/home",
+            chrootTool = "/data/adb/magisk/busybox",
+            binary = "/opt/claude/2.1.0/claude",
+            args = listOf("-p", "it's a prompt"),
+            hasBash = true,
+            pidFile = null,
+            guestCwd = "/work/foo",
+        )
+        // busybox/toybox chroot(1) chdirs to / itself, so the guest must cd before exec.
+        val guestCommand = "cd '/work/foo' 2>/dev/null || cd /work; " +
+            "exec '/opt/claude/2.1.0/claude' '-p' 'it'\\''s a prompt'"
+        assertTrue(
+            "guest command missing or misquoted:\n$script",
+            script.contains("/bin/sh -c " + TurnScripts.quote(guestCommand)),
+        )
+        // A host-side cd would not affect the chrooted process.
+        assertTrue(!script.contains("cd \"\$R/work\""))
+    }
+
+    @Test
+    fun `chroot defaults to the workspace root inside the guest`() {
+        val script = TurnScripts.chroot(
+            env = emptyMap(),
+            jail = "/data/adb/claudroid",
+            workspace = "/data/user/0/app/files/workspace",
+            home = "/data/user/0/app/files/home",
+            chrootTool = "/data/adb/magisk/busybox",
+            binary = "/opt/claude/2.1.0/claude",
+            args = listOf("-p", "hello"),
+            hasBash = true,
+            pidFile = null,
+        )
+        val guestCommand = "cd '/work' 2>/dev/null || cd /work; " +
+            "exec '/opt/claude/2.1.0/claude' '-p' 'hello'"
+        assertTrue(
+            "default guest cwd must be /work:\n$script",
+            script.contains("/bin/sh -c " + TurnScripts.quote(guestCommand)),
+        )
+    }
+
+    @Test
     fun `turn scripts skip environment keys that are not identifiers`() {
         val script = TurnScripts.rootExec(
             env = mapOf(
@@ -108,6 +177,8 @@ class TurnScriptsTest {
         assertTrue(script.contains("echo \$\$ > '/data/user/0/app/files/engine/term.pid'"))
         assertTrue(script.contains("bind_mount '/data/user/0/app/files/workspace' \"\$R/work\""))
         assertTrue(script.contains("bind_mount '/data/user/0/app/files/home' \"\$R/root\""))
+        // The terminal also relies on script(1) getting a real devpts.
+        assertTrue(script.contains("bind_mount /dev/pts \"\$R/dev/pts\""))
         // The guest script is one shell word; its own single quotes are escaped.
         assertTrue(
             script.contains(

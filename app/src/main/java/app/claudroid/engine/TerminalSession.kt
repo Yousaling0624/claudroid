@@ -623,6 +623,9 @@ class TerminalSession(
         internal const val FLUSH_BYTES = 64 * 1024
 
         private const val WORK_DIR = "/work"
+        /** Shown once when the guest cannot allocate a PTY; the shell still works. */
+        internal const val PTY_FALLBACK_NOTICE =
+            "[claudroid] 容器内无法创建 PTY，已回退为普通交互 shell（vim/top 等全屏程序不可用）。"
         private const val DIRECT_SHELL = "/system/bin/sh"
         private const val SYSTEM_SH = "/system/bin/sh"
         private const val READ_BUFFER_CHARS = 8192
@@ -639,8 +642,13 @@ class TerminalSession(
         /**
          * Guest launcher. `script(1)` allocates the PTY and runs the inner script inside
          * it; `-e` forwards the shell's exit status, `-f` flushes every write so `top`
-         * is not held in a userspace buffer. Without `script` the shell still runs, just
-         * without a terminal.
+         * is not held in a userspace buffer.
+         *
+         * A preflight run is required: `script` may exist while the guest has no working
+         * devpts (e.g. `/dev/pts` was not mounted), in which case every start would die
+         * with "failed to create pseudo-terminal". If the probe fails, run the inner
+         * script directly: the shell stays interactive, only full-screen programs are
+         * unavailable. The probe deliberately omits `-e` for busybox compatibility.
          *
          * The exit status is written after the PTY closes so natural exits can report the
          * shell's own code (an `exit 3` in the terminal must not look like success).
@@ -654,9 +662,13 @@ class TerminalSession(
             appendLine(
                 "cd ${TurnScripts.quote(guestCwd)} 2>/dev/null || cd ${TurnScripts.quote(WORK_DIR)}",
             )
-            appendLine("if command -v script >/dev/null 2>&1; then")
+            appendLine(
+                "if command -v script >/dev/null 2>&1 && " +
+                    "script -q -c true /dev/null >/dev/null 2>&1; then",
+            )
             appendLine("  script -q -f -e -c ${TurnScripts.quote("$shell $innerFile")} /dev/null")
             appendLine("else")
+            appendLine("  printf '%s\\n' ${TurnScripts.quote(PTY_FALLBACK_NOTICE)} >&2")
             appendLine("  ${TurnScripts.quote(shell)} ${TurnScripts.quote(innerFile)}")
             appendLine("fi")
             appendLine("__claudroid_exit=\$?")
@@ -667,6 +679,9 @@ class TerminalSession(
          * Runs inside the PTY: report the shell pid (stop uses it as the process-group
          * id; `exec` keeps the pid), publish the slave device for resize probes, apply
          * the initial window size and become the interactive shell.
+         *
+         * `tty`/`stty` are guarded: on the no-PTY fallback stdin is a pipe, and their
+         * errors would otherwise be printed into the terminal output.
          */
         internal fun innerScript(
             pidFile: String,
@@ -676,8 +691,10 @@ class TerminalSession(
             shell: String,
         ): String = buildString {
             appendLine("echo \$\$ > ${TurnScripts.quote(pidFile)}")
-            appendLine("tty > ${TurnScripts.quote(ttyFile)} 2>/dev/null")
-            appendLine("stty rows ${clampRows(rows)} cols ${clampCols(cols)} 2>/dev/null")
+            appendLine("if [ -t 0 ]; then")
+            appendLine("  tty > ${TurnScripts.quote(ttyFile)} 2>/dev/null")
+            appendLine("  stty rows ${clampRows(rows)} cols ${clampCols(cols)} 2>/dev/null")
+            appendLine("fi")
             appendLine("exec ${TurnScripts.quote(shell)} -i")
         }
 
