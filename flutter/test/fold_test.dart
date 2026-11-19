@@ -69,6 +69,14 @@ void main() {
     expect(tester.getSize(find.byType(AnimatedFold)).height, 100);
   });
 
+  testWidgets('a narrow child stays on the leading edge', (tester) async {
+    // The live thinking pill is narrower than the transcript; SizeTransition's
+    // default center alignment used to put it in the middle of the line.
+    await tester.pumpWidget(_harness(open: true));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byKey(const ValueKey('body'))).dx, 0);
+  });
+
   testWidgets('reduce motion opens instantly', (tester) async {
     await tester.pumpWidget(
       MediaQuery(

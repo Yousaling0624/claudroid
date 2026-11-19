@@ -181,6 +181,10 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val env = buildEnv(settings, plan)
             val workspace = Paths.workspace(ctx)
             val home = Paths.home(ctx)
+            // WebFetch's domain preflight hits api.anthropic.com before every fetch and
+            // fails outright when that host is blocked; the CLI's own settings switch is
+            // the supported way out, and HOME is the same in every launch mode.
+            CliSettings.ensure(home, ctx)
 
             cleanStalePidFiles()
             val pidName = "turn-${System.nanoTime()}.pid"

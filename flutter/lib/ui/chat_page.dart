@@ -98,8 +98,9 @@ class _ChatPageState extends State<ChatPage> {
   final TextEditingController _search = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
 
-  List<ChatMessage> get _visibleMessages =>
-      _searching ? searchMessages(_chat.messages, _search.text) : _chat.messages;
+  List<ChatMessage> get _visibleMessages => _searching
+      ? searchMessages(_chat.messages, _search.text)
+      : _chat.messages;
 
   @override
   void initState() {
@@ -134,10 +135,7 @@ class _ChatPageState extends State<ChatPage> {
       _applyState(snapshot);
     } catch (error) {
       if (!mounted) return;
-      widget.onToast(
-        '没能打开这段对话（$error）。点右上角新建一个对话试试。',
-        isError: true,
-      );
+      widget.onToast('没能打开这段对话（$error）。点右上角新建一个对话试试。', isError: true);
     }
   }
 
@@ -508,9 +506,11 @@ class _ChatPageState extends State<ChatPage> {
                       statusLine,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppTextStyle.caption1.of(context).copyWith(
-                        color: context.colorScheme.onSurfaceVariant,
-                      ),
+                      style: AppTextStyle.caption1
+                          .of(context)
+                          .copyWith(
+                            color: context.colorScheme.onSurfaceVariant,
+                          ),
                     ),
                 ],
               ),
@@ -587,9 +587,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: context.disableAnimations
                         ? (_followBottom
                               ? const SizedBox.shrink()
-                              : _BackToBottomButton(
-                                  onPressed: _jumpToBottom,
-                                ))
+                              : _BackToBottomButton(onPressed: _jumpToBottom))
                         : AnimatedVisibility.bottomNavigation(
                             visible: !_followBottom,
                             child: _BackToBottomButton(
@@ -615,12 +613,7 @@ class _ChatPageState extends State<ChatPage> {
       heightFactor: 1,
       alignment: Alignment.center,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          context.contentTopPadding + 4,
-          6,
-          4,
-        ),
+        padding: EdgeInsets.fromLTRB(16, context.contentTopPadding + 4, 6, 4),
         child: Row(
           children: [
             Expanded(
@@ -638,9 +631,9 @@ class _ChatPageState extends State<ChatPage> {
             const SizedBox(width: 8),
             Text(
               query.isEmpty ? '$count 条' : '$count 条匹配',
-              style: AppTextStyle.caption2.of(context).copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: AppTextStyle.caption2
+                  .of(context)
+                  .copyWith(color: scheme.onSurfaceVariant),
             ),
             IconButton(
               onPressed: _closeSearch,
@@ -700,13 +693,10 @@ class _ChatPageState extends State<ChatPage> {
               copied: _copiedId == message.id,
               foldOpen: _foldOpen,
               onToggleFold: _toggleFold,
-              onEdit: message.role == Role.user &&
-                      !_chat.running &&
-                      !_searching
+              onEdit: message.role == Role.user && !_chat.running && !_searching
                   ? () => _startEditing(message)
                   : null,
-              onRegenerate:
-                  isLastAssistant ? () => _regenerate(message) : null,
+              onRegenerate: isLastAssistant ? () => _regenerate(message) : null,
               onCopy: () => _copy(message),
               onOpenUrl: _openUrl,
             ),
@@ -753,10 +743,7 @@ class _ChatPageState extends State<ChatPage> {
 // ---------------------------------------------------------------------------
 
 class _EmptyConversation extends StatefulWidget {
-  const _EmptyConversation({
-    required this.bridge,
-    required this.onSuggestion,
-  });
+  const _EmptyConversation({required this.bridge, required this.onSuggestion});
 
   final Bridge bridge;
   final ValueChanged<String> onSuggestion;
@@ -847,13 +834,13 @@ class _EmptyConversationState extends State<_EmptyConversation> {
             for (final hint in _suggestions) ...[
               Card(
                 onPressed: () => widget.onSuggestion(hint),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
-                    Expanded(
-                      child: Text(hint, style: context.listTitleStyle),
-                    ),
+                    Expanded(child: Text(hint, style: context.listTitleStyle)),
                     const SizedBox(width: 8),
                     Text('↵', style: context.listCaptionStyle),
                   ],
@@ -949,8 +936,10 @@ class _UserBubble extends StatelessWidget {
                   constraints: BoxConstraints(
                     maxWidth: constraints.maxWidth * 0.8,
                   ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.surfaceContainerHigh,
                     borderRadius: AppRadius.lg,
@@ -986,9 +975,9 @@ class _UserBubble extends StatelessWidget {
                     const SizedBox(width: 4),
                     Text(
                       '编辑',
-                      style: AppTextStyle.caption1.of(context).copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
+                      style: AppTextStyle.caption1
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -1078,15 +1067,17 @@ class _AssistantMessage extends StatelessWidget {
         else
           null,
     ];
-    final hasOutput =
-        visibleTexts.any((text) => text != null && text.trim().isNotEmpty);
+    final hasOutput = visibleTexts.any(
+      (text) => text != null && text.trim().isNotEmpty,
+    );
     final copyText = visibleTexts
         .whereType<String>()
         .where((text) => text.trim().isNotEmpty)
         .join('\n\n')
         .trim();
-    final lastTextIndex = visibleTexts
-        .lastIndexWhere((text) => text != null && text.trim().isNotEmpty);
+    final lastTextIndex = visibleTexts.lastIndexWhere(
+      (text) => text != null && text.trim().isNotEmpty,
+    );
     final duration = _durationLabel(message.durationMs);
     final cost = message.costUsd;
     // The label frozen by Kotlin when this turn started wins over the live
@@ -1117,9 +1108,9 @@ class _AssistantMessage extends StatelessWidget {
                 signature,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTextStyle.footnote.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                style: AppTextStyle.footnote
+                    .of(context)
+                    .copyWith(color: scheme.onSurfaceVariant),
               ),
             ),
           ],
@@ -1152,7 +1143,8 @@ class _AssistantMessage extends StatelessWidget {
           ),
         ),
         AnimatedFold(
-          open: (hasOutput || !message.streaming) &&
+          open:
+              (hasOutput || !message.streaming) &&
               (thinkingSegments.isNotEmpty || tools.isNotEmpty),
           fade: false,
           child: _WorkDisclosure(
@@ -1282,12 +1274,10 @@ class _ThinkingPill extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  active
-                      ? '思考中…'
-                      : '思考过程 · ${text.length} 字',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                  active ? '思考中…' : '思考过程 · ${text.length} 字',
+                  style: AppTextStyle.caption1
+                      .of(context)
+                      .copyWith(color: scheme.onSurfaceVariant),
                 ),
                 if (!placeholder) ...[
                   const SizedBox(width: 3),
@@ -1310,10 +1300,9 @@ class _ThinkingPill extends StatelessWidget {
               ),
               child: SelectableText(
                 text,
-                style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 20 / 13,
-                    ),
+                style: AppTextStyle.caption1
+                    .of(context)
+                    .copyWith(color: scheme.onSurfaceVariant, height: 20 / 13),
               ),
             ),
           ),
@@ -1344,9 +1333,9 @@ class _ActivityLine extends StatelessWidget {
           const SizedBox(width: 9),
           Text(
             ToolPresentation.verb(tool.name),
-            style: AppTextStyle.caption1.of(context).copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+            style: AppTextStyle.caption1
+                .of(context)
+                .copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(width: 8),
           if (detail.isNotEmpty)
@@ -1355,7 +1344,9 @@ class _ActivityLine extends StatelessWidget {
                 detail,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTextStyle.caption2.of(context).copyWith(
+                style: AppTextStyle.caption2
+                    .of(context)
+                    .copyWith(
                       fontFamily: 'monospace',
                       color: scheme.onSurfaceVariant.withValues(alpha: 0.75),
                     ),
@@ -1369,16 +1360,12 @@ class _ActivityLine extends StatelessWidget {
           else if (tool.isError)
             Text(
               '失败',
-              style: AppTextStyle.caption2.of(context).copyWith(
-                    color: scheme.error,
-                  ),
+              style: AppTextStyle.caption2
+                  .of(context)
+                  .copyWith(color: scheme.error),
             )
           else
-            GlyphIcon(
-              Glyphs.check,
-              size: 12,
-              color: scheme.onSurfaceVariant,
-            ),
+            GlyphIcon(Glyphs.check, size: 12, color: scheme.onSurfaceVariant),
         ],
       ),
     );
@@ -1468,7 +1455,8 @@ class _WorkDisclosure extends StatelessWidget {
     var first = true;
     for (var index = 0; index < blocks.length; index++) {
       final block = blocks[index];
-      final isWork = (block is ThinkingBlock && block.text.trim().isNotEmpty) ||
+      final isWork =
+          (block is ThinkingBlock && block.text.trim().isNotEmpty) ||
           block is ToolBlock;
       if (!isWork) continue;
       if (!first) {
@@ -1529,7 +1517,9 @@ class _WorkDisclosure extends StatelessWidget {
                   Expanded(
                     child: Text(
                       workLabel(thinkingCount, toolCount, errorCount),
-                      style: AppTextStyle.caption1.of(context).copyWith(
+                      style: AppTextStyle.caption1
+                          .of(context)
+                          .copyWith(
                             color: errorCount > 0
                                 ? scheme.error
                                 : scheme.onSurfaceVariant,
@@ -1541,7 +1531,10 @@ class _WorkDisclosure extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedFold(open: open, child: Column(children: children)),
+          AnimatedFold(
+            open: open,
+            child: Column(children: children),
+          ),
         ],
       ),
     );
@@ -1577,10 +1570,7 @@ class _ThinkingFold extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             child: Row(
               children: [
-                Text(
-                  '思考过程 $index/$total',
-                  style: context.listCaptionStyle,
-                ),
+                Text('思考过程 $index/$total', style: context.listCaptionStyle),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
@@ -1608,10 +1598,9 @@ class _ThinkingFold extends StatelessWidget {
               ),
               child: SelectableText(
                 text,
-                style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 20 / 13,
-                    ),
+                style: AppTextStyle.caption1
+                    .of(context)
+                    .copyWith(color: scheme.onSurfaceVariant, height: 20 / 13),
               ),
             ),
           ),
@@ -1639,12 +1628,13 @@ class _ToolCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     final output = block.output;
-    final isSearch = block.name.toLowerCase() == 'websearch' ||
+    final isSearch =
+        block.name.toLowerCase() == 'websearch' ||
         (output?.toLowerCase().contains('web search results') ?? false);
-    final sources = isSearch ? WebSources.parse(output ?? '') : const <WebSource>[];
-    final hint = block.isError
-        ? webFetchFailureHint(block.name, output)
-        : null;
+    final sources = isSearch
+        ? WebSources.parse(output ?? '')
+        : const <WebSource>[];
+    final hint = block.isError ? webFetchFailureHint(block.name, output) : null;
 
     return Container(
       clipBehavior: Clip.antiAlias,
@@ -1670,8 +1660,9 @@ class _ToolCard extends StatelessWidget {
                   GlyphIcon(
                     ToolPresentation.icon(block.name),
                     size: 18,
-                    color:
-                        block.isError ? scheme.error : scheme.onSurfaceVariant,
+                    color: block.isError
+                        ? scheme.error
+                        : scheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -1692,11 +1683,12 @@ class _ToolCard extends StatelessWidget {
                             toolCallDetail(block.input),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style:
-                                AppTextStyle.caption2.of(context).copyWith(
-                                      fontFamily: 'monospace',
-                                      color: scheme.onSurfaceVariant,
-                                    ),
+                            style: AppTextStyle.caption2
+                                .of(context)
+                                .copyWith(
+                                  fontFamily: 'monospace',
+                                  color: scheme.onSurfaceVariant,
+                                ),
                           ),
                       ],
                     ),
@@ -1707,16 +1699,16 @@ class _ToolCard extends StatelessWidget {
                     const SizedBox(width: 5),
                     Text(
                       '运行中',
-                      style: AppTextStyle.caption2.of(context).copyWith(
-                            color: scheme.primary,
-                          ),
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.primary),
                     ),
                   ] else if (block.isError)
                     Text(
                       '失败',
-                      style: AppTextStyle.caption2.of(context).copyWith(
-                            color: scheme.error,
-                          ),
+                      style: AppTextStyle.caption2
+                          .of(context)
+                          .copyWith(color: scheme.error),
                     )
                   else
                     Semantics(
@@ -1739,34 +1731,31 @@ class _ToolCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GlyphIcon(
-                    AppGlyphs.refresh,
-                    size: 14,
-                    color: scheme.error,
-                  ),
+                  GlyphIcon(AppGlyphs.refresh, size: 14, color: scheme.error),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       hint,
-                      style: AppTextStyle.caption1.of(context).copyWith(
-                        color: scheme.error,
-                        height: 1.35,
-                      ),
+                      style: AppTextStyle.caption1
+                          .of(context)
+                          .copyWith(color: scheme.error, height: 1.35),
                     ),
                   ),
                 ],
               ),
             ),
-          if (sources.isNotEmpty) ...[
-            Container(height: 1, color: scheme.outlineVariant),
-            _SourcesSection(sources: sources, onOpenUrl: onOpenUrl),
-          ],
           AnimatedFold(
             open: open,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(height: 1, color: scheme.outlineVariant),
+                // Sources belong to the detail view: collapsed cards show only the
+                // one-line summary, so a search result never becomes a wall of links.
+                if (sources.isNotEmpty)
+                  _SourcesSection(sources: sources, onOpenUrl: onOpenUrl),
+                if (sources.isNotEmpty)
+                  Container(height: 1, color: scheme.outlineVariant),
                 Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
@@ -1809,8 +1798,9 @@ class _SourcesSectionState extends State<_SourcesSection> {
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final visible =
-        _showAll ? widget.sources : widget.sources.take(4).toList(growable: false);
+    final visible = _showAll
+        ? widget.sources
+        : widget.sources.take(4).toList(growable: false);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       child: Column(
@@ -1834,68 +1824,69 @@ class _SourcesSectionState extends State<_SourcesSection> {
                   onTap: () => widget.onOpenUrl(source.url),
                   child: Container(
                     constraints: const BoxConstraints(minHeight: 44),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: scheme.surfaceContainerHigh,
                       borderRadius: AppRadius.sm,
                     ),
                     child: Row(
                       children: [
-                      Container(
-                        width: 18,
-                        height: 18,
-                        decoration: BoxDecoration(
-                          color: scheme.primary.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            '${index + 1}',
-                            style: AppTextStyle.caption2.of(context).copyWith(
-                                  color: scheme.primary,
-                                ),
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: scheme.primary.withValues(alpha: 0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${index + 1}',
+                              style: AppTextStyle.caption2
+                                  .of(context)
+                                  .copyWith(color: scheme.primary),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              source.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTextStyle.caption1.of(context),
-                            ),
-                            if (source.host.isNotEmpty)
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                               Text(
-                                source.host,
-                                maxLines: 1,
+                                source.title,
+                                maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: AppTextStyle.caption2.of(context)
-                                    .copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+                                style: AppTextStyle.caption1.of(context),
                               ),
-                          ],
+                              if (source.host.isNotEmpty)
+                                Text(
+                                  source.host,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTextStyle.caption2
+                                      .of(context)
+                                      .copyWith(color: scheme.onSurfaceVariant),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '↗',
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                      ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '↗',
+                          style: AppTextStyle.caption1
+                              .of(context)
+                              .copyWith(color: scheme.onSurfaceVariant),
+                        ),
                       ],
                     ),
                   ),
                 ),
               ),
             ),
-            if (widget.sources.length > 4)
+          if (widget.sources.length > 4)
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _showAll = !_showAll),
@@ -1903,9 +1894,9 @@ class _SourcesSectionState extends State<_SourcesSection> {
                 padding: const EdgeInsets.only(top: 6, left: 2),
                 child: Text(
                   _showAll ? '收起' : '展开全部 ${widget.sources.length} 个来源',
-                  style: AppTextStyle.caption1.of(context).copyWith(
-                        color: scheme.primary,
-                      ),
+                  style: AppTextStyle.caption1
+                      .of(context)
+                      .copyWith(color: scheme.primary),
                 ),
               ),
             ),
@@ -1916,7 +1907,11 @@ class _SourcesSectionState extends State<_SourcesSection> {
 }
 
 class _MonoBlock extends StatefulWidget {
-  const _MonoBlock({required this.label, required this.text, this.isError = false});
+  const _MonoBlock({
+    required this.label,
+    required this.text,
+    this.isError = false,
+  });
 
   final String label;
   final String text;
@@ -1958,7 +1953,9 @@ class _MonoBlockState extends State<_MonoBlock> {
             Expanded(
               child: Text(
                 widget.label,
-                style: AppTextStyle.caption2.of(context).copyWith(
+                style: AppTextStyle.caption2
+                    .of(context)
+                    .copyWith(
                       color: scheme.onSurfaceVariant,
                       letterSpacing: 0.3,
                     ),
@@ -1982,9 +1979,9 @@ class _MonoBlockState extends State<_MonoBlock> {
                   const SizedBox(width: 4),
                   Text(
                     _copied ? '已复制' : '复制',
-                    style: AppTextStyle.caption2.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+                    style: AppTextStyle.caption2
+                        .of(context)
+                        .copyWith(color: scheme.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -2002,7 +1999,9 @@ class _MonoBlockState extends State<_MonoBlock> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: SelectableText(
               widget.text,
-              style: AppTextStyle.caption1.of(context).copyWith(
+              style: AppTextStyle.caption1
+                  .of(context)
+                  .copyWith(
                     fontFamily: 'monospace',
                     height: 1.4,
                     color: widget.isError ? scheme.error : null,
@@ -2039,10 +2038,9 @@ class _ErrorNotice extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: AppTextStyle.caption1.of(context).copyWith(
-                    color: scheme.error,
-                    height: 1.45,
-                  ),
+              style: AppTextStyle.caption1
+                  .of(context)
+                  .copyWith(color: scheme.error, height: 1.45),
             ),
           ),
         ],

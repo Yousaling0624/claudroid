@@ -73,9 +73,7 @@ class _AnimatedFoldState extends State<AnimatedFold>
   }
 
   void _handleStatus(AnimationStatus status) {
-    if (status != AnimationStatus.dismissed ||
-        widget.open ||
-        !_includeChild) {
+    if (status != AnimationStatus.dismissed || widget.open || !_includeChild) {
       return;
     }
     setState(() => _includeChild = false);
@@ -96,7 +94,9 @@ class _AnimatedFoldState extends State<AnimatedFold>
     return ClipRect(
       child: SizeTransition(
         sizeFactor: _height,
-        alignment: Alignment.topCenter,
+        // Leading edge, not center: a narrow child (the live thinking pill) must sit
+        // on the transcript's left margin like every other block.
+        alignment: AlignmentDirectional.topStart,
         child: widget.fade
             ? FadeTransition(opacity: _fade, child: widget.child)
             : widget.child,

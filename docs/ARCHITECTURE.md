@@ -117,6 +117,7 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 ├── etc/apt/sources.list.d/debian.sources   trixie / trixie-updates / trixie-security
 ├── etc/apt/apt.conf.d/99claudroid     APT::Sandbox::User=root、重试 3 次、超时 30 s
 ├── root/                             HOME，`~/.claude` 会话记录落在这里
+│   └── .claude/settings.json         CLI 用户设置；启动前由 CliSettings 合入 skipWebFetchPreflight
 ├── work/                             工作区 bind mount
 └── dev/ proc/ sys/ system/ data/ sdcard/ tmp/   挂载点
 ```
@@ -127,6 +128,13 @@ xz-utils curl ca-certificates less`。其中 bash、grep、sed、mawk、tar、gz
 apt 失败会重试 3 次；`APT::Sandbox::User` 必须改成 root，因为 PRoot 把 app uid 呈现成
 uid 0，`_apt` 沙箱用户打不开自己的文件。`ca-certificates` 装好之前 sources 用
 `http://deb.debian.org`（不是 https）。
+
+WebFetch 抓取前会先请求 `api.anthropic.com/api/web/domain_info` 做域名黑名单检查；受限
+网络里该域名通常不可达（或经代理时证书校验失败），于是一次 WebFetch 都还没请求目标页
+就先报错。`CliSettings` 在启动 CLI 前把 `skipWebFetchPreflight: true` 合入
+`$HOME/.claude/settings.json`（保留用户已有键；文件不是 JSON 对象时不覆盖），让 WebFetch
+直接抓取目标页，同时不再把每个访问过的域名发给 Anthropic。`HOME` 在 PRoot、chroot 和
+直启三种模式下都指向 `filesDir/home`，所以只写这一处即可覆盖所有启动方式。
 
 组装分两种：无 root 时直接在应用私有目录解包（`TarGz.extractAll`，Java NIO 改权限）；
 有 root 时先解到应用缓存 `rootfs-stage`，再让 root shell `cp -a` 到 `/data/adb`，

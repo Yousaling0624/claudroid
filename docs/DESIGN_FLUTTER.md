@@ -27,7 +27,7 @@ APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`）。视觉方�
 
 | 需要什么 | 用 prism_ui 的 |
 | --- | --- |
-| 页面骨架、顶栏 | `PrismScaffold`；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`（静态页面色背板，无玻璃胶囊），**不要**直接用 `ScaffoldBar` |
+| 页面骨架、顶栏 | `PrismScaffold`；`bar` 用 `scaffold_bar.dart` 的 `ClaudroidBar`（静态页面色背板，图标键由内部 `TonalButtonTheme` 给玻璃胶囊），**不要**直接用 `ScaffoldBar` |
 | 容器 | `Surface`（`SurfaceLevel.page` / `.card` 取色） |
 | 设置项列表 | `generateSection` / `generateGroup` / `ListRow` / `DecorationListItem` |
 | 分组行间距 | `ItemPosition.get(index, length)` 或 `ItemPositionProvider` |
@@ -91,10 +91,13 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
 ## 3. 材质与动画
 
 - `PrismApp(liquidGlass: LiquidGlassQuality.standard)`：液态玻璃统一在这个层级开，
-  组件侧不单独配。**顶栏不用玻璃**：它是一层静态的页面色背板（整条 bar 覆盖，末尾
-  约 16% 高度淡出），标题、模型键与图标都直接排在这一层上，不再有胶囊。玻璃只留给
-  聊天输入框（单个胶囊，内部按钮不叠 pane）和页面主操作按钮（`GlassTonalButton`）。
-  无 `LiquidGlassScope` 时这些按钮降级为 `raisedSurface` 填充。
+  组件侧不单独配。**顶栏背板保持静态页面色**（整条 bar 覆盖，末尾约 16% 高度淡出），
+  滚动内容不会透过标题；但顶栏里的图标按钮由 `ClaudroidBar` 统一包在
+  `TonalButtonTheme(glass: LiquidGlassScope.of(context), size: TonalButtonSize.bar)`
+  里，菜单、搜索、返回、新建等键都是液态玻璃胶囊（与 FlClash 一致）。文本类动作（模型键）
+  不受这个主题影响，仍是纯文字。玻璃同时用于聊天输入框（单个胶囊，内部按钮不叠 pane）
+  和页面主操作按钮（`GlassTonalButton`）。无 `LiquidGlassScope` 时这些按钮降级为
+  `raisedSurface` 填充。
 - 顶栏 `preferredSize` 必须保持 72dp（compact sheet 48dp），否则 `contentTopPadding`
   会算错；静态背板让滚动内容从标题下方干净地滑过，就是设置页标题不跟着列表移动的
   实现方式。
@@ -106,7 +109,7 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   | 危险操作 | `TonalButton` | 红色实色 |
   | 行内次要动作 | `TextButton` | 无填充 |
   | 行尾值/编辑 | `SettingsValueButton` | 文本 + glyph |
-  | 顶栏图标 | `IconButton` | 无填充 |
+  | 顶栏图标 | `IconButton` + `ClaudroidBar` 的 `TonalButtonTheme` | 液态玻璃 |
   | 对话框动作 | `AlertDialog` actions | 末位自动填色 |
 
 - 弹层（菜单、对话框）用 prism_ui 自带的转场与玻璃模糊；左侧抽屉是
@@ -181,10 +184,13 @@ FlClash 的观感来自这些统一的行高。
   系统浏览器。
 - 助手输出前的实时思考胶囊与活动行、输出后的 `WorkDisclosure` 嵌套折叠，语义照
   `ChatScreen.kt`：「输出前实时，输出后合并」；展开后仍按 blocks 原始顺序排列。
-  活动行在本地化动词后显示工具输入摘要（`toolCallDetail`，command / file_path / query /
-  url 等首个可用字段），思考阶段也能看出正在做什么。
+  实时胶囊与折叠内容都靠 `AnimatedFold` 对齐到起始边，窄胶囊不会被 `SizeTransition`
+  居中。活动行在本地化动词后显示工具输入摘要（`toolCallDetail`，command / file_path /
+  query / url 等首个可用字段），思考阶段也能看出正在做什么。
 - 工具卡标题用 `tool_presentation.dart` 的本地化动词 + 工具名，完成/失败用勾叉 glyph；
-  输入与输出都可复制，失败工具用错误色描边。错误条用 `errorContainer` 淡底 + `error` 描边。
+  收起时只显示标题与一行摘要。来源列表、输入与输出都属于展开后的详情，默认不占卡片
+  高度；展开后来源按 `web_sources.dart` 的结果显示可点卡片。失败工具用错误色描边，
+  错误条用 `errorContainer` 淡底 + `error` 描边。
 - 顶栏搜索图标进入会话内搜索（`chat_search.dart`）：只保留命中正文/错误的消息并显示匹配
   数，搜索时暂停自动跟随与回到底部。顶栏菜单的「复制整段对话」用
   `conversation_export.dart` 导出纯文本（剥掉尾部 `Sources:`，跳过思考/工具）。
