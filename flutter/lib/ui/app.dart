@@ -11,6 +11,7 @@ import 'home_page.dart';
 import 'left_side_sheet.dart';
 import 'localizations.dart';
 import 'palette.dart';
+import 'scroll_behavior.dart';
 import 'session_drawer.dart';
 import 'settings/settings_destination.dart';
 import 'settings_page.dart';
@@ -184,7 +185,12 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
         return ViewScope(
           size: size,
           isMobile: size.width < 600,
-          child: child!,
+          // Above the navigator, so every route and its lists use the app's
+          // spring scroll instead of Android's default clamping stop.
+          child: ScrollConfiguration(
+            behavior: const ClaudroidScrollBehavior(),
+            child: child!,
+          ),
         );
       },
       localizationsDelegates: const [ZhUiLocalizations.delegate],

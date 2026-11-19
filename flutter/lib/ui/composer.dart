@@ -7,6 +7,8 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import 'attachments.dart';
+import 'dialog_motion.dart';
+import 'fold.dart';
 import 'glyphs.dart';
 
 /// One entry in the slash palette. [command] is what the user types after `/`;
@@ -97,32 +99,35 @@ Future<void> showSlashHelpDialog(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final action in actions)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    children: [
-                      GlyphIcon(
-                        action.glyph,
-                        size: 18,
-                        color: action.enabled
-                            ? scheme.onSurfaceVariant
-                            : scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          action.label,
-                          style: AppTextStyle.subheadline.of(context),
+              for (var i = 0; i < actions.length; i++)
+                DialogRowReveal(
+                  index: i,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        GlyphIcon(
+                          actions[i].glyph,
+                          size: 18,
+                          color: actions[i].enabled
+                              ? scheme.onSurfaceVariant
+                              : scheme.onSurfaceVariant.withValues(alpha: 0.4),
                         ),
-                      ),
-                      Text(
-                        '/${action.command}',
-                        style: AppTextStyle.caption1.of(context).copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                      ),
-                    ],
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            actions[i].label,
+                            style: AppTextStyle.subheadline.of(context),
+                          ),
+                        ),
+                        Text(
+                          '/${actions[i].command}',
+                          style: AppTextStyle.caption1.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               const SizedBox(height: 8),
@@ -351,8 +356,10 @@ class ChatComposerState extends State<ChatComposer> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (widget.editing)
-            Padding(
+          AnimatedFold(
+            open: widget.editing,
+            slide: 6,
+            child: Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Container(
                 padding: const EdgeInsets.fromLTRB(12, 5, 6, 5),
@@ -382,25 +389,37 @@ class ChatComposerState extends State<ChatComposer> {
                 ),
               ),
             ),
-          if (matches.isNotEmpty) ...[
-            _SlashPanel(actions: matches, onSelected: _runSlash),
-            const SizedBox(height: 6),
-          ],
+          ),
+          RetainedFold(
+            open: matches.isNotEmpty,
+            isEmpty: matches.isEmpty,
+            slide: 8,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _SlashPanel(actions: matches, onSelected: _runSlash),
+            ),
+          ),
           _GlassComposerSurface(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (_attachments.isNotEmpty)
-                    AttachmentPreviewStrip(
+                  RetainedFold(
+                    open: _attachments.isNotEmpty,
+                    isEmpty: _attachments.isEmpty,
+                    slide: 6,
+                    child: AttachmentPreviewStrip(
                       bridge: widget.bridge,
-                      paths: _attachments,
+                      // A snapshot, so the retained strip keeps showing the
+                      // removed files while the fold collapses.
+                      paths: List<String>.of(_attachments),
                       size: 56,
                       padding: const EdgeInsets.fromLTRB(4, 2, 4, 6),
                       onRemove: (path) =>
                           setState(() => _attachments.remove(path)),
                     ),
+                  ),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [

@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import 'dialog_motion.dart';
 import 'settings/settings_labels.dart';
 
 /// Dialog form of the permission choice, shared by the `/plan` companion
@@ -39,24 +40,27 @@ class _PermissionModeDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final entry in permissionLabels.entries)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.of(context).pop(entry.key),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(entry.value, style: context.listTitleStyle),
-                    ),
-                    if (entry.key == current)
-                      GlyphIcon(
-                        Glyphs.check,
-                        size: 17,
-                        color: scheme.primary,
+          for (final (i, entry) in permissionLabels.entries.indexed)
+            DialogRowReveal(
+              index: i,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pop(entry.key),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(entry.value, style: context.listTitleStyle),
                       ),
-                  ],
+                      if (entry.key == current)
+                        GlyphIcon(
+                          Glyphs.check,
+                          size: 17,
+                          color: scheme.primary,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

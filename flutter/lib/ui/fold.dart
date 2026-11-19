@@ -16,6 +16,7 @@ class AnimatedFold extends StatefulWidget {
     required this.open,
     this.fade = true,
     this.animate = true,
+    this.slide = 0,
     required this.child,
   });
 
@@ -27,6 +28,12 @@ class AnimatedFold extends StatefulWidget {
   /// animating it into the final disclosure made the whole page appear to
   /// refresh and fade on the last streamed frame.
   final bool animate;
+
+  /// Logical pixels the content starts below its resting place while opening,
+  /// and drops back by the same amount while closing, so a panel rises into
+  /// place instead of only unfolding. Zero keeps the plain height/fade fold
+  /// and adds no extra builder.
+  final double slide;
   final Widget child;
 
   @override
@@ -104,16 +111,84 @@ class _AnimatedFoldState extends State<AnimatedFold>
   @override
   Widget build(BuildContext context) {
     if (!_includeChild) return const SizedBox.shrink();
+    Widget content = widget.fade
+        ? FadeTransition(opacity: _fade, child: widget.child)
+        : widget.child;
+    if (widget.slide != 0) {
+      // Same progress as the size, not the faster fade: the content keeps
+      // settling toward its row while the fold opens, the way a PopupMenu row
+      // floats up after the window has landed.
+      content = AnimatedBuilder(
+        animation: _height,
+        builder: (context, child) => Transform.translate(
+          offset: Offset(0, widget.slide * (1 - _height.value)),
+          child: child,
+        ),
+        child: content,
+      );
+    }
     return ClipRect(
       child: SizeTransition(
         sizeFactor: _height,
         // Leading edge, not center: a narrow child (the live thinking pill) must sit
         // on the transcript's left margin like every other block.
         alignment: AlignmentDirectional.topStart,
-        child: widget.fade
-            ? FadeTransition(opacity: _fade, child: widget.child)
-            : widget.child,
+        child: content,
       ),
+    );
+  }
+}
+
+/// An [AnimatedFold] that keeps showing its last non-empty [child] until the
+/// shrink ends.
+///
+/// The composer clears its slash matches and attachment list in the same frame
+/// it closes those panels; without the retained child the height would shrink
+/// around nothing and the panel would vanish instantly instead of folding.
+class RetainedFold extends StatefulWidget {
+  const RetainedFold({
+    super.key,
+    required this.open,
+    required this.isEmpty,
+    this.slide = 0,
+    required this.child,
+  });
+
+  final bool open;
+
+  /// Whether [child] is logically empty; while true the last non-empty child
+  /// stays on screen for the closing animation.
+  final bool isEmpty;
+  final double slide;
+  final Widget child;
+
+  @override
+  State<RetainedFold> createState() => _RetainedFoldState();
+}
+
+class _RetainedFoldState extends State<RetainedFold> {
+  late Widget _lastChild;
+
+  @override
+  void initState() {
+    super.initState();
+    // Capture the first child now: a `late` initializer would run on the first
+    // empty update, when `widget.child` is already the empty placeholder.
+    _lastChild = widget.child;
+  }
+
+  @override
+  void didUpdateWidget(covariant RetainedFold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.isEmpty) _lastChild = widget.child;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedFold(
+      open: widget.open,
+      slide: widget.slide,
+      child: widget.isEmpty ? _lastChild : widget.child,
     );
   }
 }

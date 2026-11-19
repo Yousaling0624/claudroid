@@ -4,6 +4,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'dialog_motion.dart';
 import 'glyphs.dart';
 import 'settings/settings_dialogs.dart';
 
@@ -193,7 +194,11 @@ class _WorkspaceSwitcherDialogState extends State<_WorkspaceSwitcherDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (final space in _spaces.spaces) _spaceRow(context, space),
+                for (final (i, space) in _spaces.spaces.indexed)
+                  DialogRowReveal(
+                    index: i,
+                    child: _spaceRow(context, space),
+                  ),
                 Container(
                   height: 1,
                   margin: const EdgeInsets.symmetric(vertical: 6),

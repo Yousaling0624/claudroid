@@ -138,6 +138,12 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   曲线 `Cubic(0,0,0.2,1)`，淡入先于高度完成；chevron 用 `FoldChevron` 旋转 90°，
   不换图标。展开状态由聊天页按 `work:<messageId>` / `think:<messageId>:<block>`
   / `tool:<blockId>` 记忆，列表回收后不丢。折叠头不允许再次手写 `if (open)`。
+- 滚动与浮层同一套弹簧语言：Android 列表用 `scroll_behavior.dart` 的
+  `BouncingScrollPhysics + RangeMaintainingScrollPhysics`（不再用 Clamping）；
+  输入区的编辑提示与附件条用 `AnimatedFold(slide: 6)` 从下方浮起、斜杠面板用
+  `slide: 8`，收起时用 `RetainedFold` 把最后一份内容留到高度折完（`composer.dart`）；
+  对话框列表行用
+  `dialog_motion.dart` 的 `DialogRowReveal` 在窗口落位后逐行浮现，节奏与 `PopupMenu` 一致。
 - 「实时思考/活动行 → 最终 WorkDisclosure」是状态驱动的结构性切换，用
   `AnimatedFold(fade: false)` 只做高度过渡，不做整块淡入淡出；用户手动展开折叠时仍保留淡入。
   流式结束时这些结构折叠传 `animate: false`（`AnimatedFold.animate`），直接落到终态：

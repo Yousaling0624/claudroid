@@ -32,6 +32,39 @@ void main() {
     expect(tester.getSize(find.byType(AnimatedFold)).height, 100);
   });
 
+  testWidgets('slide lifts the content into place while opening', (
+    tester,
+  ) async {
+    Widget harness({required bool open}) => MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: AnimatedFold(
+            open: open,
+            slide: 8,
+            child: const SizedBox(
+              key: ValueKey('body'),
+              width: 120,
+              height: 100,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(harness(open: false));
+    await tester.pumpWidget(harness(open: true));
+    await tester.pump(const Duration(milliseconds: 90));
+    final rising = tester.getTopLeft(find.byKey(const ValueKey('body'))).dy;
+    expect(rising, greaterThan(0));
+    expect(rising, lessThanOrEqualTo(8));
+
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byKey(const ValueKey('body'))).dy, 0);
+  });
+
   testWidgets('closing keeps the child mounted until the motion ends', (
     tester,
   ) async {
@@ -45,6 +78,41 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('body')), findsNothing);
     expect(tester.getSize(find.byType(AnimatedFold)).height, 0);
+  });
+
+  testWidgets('retained fold keeps its last content while closing', (
+    tester,
+  ) async {
+    Widget harness({required bool open, required bool empty}) => MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: RetainedFold(
+            open: open,
+            isEmpty: empty,
+            child: empty
+                ? const SizedBox(key: ValueKey('placeholder'))
+                : const SizedBox(
+                    key: ValueKey('body'),
+                    width: 120,
+                    height: 100,
+                  ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(harness(open: true, empty: false));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(harness(open: false, empty: true));
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(find.byKey(const ValueKey('body')), findsOneWidget);
+
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('body')), findsNothing);
   });
 
   testWidgets('fade can be disabled for structural swaps', (tester) async {

@@ -3,6 +3,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../models/models.dart';
+import 'dialog_motion.dart';
 
 /// The model-tier choices, in display order. One list feeds the chat header
 /// popup, the `/model` dialog and the settings picker so their wording can
@@ -143,27 +144,30 @@ class _ModelTierDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final (value, label) in modelTierChoices())
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.of(context).pop(value),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: context.listTitleStyle,
+          for (final (i, (value, label)) in modelTierChoices().indexed)
+            DialogRowReveal(
+              index: i,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pop(value),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: context.listTitleStyle,
+                        ),
                       ),
-                    ),
-                    if (value == active)
-                      GlyphIcon(
-                        Glyphs.check,
-                        size: 17,
-                        color: context.colorScheme.primary,
-                      ),
-                  ],
+                      if (value == active)
+                        GlyphIcon(
+                          Glyphs.check,
+                          size: 17,
+                          color: context.colorScheme.primary,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),

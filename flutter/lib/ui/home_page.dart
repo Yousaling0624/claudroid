@@ -9,6 +9,7 @@ import '../bridge/api.dart';
 import '../models/models.dart';
 import 'attachments.dart';
 import 'composer.dart';
+import 'fold.dart';
 import 'glyphs.dart';
 import 'layout.dart';
 import 'model_menu.dart';
@@ -273,6 +274,7 @@ class _HomePageState extends State<HomePage> {
                 // With the suggestion strip on screen the hero gets ~150dp,
                 // which only fits without the halo.
                 final tight = constraints.maxHeight < 180;
+                final recent = _recentSession;
                 return ContentWidth(
                   maxWidth: kHomeContentWidth,
                   child: SingleChildScrollView(
@@ -319,14 +321,25 @@ class _HomePageState extends State<HomePage> {
                             textAlign: TextAlign.center,
                             style: context.listSubtitleStyle,
                           ),
-                          if (_recentSession case final recent?) ...[
-                            SizedBox(height: compact ? 12 : 18),
-                            _RecentSessionCard(
-                              session: recent,
-                              onPressed: () =>
-                                  widget.onOpenSession(recent.id),
+                          // Folds in on the first load instead of popping in
+                          // above the composer; the lead-in gap folds with it.
+                          RetainedFold(
+                            open: recent != null,
+                            isEmpty: recent == null,
+                            slide: 6,
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                top: compact ? 12 : 18,
+                              ),
+                              child: recent == null
+                                  ? const SizedBox.shrink()
+                                  : _RecentSessionCard(
+                                      session: recent,
+                                      onPressed: () =>
+                                          widget.onOpenSession(recent.id),
+                                    ),
                             ),
-                          ],
+                          ),
                           if (widget.notice != null &&
                               widget.notice!.isNotEmpty) ...[
                             const SizedBox(height: 18),
@@ -340,10 +353,14 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           ),
-          if (!widget.engine.ready) _EngineHint(
-            engine: widget.engine,
-            onPressed: () =>
-                widget.onOpenSettings(SettingsDestination.engine),
+          AnimatedFold(
+            open: !widget.engine.ready,
+            slide: 6,
+            child: _EngineHint(
+              engine: widget.engine,
+              onPressed: () =>
+                  widget.onOpenSettings(SettingsDestination.engine),
+            ),
           ),
           if (_loadingSuggestions || _suggestions.isNotEmpty)
             _SuggestionStrip(
@@ -486,48 +503,74 @@ class _SuggestionStrip extends StatelessWidget {
     final scheme = context.colorScheme;
     return SizedBox(
       height: 52,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-        child: Row(
+      child: PageTransitionSwitcher(
+        // The skeleton hands off to the chips instead of being replaced on a
+        // single frame; 220 ms is the fade-through rhythm used by the rest of
+        // the surfaces.
+        duration: context.motionDuration(const Duration(milliseconds: 220)),
+        transitionBuilder: (child, primaryAnimation, secondaryAnimation) =>
+            FadeThroughTransition(
+              animation: primaryAnimation,
+              secondaryAnimation: secondaryAnimation,
+              child: child,
+            ),
+        // Fill the strip. The default centered Stack gives each entry loose
+        // width, which would shrink the horizontal list to its content and
+        // move the leading padding inward.
+        layoutBuilder: (entries) => Stack(
+          alignment: AlignmentDirectional.topStart,
           children: [
-            if (loading)
-              for (final width in const [120.0, 100.0, 110.0])
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: SkeletonPill(width: width, height: 40),
-                )
-            else
-              for (final text in items)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Semantics(
-                    button: true,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => onSelect(text),
-                      child: Container(
-                        height: 40,
-                        padding: const EdgeInsets.symmetric(horizontal: 13),
-                        decoration: BoxDecoration(
-                          color: scheme.surfaceContainerLow,
-                          borderRadius: AppRadius.full,
-                          border: Border.all(color: scheme.outlineVariant),
-                        ),
-                        child: Center(
-                          child: Text(
-                            text,
-                            maxLines: 1,
-                            style: AppTextStyle.caption1.of(context).copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+            for (final entry in entries) Positioned.fill(child: entry),
+          ],
+        ),
+        child: KeyedSubtree(
+          key: ValueKey(loading),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+            child: Row(
+              children: [
+                if (loading)
+                  for (final width in const [120.0, 100.0, 110.0])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: SkeletonPill(width: width, height: 40),
+                    )
+                else
+                  for (final text in items)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Semantics(
+                        button: true,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => onSelect(text),
+                          child: Container(
+                            height: 40,
+                            padding: const EdgeInsets.symmetric(horizontal: 13),
+                            decoration: BoxDecoration(
+                              color: scheme.surfaceContainerLow,
+                              borderRadius: AppRadius.full,
+                              border: Border.all(color: scheme.outlineVariant),
+                            ),
+                            child: Center(
+                              child: Text(
+                                text,
+                                maxLines: 1,
+                                style: AppTextStyle.caption1
+                                    .of(context)
+                                    .copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
     );
