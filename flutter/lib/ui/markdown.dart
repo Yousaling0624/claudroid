@@ -374,8 +374,20 @@ abstract final class Markdown {
       decoration: TextDecoration.underline,
     );
 
+    // 普通文字先攒起来整段输出：逐字符建 span 不只会把一屏正文拆成上千个
+    // run，还会让代理对（emoji 等 BMP 外字符）落进两个相邻的 span 里，
+    // 排版时每个半个字符都会变成 U+FFFD。
+    final plain = StringBuffer();
+
+    void flushPlain() {
+      if (plain.isEmpty) return;
+      children.add(TextSpan(text: plain.toString()));
+      plain.clear();
+    }
+
     void append(String value, [TextStyle? style]) {
       if (value.isEmpty) return;
+      flushPlain();
       children.add(TextSpan(text: value, style: style));
     }
 
@@ -402,7 +414,7 @@ abstract final class Markdown {
           );
           i = end + 1;
         } else {
-          append('`');
+          plain.write('`');
           i++;
         }
       } else if (text.startsWith('***', i)) {
@@ -417,7 +429,7 @@ abstract final class Markdown {
           );
           i = end + 3;
         } else {
-          append('***');
+          plain.write('***');
           i += 3;
         }
       } else if (text.startsWith('**', i)) {
@@ -429,7 +441,7 @@ abstract final class Markdown {
           );
           i = end + 2;
         } else {
-          append('**');
+          plain.write('**');
           i += 2;
         }
       } else if (text.startsWith('~~', i)) {
@@ -441,7 +453,7 @@ abstract final class Markdown {
           );
           i = end + 2;
         } else {
-          append('~~');
+          plain.write('~~');
           i += 2;
         }
       } else if (text[i] == '*') {
@@ -453,7 +465,7 @@ abstract final class Markdown {
           );
           i = end + 1;
         } else {
-          append('*');
+          plain.write('*');
           i++;
         }
       } else if (text[i] == '[') {
@@ -467,7 +479,7 @@ abstract final class Markdown {
           );
           i = end + 1;
         } else {
-          append('[');
+          plain.write('[');
           i++;
         }
       } else if (text.startsWith('http://', i) ||
@@ -485,10 +497,11 @@ abstract final class Markdown {
         appendLink(text.substring(i, end), text.substring(i, end));
         i = end;
       } else {
-        append(text[i]);
+        plain.write(text[i]);
         i++;
       }
     }
+    flushPlain();
     return TextSpan(children: children);
   }
 

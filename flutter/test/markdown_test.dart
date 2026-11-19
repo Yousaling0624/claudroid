@@ -71,6 +71,23 @@ void main() {
     expect(parsed.single.span.toPlainText(), '普通 粗体 与 代码');
   });
 
+  test('emoji stay whole across inline spans', () {
+    // 逐字符建 TextSpan 时，一个 emoji（UTF-16 代理对）会被劈成两个 span，
+    // 排版器会把每个半个字符画成 U+FFFD。普通文字必须整段进同一个 span。
+    const source = '你好 😀 世界 👨‍👩‍👧‍👦 **粗体 😀** 结束';
+    final parsed = texts(source);
+
+    expect(parsed, hasLength(1));
+    expect(parsed.single.span.toPlainText(), '你好 😀 世界 👨‍👩‍👧‍👦 粗体 😀 结束');
+    _visitSpans(parsed.single.span, (text) {
+      expect(
+        _hasLoneSurrogate(text),
+        isFalse,
+        reason: 'span splits a surrogate pair: $text',
+      );
+    });
+  });
+
   test('short code stays unfolded', () {
     expect(CodeFold.isLong('val x = 1\nval y = 2'), isFalse);
   });
@@ -95,4 +112,27 @@ void main() {
     expect(CodeFold.headerMeta('ab\ncd'), '2 行 · 5 字');
     expect(CodeFold.headerMeta(''), '0 行 · 0 字');
   });
+}
+
+void _visitSpans(InlineSpan span, void Function(String text) visit) {
+  if (span is! TextSpan) return;
+  final text = span.text;
+  if (text != null) visit(text);
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    _visitSpans(child, visit);
+  }
+}
+
+bool _hasLoneSurrogate(String text) {
+  for (var i = 0; i < text.length; i++) {
+    final unit = text.codeUnitAt(i);
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      final next = i + 1 < text.length ? text.codeUnitAt(i + 1) : -1;
+      if (next < 0xDC00 || next > 0xDFFF) return true;
+      i++;
+    } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+      return true;
+    }
+  }
+  return false;
 }

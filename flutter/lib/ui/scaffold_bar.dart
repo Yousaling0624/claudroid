@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import 'glass_controls.dart';
+
 /// The page chrome: a static, page-colored header with the leading control,
 /// title and actions on one row. The backdrop stays still so scrolled content
 /// never reads through the title, while the bar's icon buttons sit on liquid
@@ -66,12 +68,16 @@ class _ClaudroidBarState extends State<ClaudroidBar> {
   }
 
   Widget _compactBar(BuildContext context) {
+    final leading = widget.leading?.call(context);
     return _glassButtons(
       context,
       AppBar(
-        leading: widget.leading?.call(context),
+        leading: leading == null ? null : LiquidGlassMorph(child: leading),
         title: widget.title?.call(context),
-        actions: [for (final action in widget.actions) action(context)],
+        actions: [
+          for (final action in widget.actions)
+            LiquidGlassMorph(child: action(context)),
+        ],
         toolbarHeight: sheetToolbarHeight,
       ),
     );
@@ -132,7 +138,11 @@ class _ClaudroidBarState extends State<ClaudroidBar> {
                           SizedBox(
                             width: 44,
                             height: 44,
-                            child: Center(child: leading(context)),
+                            child: Center(
+                              child: LiquidGlassMorph(
+                                child: leading(context),
+                              ),
+                            ),
                           ),
                         if (leading != null && title != null)
                           const SizedBox(width: 4),
@@ -164,7 +174,7 @@ class _ClaudroidBarState extends State<ClaudroidBar> {
                           ),
                         for (final action in actions) ...[
                           const SizedBox(width: 4),
-                          action,
+                          LiquidGlassMorph(child: action),
                         ],
                       ],
                     ),

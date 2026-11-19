@@ -118,6 +118,11 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   **不要手写** `AnimatedOpacity` / `BackdropFilter`。
 - 动效时长统一走 `context.motionDuration`，无障碍「减少动效」打开时它自动归零；
   `context.disableAnimations` 可作显式判断。**不要**写死 `Duration(milliseconds: …)`。
+- 液态玻璃按钮的长按拖动形变由 `glass_controls.dart` 的 `LiquidGlassMorph` 提供，
+  顶栏图标键与 `GlassTonalButton` 都包在它里面：按住 `kLongPressTimeout` 后按钮轻微
+  膨胀，拖动时沿拖动方向拉伸并跟手，松手弹回。手指在长按计时前移动超过 `kTouchSlop`
+  就取消形变，把滚动/点击留给子组件；减少动效时完全不启动。形变只作用于绘制与命中
+  变换，不改变顶栏布局。
 - **按钮不能在自己的点击回调里把自己置为 `onPressed: null`**：prism_ui 的
   `PressSurface` 会在「按下 → 禁用」的这次更新里取消按压动画并经 states controller
   回调按钮自己的 `setState`，debug 构建直接触发框架断言（红屏）。主操作按钮用
@@ -186,6 +191,10 @@ FlClash 的观感来自这些统一的行高。
   5dp、段落 9dp，行内代码底比代码块浅一档。列表符号用 `onSurfaceVariant`，赤陶色只留给
   链接与裸 URL；用户气泡仍是纯文本。Markdown 链接经 `app.openUrl`（仅 http/https）交给
   系统浏览器。
+- 消息正文必须支持 emoji：`Markdown.inline` 的普通文字按整段缓冲后再建 `TextSpan`，
+  不能逐 `codeUnit` 建 span——代理对（😀、👨‍👩‍👧‍👦 等）一旦被拆进两个 span，排版器
+  会把两个半个字符都画成 U+FFFD。加行内样式时先 `flushPlain()`，保证标记两侧的
+  普通文字仍是连续的 span。
 - 助手输出前的实时思考胶囊与活动行、输出后的 `WorkDisclosure` 嵌套折叠，语义照
   `ChatScreen.kt`：「输出前实时，输出后合并」；展开后仍按 blocks 原始顺序排列。
   实时胶囊与折叠内容都靠 `AnimatedFold` 对齐到起始边，窄胶囊不会被 `SizeTransition`
