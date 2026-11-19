@@ -409,6 +409,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private data class PreparedTurn(
         val settings: AppSettings,
         val plan: ClaudeEngine.LaunchPlan,
+        /** Active workspace at the moment this turn was accepted; bound to `/work`. */
+        val workspace: java.io.File,
         /** The engine cancellation token registered when this turn was accepted. */
         val cancelToken: Long,
     )
@@ -466,7 +468,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             appendError("OpenAI 兼容代理启动失败，请检查端口占用后重试。")
             return null
         }
-        return PreparedTurn(settings, plan, cancelToken)
+        return PreparedTurn(settings, plan, container.workspaces.activeDir(), cancelToken)
     }
 
     private suspend fun executeTurn(
@@ -526,6 +528,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                     resumeSessionId = resumeId,
                     settings = settings,
                     plan = plan,
+                    workspace = prepared.workspace,
                     cancelToken = prepared.cancelToken,
                 ) { ev ->
                     // 「清空上下文」 during a turn must win over late stdout events.

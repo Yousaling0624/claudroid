@@ -72,7 +72,11 @@ object Paths {
     /** Where downloads/unpacking happen before the jail is assembled. */
     fun staging(ctx: Context): File = File(ctx.cacheDir, "engine-stage").apply { mkdirs() }
 
+    /** The original workspace; still the default entry in [WorkspaceStore]. */
     fun workspace(ctx: Context): File = File(ctx.filesDir, "workspace").apply { mkdirs() }
+
+    /** Extra switchable workspaces, one directory per generated id. */
+    fun workspacesRoot(ctx: Context): File = File(ctx.filesDir, "workspaces").apply { mkdirs() }
 
     fun home(ctx: Context): File = File(ctx.filesDir, "home").apply { mkdirs() }
 

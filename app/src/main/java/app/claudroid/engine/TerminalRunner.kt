@@ -48,9 +48,9 @@ class TerminalRunner(
         plan: EngineManager.ShellPlan,
         command: String,
         cwdRel: String,
+        workspace: File,
         onOutput: suspend (String) -> Unit = {},
     ): Result = withContext(Dispatchers.IO) {
-        val workspace = Paths.workspace(ctx)
         val home = Paths.home(ctx)
         val startCwd = resolveExistingCwd(workspace, cwdRel)
         val guest = plan.useProot || plan.prootViaRoot || (plan.useRoot && plan.useChroot)
@@ -100,6 +100,7 @@ class TerminalRunner(
                         workDir = guestCwd,
                         script = guestScript!!,
                         baseEnv = env,
+                        workspace = workspace,
                     )
                 } catch (e: Exception) {
                     return@withContext Result(
@@ -124,6 +125,7 @@ class TerminalRunner(
                         workDir = guestCwd,
                         script = guestScript!!,
                         baseEnv = env,
+                        workspace = workspace,
                     )
                 } catch (e: Exception) {
                     return@withContext Result(

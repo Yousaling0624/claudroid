@@ -16,9 +16,9 @@ object Attachments {
 
     private const val MAX_BYTES = 512L * 1024 * 1024
 
-    fun import(context: Context, uri: Uri): Result<File> = runCatching {
+    fun import(context: Context, uri: Uri, workspace: File): Result<File> = runCatching {
         val name = displayName(context, uri).sanitize()
-        val dir = File(Paths.workspace(context), "attachments").apply { mkdirs() }
+        val dir = File(workspace, "attachments").apply { mkdirs() }
         val target = uniqueTarget(dir, name)
         val input = context.contentResolver.openInputStream(uri)
             ?: error("无法读取该文件")
@@ -51,9 +51,9 @@ object Attachments {
         return uri.lastPathSegment?.substringAfterLast('/') ?: "file"
     }
 
-    /** Path relative to the workspace, as the CLI should see it. */
-    fun relativePath(context: Context, file: File): String {
-        val root = Paths.workspace(context).absolutePath
+    /** Path relative to [workspace], as the CLI should see it. */
+    fun relativePath(workspace: File, file: File): String {
+        val root = workspace.absolutePath
         return file.absolutePath.removePrefix(root).trimStart('/')
     }
 

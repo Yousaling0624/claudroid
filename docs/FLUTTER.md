@@ -23,6 +23,8 @@ flutter/
 │       ├── workspace_page.dart # 工作区：文件浏览、文本/Markdown/HTML/图片预览、终端
 │       ├── chat_page.dart      # 聊天页：气泡、工具卡、思考折叠、会话内搜索、回到底部
 │       ├── composer.dart       # 共用输入胶囊：玻璃外层、附件、斜杠面板、发送/停止
+│       ├── permission_menu.dart # 权限模式弹层（/permissions）
+│       ├── workspace_switcher.dart # 工作区切换/新建/重命名/删除弹层（/switch）
 │       ├── glass_controls.dart # 主操作按钮的液态玻璃封装
 │       ├── left_side_sheet.dart # 左缘锚定的会话抽屉路由
 │       ├── scaffold_bar.dart   # 静态页面色顶栏（无玻璃胶囊），标题/模型键/动作同排
@@ -87,6 +89,12 @@ flutter/
 - **附件**：`composer.dart` 只显示预览图（图片走 `workspace.preview` 的字节，其他文件显示文件
   卡片），路径不再插进输入框；提交时由 `composeChatPrompt` 把 `@attachments/<name>` 追加到真正
   发送的 prompt，用户消息气泡也把路径还原成缩略图。
+- **斜杠命令**：输入 `/` 打开共享面板，按命令名和中文标签过滤；回车（IME 的完成键或硬件
+  Enter）执行精确匹配或唯一匹配的命令，发送键同样执行。不是命令的文本（例如只发 `/`、
+  未知命令 `\xyz`）会作为普通消息发送，不会再被发送逻辑吞掉。多义前缀（如 `/s`）保留给用户
+  继续选择。首页与聊天页各自提供 `new/model/plan/permissions/attach/workspace/switch/
+  settings/help`，聊天页另有 `search/copy/title/clear/stop/retry`；`/help` 弹出完整清单。
+  `/plan` 把权限模式切到「只读规划」，`/permissions` 提供其余模式。
 - **设置页**：根页按「模型与引擎 / 应用 / 其他」分三组，每行是带线条拟物图标的入口，
   用 `OpenContainer` 打开对应二级页：服务与模型、Claude Code 引擎、功能与实验、外观、
   高级、关于与诊断；工作区单独复用 `workspace_page.dart`。从外部快捷入口进入时，
@@ -97,7 +105,9 @@ flutter/
   Root 探测/网络配置是独立动作行，卸载单独归入危险操作分区；服务商分区展示选中预设的
   hint；日志页支持过滤。外观页提供跟随系统/浅色/深色的实时预览卡，关于页只放版本、发布、
   日志与存储。
-- **工作区**：抽屉底部按钮或 `/workspace` 打开。目录浏览与文件大小/时间来自
+- **工作区**：抽屉底部按钮、`/workspace` 或 `/switch` 进入。默认工作区是原来的
+  `files/workspace`，可在标题或右上角文件夹按钮切换、新建、重命名和删除其他工作区；切换后
+  新回合的 `/work` 指向新目录（运行中的任务会拒绝切换）。目录浏览与文件大小/时间来自
   `workspace.list`；breadcrumb 可跳级，工具条支持按名称过滤与排序。文本、Markdown、HTML
   与图片预览走 `workspace.preview`（图片字节以 `Uint8List` 过通道），HTML 由 Kotlin 侧
   注册的平台视图（系统 `WebView`）渲染并可切到源码，内容过大时提示截断；文本可复制并切换

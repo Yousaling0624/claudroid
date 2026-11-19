@@ -47,10 +47,10 @@ class ProotRunner(private val ctx: Context) {
         installation: Installation,
         args: List<String>,
         baseEnv: Map<String, String>,
+        workspace: File,
         pidFile: String? = null,
     ): Spec {
         val bundle = requireBundle()
-        val workspace = Paths.workspace(ctx)
         val home = Paths.home(ctx)
         val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
         val binds = hostBinds(workspace, home)
@@ -120,9 +120,9 @@ class ProotRunner(private val ctx: Context) {
         workDir: String,
         script: String,
         baseEnv: Map<String, String>,
+        workspace: File,
     ): Spec {
         val bundle = requireBundle()
-        val workspace = Paths.workspace(ctx)
         val home = Paths.home(ctx)
         val tmp = File(ctx.cacheDir, "proot-tmp").apply { mkdirs() }
         return build(

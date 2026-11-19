@@ -3,6 +3,7 @@ package app.claudroid
 import android.app.Application
 import android.content.Context
 import app.claudroid.bridge.BridgePlugin
+import app.claudroid.core.WorkspaceStore
 import app.claudroid.data.SettingsRepository
 import app.claudroid.data.SessionStore
 import app.claudroid.engine.EngineManager
@@ -36,7 +37,8 @@ class AppContainer(app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val settings = SettingsRepository(app)
     val sessions = SessionStore(app)
-    val engine = EngineManager(app, settings)
+    val workspaces = WorkspaceStore(app)
+    val engine = EngineManager(app, settings, workspaces)
 
     private val chats = mutableMapOf<String, ChatController>()
 

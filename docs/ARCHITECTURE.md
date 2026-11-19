@@ -118,7 +118,7 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 ├── etc/apt/apt.conf.d/99claudroid     APT::Sandbox::User=root、重试 3 次、超时 30 s
 ├── root/                             HOME，`~/.claude` 会话记录落在这里
 │   └── .claude/settings.json         CLI 用户设置；启动前由 CliSettings 合入 skipWebFetchPreflight
-├── work/                             工作区 bind mount
+├── work/                             当前工作区的 bind mount（默认 files/workspace，可在界面切换/新建）
 └── dev/ proc/ sys/ system/ data/ sdcard/ tmp/   挂载点
 ```
 

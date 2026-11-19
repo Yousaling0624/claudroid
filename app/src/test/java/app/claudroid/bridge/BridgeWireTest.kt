@@ -10,6 +10,7 @@ import app.claudroid.data.ChatSession
 import app.claudroid.data.ProviderPreset
 import app.claudroid.data.Role
 import app.claudroid.core.WorkspaceFiles
+import app.claudroid.core.WorkspaceInfo
 import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.chat.ChatEvent
 import app.claudroid.chat.DeltaBlock
@@ -166,6 +167,21 @@ class BridgeWireTest {
         val text = BridgeWire.searchText(session)
         assertTrue(text.indexOf("newest") < text.indexOf("older"))
         assertTrue(BridgeWire.searchText(session, limit = 10).length <= 10)
+    }
+
+    @Test
+    fun `workspaces json carries the active id and every switchable space`() {
+        val json = BridgeWire.workspacesJson(
+            activeId = "ws-2",
+            spaces = listOf(
+                WorkspaceInfo("default", "默认工作区", 0),
+                WorkspaceInfo("ws-2", "项目 A", 123),
+            ),
+        )
+        assertTrue(json.contains("\"activeId\":\"ws-2\""))
+        assertTrue(json.contains("\"id\":\"default\""))
+        assertTrue(json.contains("\"name\":\"项目 A\""))
+        assertTrue(json.contains("\"createdAt\":123"))
     }
 
     @Test

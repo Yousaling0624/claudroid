@@ -270,7 +270,7 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 | `app.info` | — | `{ok, versionName, versionCode}` | `BuildConfig` |
 | `app.release` | — | `{ok, releaseJson}` | `ReleaseCheck.fetch()` + `ReleaseCheck.status`；网络失败 `ok:false` |
 | `app.openUrl` | `url` | `{ok}` | 只接受 http/https，`Intent.ACTION_VIEW` |
-| `attachments.pick` | — | `{ok, relativePathsJson, cancelled}` | 系统 `OpenDocument` 选择器 + `Attachments.import`，返回 `attachments/<name>` 相对路径 |
+| `attachments.pick` | — | `{ok, relativePathsJson, cancelled}` | 系统 `OpenDocument` 选择器 + `Attachments.import`，复制进**当前活动工作区**的 `attachments/<name>` |
 | `logs.read` | — | `{ok, linesJson}` | `Logx.lines.value` |
 | `logs.clear` | — | `{ok}` | `Logx.clear()` |
 
@@ -321,9 +321,11 @@ root 未授权时 `skipped=true`，`message` 可直接显示给用户。
 
 ### 6.6 工作区
 
-工作区是 jail 映射到 `/work` 的 `files/workspace` 目录。Kotlin 负责路径校验、读取与系统
-Intent；Dart 只渲染。所有 `path` 都是**工作区相对路径**（`/` 分隔，`""` 表示根目录），
-`..` 逃逸、绝对路径与指向工作区外的符号链接一律拒绝。
+工作区是 jail 映射到 `/work` 的目录。默认工作区是 `files/workspace`；用户可以在
+「工作区」页新建多个工作区（`files/workspaces/<id>`）并切换。任意时刻只有**一个**工作区被
+挂载到 `/work`，所有 `workspace.*` 路径、附件导入与终端命令都作用于当前活动工作区。
+Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `path` 都是**工作区相对路径**
+（`/` 分隔，`""` 表示根目录），`..` 逃逸、绝对路径与指向工作区外的符号链接一律拒绝。
 
 | 方法 | 参数 | 返回 | Kotlin 实现 |
 | --- | --- | --- | --- |
@@ -332,6 +334,23 @@ Intent；Dart 只渲染。所有 `path` 都是**工作区相对路径**（`/` �
 | `workspace.delete` | `path` | `{ok}` | 仅允许删除文件，目录拒绝 |
 | `workspace.open` | `path` | `{ok}` | `FileProvider` + `ACTION_VIEW` |
 | `workspace.share` | `path` | `{ok}` | `FileProvider` + `ACTION_SEND` chooser |
+| `workspace.spaces` | — | `{ok, workspacesJson}` | `WorkspaceStore.state` |
+| `workspace.create` | `name` | `{ok, workspacesJson}` | 新建目录并立即切换 |
+| `workspace.select` | `id` | `{ok, workspacesJson}` | 切换活动工作区 |
+| `workspace.rename` | `id`, `name` | `{ok, workspacesJson}` | 仅自定义工作区；默认工作区拒绝 |
+| `workspace.remove` | `id` | `{ok, workspacesJson}` | 仅自定义工作区；递归删除目录 |
+
+`workspacesJson`：
+
+```json
+{"activeId":"default",
+ "spaces":[{"id":"default","name":"默认工作区","createdAt":0},
+           {"id":"ws-abc123","name":"项目 A","createdAt":1700000000000}]}
+```
+
+`workspace.create` / `select` / `remove` 在聊天 turn 或终端命令运行时会返回 `ok:false`
+（`任务正在运行，等这一轮结束后再切换工作区`）：运行中的进程已经持有旧的 `/work` bind，
+切换会让同一命令看到两棵不同的树。删除是递归的，Dart 必须在确认框里明确告知。
 
 `entriesJson`：
 
@@ -354,7 +373,7 @@ Intent；Dart 只渲染。所有 `path` 都是**工作区相对路径**（`/` �
 ### 6.7 终端
 
 终端一次只允许一条命令。Kotlin 复用 `engine/TerminalRunner`（PRoot/root/直启与 CLI 一致），
-不保留交互式 PTY；命令之间只保留工作目录。
+不保留交互式 PTY；命令之间只保留工作目录，命令始终在**当前活动工作区**的 `/work` 下执行。
 
 | 方法 | 参数 | 返回 | 说明 |
 | --- | --- | --- | --- |

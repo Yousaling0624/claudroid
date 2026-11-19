@@ -133,4 +133,23 @@ void main() {
     expect(entry.size, 12);
     expect(entry.modifiedAt, 34);
   });
+
+  test('workspace spaces decode the active id and fall back safely', () {
+    final spaces = WorkspaceSpaces.fromJsonString(jsonEncode({
+      'activeId': 'ws-2',
+      'spaces': [
+        {'id': 'default', 'name': '默认工作区', 'createdAt': 0},
+        {'id': 'ws-2', 'name': '项目 A', 'createdAt': 123},
+      ],
+    }));
+    expect(spaces.activeId, 'ws-2');
+    expect(spaces.spaces.length, 2);
+    expect(spaces.active?.name, '项目 A');
+    expect(spaces.spaces.first.isDefault, isTrue);
+
+    final empty = WorkspaceSpaces.fromJsonString('not json');
+    expect(empty.activeId, 'default');
+    expect(empty.spaces, isEmpty);
+    expect(empty.active, isNull);
+  });
 }

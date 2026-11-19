@@ -18,12 +18,14 @@ import 'glyphs.dart';
 import 'layout.dart';
 import 'markdown.dart';
 import 'model_menu.dart';
+import 'permission_menu.dart';
 import 'scaffold_bar.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_labels.dart';
 import 'tool_presentation.dart';
 import 'typography.dart';
 import 'web_sources.dart';
+import 'workspace_switcher.dart';
 
 /// One conversation. Mirrors `ui/chat/ChatScreen.kt`: a floating bar with the
 /// title and the live status line, the transcript, and a composer pinned under
@@ -273,7 +275,7 @@ class _ChatPageState extends State<ChatPage> {
     final composer = _composerKey.currentState;
     final paths = composer?.attachments ?? const <String>[];
     final text = _input.text.trim();
-    if ((text.isEmpty && paths.isEmpty) || text.startsWith('/') || _chat.running) {
+    if ((text.isEmpty && paths.isEmpty) || _chat.running) {
       return;
     }
     final editing = _editingId;
@@ -439,6 +441,7 @@ class _ChatPageState extends State<ChatPage> {
 
   List<SlashAction> _slashActions() {
     final last = _lastAssistant;
+    final hasMessages = _chat.messages.isNotEmpty;
     return [
       SlashAction(
         command: 'new',
@@ -459,6 +462,29 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
       SlashAction(
+        command: 'plan',
+        label: '规划模式（只读）',
+        glyph: AppGlyphs.checklist,
+        onPressed: () {
+          if (widget.settings.str('permissionMode', 'BYPASS') == 'PLAN') {
+            widget.onToast('当前已经是只读规划模式');
+            return;
+          }
+          _patch({'permissionMode': 'PLAN'});
+          widget.onToast('已切换到只读规划；用 /permissions 更换模式');
+        },
+      ),
+      SlashAction(
+        command: 'permissions',
+        label: '权限模式',
+        glyph: AppGlyphs.key,
+        onPressed: () => showPermissionModeDialog(
+          context,
+          current: widget.settings.str('permissionMode', 'BYPASS'),
+          onPatch: _patch,
+        ),
+      ),
+      SlashAction(
         command: 'attach',
         label: '添加附件',
         glyph: AppGlyphs.attachment,
@@ -469,6 +495,44 @@ class _ChatPageState extends State<ChatPage> {
         label: '工作区',
         glyph: AppGlyphs.folder,
         onPressed: widget.onOpenWorkspace,
+      ),
+      SlashAction(
+        command: 'switch',
+        label: '切换工作区',
+        glyph: AppGlyphs.folder,
+        onPressed: () => showWorkspaceSwitcher(
+          context,
+          bridge: widget.bridge,
+          onToast: widget.onToast,
+        ),
+      ),
+      SlashAction(
+        command: 'search',
+        label: '搜索当前对话',
+        glyph: AppGlyphs.search,
+        enabled: hasMessages,
+        onPressed: _openSearch,
+      ),
+      SlashAction(
+        command: 'copy',
+        label: '复制整段对话',
+        glyph: Glyphs.copy,
+        enabled: hasMessages,
+        onPressed: _copyConversation,
+      ),
+      SlashAction(
+        command: 'title',
+        label: '重新生成标题',
+        glyph: AppGlyphs.sparkle,
+        enabled: hasMessages && !_chat.running && !_chat.titleBusy,
+        onPressed: _regenerateTitle,
+      ),
+      SlashAction(
+        command: 'clear',
+        label: '清空对话上下文',
+        glyph: AppGlyphs.trash,
+        danger: true,
+        onPressed: _clear,
       ),
       if (_chat.running)
         SlashAction(
@@ -493,6 +557,12 @@ class _ChatPageState extends State<ChatPage> {
         label: '设置',
         glyph: AppGlyphs.settings,
         onPressed: () => widget.onOpenSettings(SettingsDestination.root),
+      ),
+      SlashAction(
+        command: 'help',
+        label: '命令帮助',
+        glyph: AppGlyphs.sliders,
+        onPressed: () => showSlashHelpDialog(context, _slashActions()),
       ),
     ];
   }

@@ -160,6 +160,8 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         resumeSessionId: String?,
         settings: AppSettings,
         plan: LaunchPlan,
+        /** Host directory bound to `/work` for this turn; resolved from the active workspace. */
+        workspace: File,
         cancelToken: Long,
         onEvent: (EngineEvent) -> Unit,
     ): Int {
@@ -179,7 +181,6 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
             val loader = inst.loader()
             val args = buildArgs(prompt, resumeSessionId, settings, inst.version)
             val env = buildEnv(settings, plan)
-            val workspace = Paths.workspace(ctx)
             val home = Paths.home(ctx)
             // WebFetch's domain preflight hits api.anthropic.com before every fetch and
             // fails outright when that host is blocked; the CLI's own settings switch is
@@ -212,7 +213,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                     // Root but no chroot(1). PRoot still needs to run as root so the CLI
                     // sees the container files; the script exports PRoot's own env (the
                     // su shell does not inherit our ProcessBuilder env reliably).
-                    val spec = ProotRunner(ctx).spec(inst, args, env, pidFile = "/root/$pidName")
+                    val spec = ProotRunner(ctx).spec(inst, args, env, workspace, pidFile = "/root/$pidName")
                     script.writeText(
                         TurnScripts.rootExec(
                             env = spec.env,
@@ -227,7 +228,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
                 plan.useProot -> {
                     // The wrapper writes its pid to /root (bound to filesDir/home) and
                     // execs the CLI, so Stop can kill the real process inside proot.
-                    val spec = ProotRunner(ctx).spec(inst, args, env, pidFile = "/root/$pidName")
+                    val spec = ProotRunner(ctx).spec(inst, args, env, workspace, pidFile = "/root/$pidName")
                     command = spec.argv
                     cwd = spec.cwd
                     processEnv.clear()

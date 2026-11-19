@@ -13,11 +13,13 @@ import 'glyphs.dart';
 import 'layout.dart';
 import 'model_menu.dart';
 import 'organic_halo.dart';
+import 'permission_menu.dart';
 import 'scaffold_bar.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_labels.dart';
 import 'time_format.dart';
 import 'typography.dart';
+import 'workspace_switcher.dart';
 
 /// The landing page, mirroring `ui/home/HomeScreen.kt`: a floating bar with the
 /// model capsule, the greeting, live AI suggestions, and one composer. Sending
@@ -137,7 +139,7 @@ class _HomePageState extends State<HomePage> {
     final composer = _composerKey.currentState;
     final paths = composer?.attachments ?? const <String>[];
     final text = _input.text.trim();
-    if ((text.isEmpty && paths.isEmpty) || text.startsWith('/') || _sending) {
+    if ((text.isEmpty && paths.isEmpty) || _sending) {
       return;
     }
     setState(() => _sending = true);
@@ -174,6 +176,29 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         SlashAction(
+          command: 'plan',
+          label: '规划模式（只读）',
+          glyph: AppGlyphs.checklist,
+          onPressed: () {
+            if (widget.settings.str('permissionMode', 'BYPASS') == 'PLAN') {
+              widget.onToast('当前已经是只读规划模式');
+              return;
+            }
+            _patch({'permissionMode': 'PLAN'});
+            widget.onToast('已切换到只读规划；用 /permissions 更换模式');
+          },
+        ),
+        SlashAction(
+          command: 'permissions',
+          label: '权限模式',
+          glyph: AppGlyphs.key,
+          onPressed: () => showPermissionModeDialog(
+            context,
+            current: widget.settings.str('permissionMode', 'BYPASS'),
+            onPatch: _patch,
+          ),
+        ),
+        SlashAction(
           command: 'attach',
           label: '添加附件',
           glyph: AppGlyphs.attachment,
@@ -186,10 +211,26 @@ class _HomePageState extends State<HomePage> {
           onPressed: widget.onOpenWorkspace,
         ),
         SlashAction(
+          command: 'switch',
+          label: '切换工作区',
+          glyph: AppGlyphs.folder,
+          onPressed: () => showWorkspaceSwitcher(
+            context,
+            bridge: widget.bridge,
+            onToast: widget.onToast,
+          ),
+        ),
+        SlashAction(
           command: 'settings',
           label: '设置',
           glyph: AppGlyphs.settings,
           onPressed: () => widget.onOpenSettings(SettingsDestination.root),
+        ),
+        SlashAction(
+          command: 'help',
+          label: '命令帮助',
+          glyph: AppGlyphs.sliders,
+          onPressed: () => showSlashHelpDialog(context, _slashActions()),
         ),
       ];
 

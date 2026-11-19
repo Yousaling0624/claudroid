@@ -16,6 +16,7 @@ import 'markdown.dart';
 import 'press_guard.dart';
 import 'scaffold_bar.dart';
 import 'workspace_logic.dart';
+import 'workspace_switcher.dart';
 
 /// Read-only browser for the jail's `/work` directory, plus a source/rendered
 /// preview and the one-off command terminal. Kotlin owns listing, path checks,
@@ -41,6 +42,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
   String? _listingError;
   int _listingGeneration = 0;
 
+  /// Active workspace display name; blank until the first `workspace.spaces`.
+  String _workspaceName = '';
+
   String? _previewPath;
   WorkspacePreview? _preview;
   bool _previewLoading = false;
@@ -62,7 +66,43 @@ class _WorkspacePageState extends State<WorkspacePage> {
   @override
   void initState() {
     super.initState();
+    _loadWorkspaceName();
     _loadListing();
+  }
+
+  Future<void> _loadWorkspaceName() async {
+    try {
+      final spaces = await widget.bridge.listWorkspaces();
+      if (!mounted) return;
+      setState(() => _workspaceName = spaces.active?.name ?? '');
+    } catch (_) {
+      // The title falls back to 工作区; the picker retries when opened.
+    }
+  }
+
+  Future<void> _switchWorkspace() async {
+    final changed = await showWorkspaceSwitcher(
+      context,
+      bridge: widget.bridge,
+      onToast: widget.onToast,
+    );
+    if (!changed || !mounted) return;
+    _previewGeneration++;
+    _listingGeneration++;
+    _clearFilter();
+    setState(() {
+      _path = '';
+      _listing = null;
+      _loading = true;
+      _listingError = null;
+      _previewPath = null;
+      _preview = null;
+      _previewError = null;
+      _previewLoading = false;
+      _terminalOpen = false;
+    });
+    await _loadWorkspaceName();
+    await _loadListing();
   }
 
   @override
@@ -283,8 +323,38 @@ class _WorkspacePageState extends State<WorkspacePage> {
           icon: const GlyphIcon(Glyphs.arrowBack),
           tooltip: '返回',
         ),
-        title: (context) => Text(_path.isEmpty ? '工作区' : _basename(_path)),
+        title: (context) {
+          if (_path.isNotEmpty) return Text(_basename(_path));
+          final label = _workspaceName.isEmpty ? '工作区' : _workspaceName;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _switchWorkspace,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GlyphIcon(
+                  Glyphs.chevronDown,
+                  size: 16,
+                  color: context.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          );
+        },
         actions: [
+          (context) => IconButton(
+            onPressed: _switchWorkspace,
+            icon: const GlyphIcon(AppGlyphs.folder, size: 19),
+            tooltip: '切换工作区',
+          ),
           (context) => IconButton(
             onPressed: () => setState(() => _terminalOpen = true),
             icon: const GlyphIcon(AppGlyphs.terminal, size: 19),
@@ -303,6 +373,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
             ),
             popupBuilder: (_) => PopupMenu(
               items: [
+                PopupMenuItem(
+                  label: '切换工作区…',
+                  glyph: AppGlyphs.folder,
+                  onPressed: _switchWorkspace,
+                ),
                 if (_path.isNotEmpty)
                   PopupMenuItem(
                     label: '回到 /work',

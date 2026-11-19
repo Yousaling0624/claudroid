@@ -10,6 +10,7 @@ import android.os.SystemClock
 import app.claudroid.core.Installation
 import app.claudroid.core.Logx
 import app.claudroid.core.Paths
+import app.claudroid.core.WorkspaceStore
 import app.claudroid.data.ApiFlavor
 import app.claudroid.data.AppSettings
 import app.claudroid.data.AuthStyle
@@ -39,6 +40,7 @@ import java.io.File
 class EngineManager(
     private val ctx: Context,
     private val settingsRepo: SettingsRepository,
+    private val workspaces: WorkspaceStore,
 ) {
 
     enum class Phase { Idle, Working, Ready, Failed }
@@ -555,7 +557,7 @@ class EngineManager(
                 runRootScript(TurnScripts.rootExec(spec.env, spec.argv, pidFile = null))
             }
             plan.useProot -> {
-                val spec = ProotRunner(ctx).spec(inst, listOf("--version"), env)
+                val spec = ProotRunner(ctx).spec(inst, listOf("--version"), env, workspace)
                 runProcess(spec.argv, spec.env, spec.cwd, 120_000)
             }
             plan.useRoot && plan.useChroot -> {
@@ -666,7 +668,7 @@ class EngineManager(
         }
         StorageUsage(
             jailBytes = jail,
-            workspaceBytes = dirSize(Paths.workspace(ctx)),
+            workspaceBytes = workspaces.storageBytes(),
             sessionBytes = dirSize(Paths.sessions(ctx)),
         )
     }
@@ -721,7 +723,7 @@ class EngineManager(
 
         if (failed.isEmpty()) {
             if (deleteWorkspace) {
-                Paths.workspace(ctx).deleteRecursively()
+                workspaces.deleteAll()
                 Paths.home(ctx).deleteRecursively()
                 Paths.sessions(ctx).deleteRecursively()
             }

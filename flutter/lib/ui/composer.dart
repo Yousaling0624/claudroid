@@ -29,6 +29,118 @@ class SlashAction {
   final bool danger;
 }
 
+/// A palette opens for a single-line `/` prefix. The sender may still send that
+/// text literally later (e.g. `/` alone or an unknown command).
+bool slashPaletteOpen(String text) =>
+    text.startsWith('/') && !text.contains('\n');
+
+String slashQueryOf(String text) =>
+    text.startsWith('/') ? text.substring(1).trim().toLowerCase() : '';
+
+/// Commands matching the typed text, in declaration order. A blank query keeps
+/// the whole palette visible.
+List<SlashAction> filterSlashActions(List<SlashAction> actions, String text) {
+  if (!slashPaletteOpen(text)) return const [];
+  final query = slashQueryOf(text);
+  return [
+    for (final action in actions)
+      if (query.isEmpty ||
+          action.command.toLowerCase().contains(query) ||
+          action.label.toLowerCase().contains(query))
+        action,
+  ];
+}
+
+/// The command Enter should run for [text], or `null` when [text] is a literal
+/// message (e.g. `/` or an unknown command).
+///
+/// An exact command name wins even when disabled, so Enter can never silently
+/// turn a real command into a chat message. A unique partial match is accepted
+/// too (typing `/pl` then Enter), matching what the visible palette shows.
+SlashAction? slashEnterAction(List<SlashAction> actions, String text) {
+  if (!slashPaletteOpen(text)) return null;
+  final query = slashQueryOf(text);
+  if (query.isEmpty) return null;
+  final matches = filterSlashActions(actions, text);
+  for (final action in matches) {
+    if (action.command.toLowerCase() == query) return action;
+  }
+  final enabled = [
+    for (final action in matches)
+      if (action.enabled) action,
+  ];
+  return enabled.length == 1 ? enabled.single : null;
+}
+
+/// Lists every command with its trigger, for `/help`.
+Future<void> showSlashHelpDialog(
+  BuildContext context,
+  List<SlashAction> actions,
+) {
+  final scheme = context.colorScheme;
+  return showFloatingDialog<void>(
+    context: context,
+    child: AlertDialog(
+      title: '斜杠命令',
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.52,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final action in actions)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      GlyphIcon(
+                        action.glyph,
+                        size: 18,
+                        color: action.enabled
+                            ? scheme.onSurfaceVariant
+                            : scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          action.label,
+                          style: AppTextStyle.subheadline.of(context),
+                        ),
+                      ),
+                      Text(
+                        '/${action.command}',
+                        style: AppTextStyle.caption1.of(context).copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Text(
+                '输入 / 打开命令面板，回车执行。不是命令的内容（例如只发 /）会作为普通消息发送。',
+                style: AppTextStyle.caption2.of(context).copyWith(
+                      color: scheme.onSurfaceVariant,
+                      height: 1.4,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// The input capsule shared by the home page and the chat page.
 ///
 /// It owns only presentation: expanding the panel for `/`, opening the system
@@ -138,22 +250,37 @@ class ChatComposerState extends State<ChatComposer> {
   bool get _hasContent =>
       widget.controller.text.trim().isNotEmpty || _attachments.isNotEmpty;
 
-  bool get _slashOpen =>
-      widget.controller.text.startsWith('/') &&
-      !widget.controller.text.contains('\n');
+  bool get _slashOpen => slashPaletteOpen(widget.controller.text);
 
-  String get _slashQuery =>
-      widget.controller.text.substring(1).trim().toLowerCase();
+  String get _slashQuery => slashQueryOf(widget.controller.text);
 
-  List<SlashAction> get _slashMatches {
-    final query = _slashQuery;
-    return [
-      for (final action in widget.actions)
-        if (query.isEmpty ||
-            action.command.toLowerCase().contains(query) ||
-            action.label.toLowerCase().contains(query))
-          action,
-    ];
+  List<SlashAction> get _slashMatches =>
+      filterSlashActions(widget.actions, widget.controller.text);
+
+  /// Enter (and the send button) runs the command the palette is pointing at;
+  /// anything that is not a command is sent as a normal message, so a bare `/`
+  /// finally has a send path.
+  void _sendOrSlash() {
+    final action = slashEnterAction(widget.actions, widget.controller.text);
+    if (action != null) {
+      if (!action.enabled) {
+        widget.onToast('/${action.command} 现在不可用', isError: true);
+        return;
+      }
+      _runSlash(action);
+      return;
+    }
+    // Several partial matches are still a choice for the user; do not guess and
+    // send an ambiguous fragment as a message.
+    if (_slashOpen && _slashQuery.isNotEmpty && _slashMatches.isNotEmpty) {
+      return;
+    }
+    widget.onSubmit();
+  }
+
+  void _handleEnter() {
+    if (widget.running || widget.busy || _picking) return;
+    _sendOrSlash();
   }
 
   void _onChanged(String value) {
@@ -170,7 +297,7 @@ class ChatComposerState extends State<ChatComposer> {
   void _sendPressed() {
     if (widget.running || widget.busy || _picking) return;
     unawaited(HapticFeedback.selectionClick());
-    widget.onSubmit();
+    _sendOrSlash();
   }
 
   void _stopPressed() {
@@ -288,20 +415,46 @@ class ChatComposerState extends State<ChatComposer> {
                         tooltip: '添加附件',
                       ),
                       Expanded(
-                        child: TextField(
-                          controller: widget.controller,
-                          focusNode: widget.focusNode,
-                          minLines: 1,
-                          maxLines: 6,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          decoration: InputDecoration(
-                            hintText: widget.editing
-                                ? '修改这条消息…'
-                                : widget.hintText,
-                            border: const NoInputBorder(),
+                        child: Focus(
+                          canRequestFocus: false,
+                          skipTraversal: true,
+                          onKeyEvent: (node, event) {
+                            if (!_slashOpen || event is! KeyDownEvent) {
+                              return KeyEventResult.ignored;
+                            }
+                            if (HardwareKeyboard.instance.isShiftPressed) {
+                              return KeyEventResult.ignored;
+                            }
+                            if (event.logicalKey == LogicalKeyboardKey.enter ||
+                                event.logicalKey ==
+                                    LogicalKeyboardKey.numpadEnter) {
+                              _handleEnter();
+                              return KeyEventResult.handled;
+                            }
+                            return KeyEventResult.ignored;
+                          },
+                          child: TextField(
+                            controller: widget.controller,
+                            focusNode: widget.focusNode,
+                            minLines: 1,
+                            maxLines: 6,
+                            keyboardType: TextInputType.multiline,
+                            // While the palette is open the IME action executes the
+                            // command instead of inserting a newline.
+                            textInputAction: _slashOpen
+                                ? TextInputAction.done
+                                : TextInputAction.newline,
+                            decoration: InputDecoration(
+                              hintText: widget.editing
+                                  ? '修改这条消息…'
+                                  : widget.hintText,
+                              border: const NoInputBorder(),
+                            ),
+                            onChanged: _onChanged,
+                            onSubmitted: _slashOpen
+                                ? (_) => _handleEnter()
+                                : null,
                           ),
-                          onChanged: _onChanged,
                         ),
                       ),
                       const SizedBox(width: 4),

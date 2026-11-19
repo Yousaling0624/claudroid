@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- The jail maps this directory to /work. Nothing else is shared. -->
+    <!-- The jail maps the active workspace to /work. Nothing else is shared. -->
     <files-path name="workspace" path="workspace/" />
+    <!-- Extra switchable workspaces created from the UI. -->
+    <files-path name="workspaces" path="workspaces/" />
 </paths>

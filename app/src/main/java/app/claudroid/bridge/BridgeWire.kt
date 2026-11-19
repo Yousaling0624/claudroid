@@ -10,6 +10,7 @@ import app.claudroid.data.ProviderPreset
 import app.claudroid.data.ReleaseCheck
 import app.claudroid.core.WorkspaceEntry
 import app.claudroid.core.WorkspaceFiles
+import app.claudroid.core.WorkspaceInfo
 import app.claudroid.engine.EngineManager
 import app.claudroid.engine.openai.ModelCatalog
 import java.io.File
@@ -115,6 +116,20 @@ object BridgeWire {
                 put("isDirectory", entry.isDirectory)
             }.toString()
         }
+
+    /** §6.6 `workspacesJson`: the switchable spaces plus which one is mounted at /work. */
+    fun workspacesJson(activeId: String, spaces: List<WorkspaceInfo>): String = buildJsonObject {
+        put("activeId", activeId)
+        put("spaces", buildJsonArray {
+            spaces.forEach { space ->
+                add(buildJsonObject {
+                    put("id", space.id)
+                    put("name", space.name)
+                    put("createdAt", space.createdAt)
+                })
+            }
+        })
+    }.toString()
 
     fun providersJson(presets: List<ProviderPreset>): String =        presets.joinToString(prefix = "[", postfix = "]") { preset ->
             buildJsonObject {

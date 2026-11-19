@@ -205,6 +205,36 @@ class Bridge {
   Future<void> shareWorkspaceFile(String path) =>
       _call('workspace.share', {'path': path});
 
+  /// The switchable workspaces and which one the CLI currently sees as `/work`.
+  Future<WorkspaceSpaces> listWorkspaces() async => WorkspaceSpaces.fromJsonString(
+        (await _call('workspace.spaces'))['workspacesJson'] as String?,
+      );
+
+  /// Creates a workspace and switches to it.
+  Future<WorkspaceSpaces> createWorkspace(String name) async =>
+      WorkspaceSpaces.fromJsonString(
+        (await _call('workspace.create', {'name': name}))['workspacesJson']
+            as String?,
+      );
+
+  Future<WorkspaceSpaces> selectWorkspace(String id) async =>
+      WorkspaceSpaces.fromJsonString(
+        (await _call('workspace.select', {'id': id}))['workspacesJson']
+            as String?,
+      );
+
+  Future<WorkspaceSpaces> renameWorkspace(String id, String name) async =>
+      WorkspaceSpaces.fromJsonString(
+        (await _call('workspace.rename', {'id': id, 'name': name}))[
+            'workspacesJson'] as String?,
+      );
+
+  Future<WorkspaceSpaces> removeWorkspace(String id) async =>
+      WorkspaceSpaces.fromJsonString(
+        (await _call('workspace.remove', {'id': id}))['workspacesJson']
+            as String?,
+      );
+
   // -- terminal ------------------------------------------------------------
 
   Future<TerminalInfo> terminalInfo() async {

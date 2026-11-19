@@ -13,7 +13,6 @@ import app.claudroid.ClaudroidApp
 import app.claudroid.core.Attachments
 import app.claudroid.core.FileKind
 import app.claudroid.core.Logx
-import app.claudroid.core.Paths
 import app.claudroid.core.WorkspaceEntry
 import app.claudroid.core.WorkspaceFiles
 import app.claudroid.data.AppSettings
@@ -201,6 +200,11 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "workspace.delete" -> workspaceDelete(call)
             "workspace.open" -> workspaceIntent(call, share = false)
             "workspace.share" -> workspaceIntent(call, share = true)
+            "workspace.spaces" -> workspaceState()
+            "workspace.create" -> workspaceCreate(call)
+            "workspace.select" -> workspaceSelect(call)
+            "workspace.rename" -> workspaceRename(call)
+            "workspace.remove" -> workspaceRemove(call)
             "terminal.info" -> terminalInfo()
             "terminal.run" -> terminalRun(call)
             "terminal.stop" -> terminalStop()
@@ -351,9 +355,10 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "relativePathsJson" to "[]",
         )
         // Copying can exceed 512 MB and must not run on the platform thread.
+        val workspace = workspaceRoot()
         val relative = withContext(Dispatchers.IO) {
-            val file = Attachments.import(host, uri).getOrThrow()
-            Attachments.relativePath(host, file)
+            val file = Attachments.import(host, uri, workspace).getOrThrow()
+            Attachments.relativePath(workspace, file)
         }
         return mapOf(
             "ok" to true,
@@ -364,9 +369,58 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
 
     // ------------------------------------------------------------- workspace
 
-    private fun workspaceRoot(): File = Paths.workspace(container.appContext)
+    private fun workspaceRoot(): File = container.workspaces.activeDir()
 
-    /** Resolves a channel-supplied relative path, refusing anything outside the jail's /work. */
+    private fun workspaceState(): Map<String, Any?> = mapOf(
+        "ok" to true,
+        "workspacesJson" to BridgeWire.workspacesJson(
+            container.workspaces.activeId(),
+            container.workspaces.all(),
+        ),
+    )
+
+    /**
+     * A running turn or terminal already holds the previous `/work` bind (and in
+     * chroot mode a fixed bind-mount), so switching underneath it would mix two trees
+     * in one command. Refuse until the work is done instead of silently disagreeing.
+     */
+    private fun requireWorkspaceIdle() {
+        if (container.engine.busy || terminalJob?.isActive == true) {
+            throw IllegalStateException("任务正在运行，等这一轮结束后再切换工作区")
+        }
+    }
+
+    private suspend fun workspaceCreate(call: MethodCall): Map<String, Any?> {
+        requireWorkspaceIdle()
+        val info = container.workspaces.create(call.require("name"))
+        container.workspaces.select(info.id)
+        return workspaceState()
+    }
+
+    private suspend fun workspaceSelect(call: MethodCall): Map<String, Any?> {
+        requireWorkspaceIdle()
+        if (!container.workspaces.select(call.require("id"))) {
+            throw IllegalArgumentException("工作区不存在")
+        }
+        return workspaceState()
+    }
+
+    private suspend fun workspaceRename(call: MethodCall): Map<String, Any?> {
+        if (!container.workspaces.rename(call.require("id"), call.require("name"))) {
+            throw IllegalArgumentException("默认工作区不能重命名，或工作区不存在")
+        }
+        return workspaceState()
+    }
+
+    private suspend fun workspaceRemove(call: MethodCall): Map<String, Any?> {
+        requireWorkspaceIdle()
+        if (!container.workspaces.remove(call.require("id"))) {
+            throw IllegalArgumentException("默认工作区不能删除，或工作区不存在")
+        }
+        return workspaceState()
+    }
+
+    /** Resolves a channel-supplied relative path, refusing anything outside the active /work. */
     private fun workspaceFile(call: MethodCall): Pair<File, String> {
         val root = workspaceRoot()
         val file = WorkspaceFiles.resolve(root, call.str("path").orEmpty())
@@ -494,7 +548,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         // LAZY so `terminalJob` is assigned before the body can reach its finally block.
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
-                val result = terminalRunner.run(plan, command, cwdRel) { chunk ->
+                val result = terminalRunner.run(plan, command, cwdRel, workspaceRoot()) { chunk ->
                     withContext(Dispatchers.Main) {
                         terminalSink?.success(mapOf("type" to "chunk", "text" to chunk))
                     }
