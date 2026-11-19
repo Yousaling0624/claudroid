@@ -80,7 +80,7 @@ Future<void> showSlashHelpDialog(
   List<SlashAction> actions,
 ) {
   final scheme = context.colorScheme;
-  return showFloatingDialog<void>(
+  return showClaudroidDialog<void>(
     context: context,
     child: AlertDialog(
       title: '斜杠命令',

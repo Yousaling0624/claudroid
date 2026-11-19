@@ -106,7 +106,7 @@ Future<void> showModelTierDialog(
   required ValueChanged<Map<String, dynamic>> onPatch,
   required VoidCallback onOpenSettings,
 }) async {
-  final choice = await showFloatingDialog<String>(
+  final choice = await showClaudroidDialog<String>(
     context: context,
     child: _ModelTierDialog(settings: settings),
   );

@@ -12,7 +12,7 @@ Future<void> showPermissionModeDialog(
   required String current,
   required void Function(Map<String, dynamic> patch) onPatch,
 }) async {
-  final choice = await showFloatingDialog<String>(
+  final choice = await showClaudroidDialog<String>(
     context: context,
     child: _PermissionModeDialog(current: current),
   );

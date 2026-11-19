@@ -3,6 +3,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../models/models.dart';
+import 'dialog_motion.dart';
 import 'glyphs.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_dialogs.dart';
@@ -55,7 +56,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
   }
 
   Future<void> _rename(ChatSession session) async {
-    final title = await showFloatingDialog<String>(
+    final title = await showClaudroidDialog<String>(
       context: context,
       child: SettingsTextPrompt(
         title: '重命名对话',

@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import '../dialog_motion.dart';
 import 'settings_controller.dart';
 
 /// Text prompt used by every editable settings row.
@@ -144,7 +145,7 @@ Future<void> editSettingText(
   bool singleLine = false,
   FormFieldValidator<String>? validator,
 }) async {
-  final value = await showFloatingDialog<String>(
+  final value = await showClaudroidDialog<String>(
     context: context,
     child: SettingsTextPrompt(
       title: title,
@@ -173,7 +174,7 @@ Future<void> editSettingNumber(
   int min = 0,
   int max = 999999,
 }) async {
-  final value = await showFloatingDialog<String>(
+  final value = await showClaudroidDialog<String>(
     context: context,
     child: SettingsTextPrompt(
       title: title,
@@ -204,7 +205,7 @@ Future<void> editSettingNumber(
 /// Returns `true` for "delete everything", `false` for "engine only", and
 /// `null` when the user cancels.
 Future<bool?> confirmEngineUninstall(BuildContext context) {
-  return showFloatingDialog<bool>(
+  return showClaudroidDialog<bool>(
     context: context,
     child: AlertDialog(
       title: '卸载引擎？',

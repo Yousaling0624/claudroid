@@ -5,6 +5,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/model_info.dart';
+import '../dialog_motion.dart';
 import '../glass_controls.dart';
 import '../glyphs.dart';
 import '../press_guard.dart';
@@ -94,7 +95,7 @@ Future<ModelPick?> showModelPicker(
   required String current,
   bool forceRefresh = false,
 }) {
-  return showFloatingDialog<ModelPick>(
+  return showClaudroidDialog<ModelPick>(
     context: context,
     child: _ModelPickerDialog(
       controller: controller,

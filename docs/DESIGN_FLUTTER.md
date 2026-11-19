@@ -34,7 +34,7 @@
 | 分组行间距 | `ItemPosition.get(index, length)` 或 `ItemPositionProvider` |
 | 搜索框 | `SearchField` |
 | 弹出菜单 | `PopupAnchor` + `PopupMenu` + `PopupMenuItem` |
-| 对话框 | `AlertDialog` + `showFloatingDialog` |
+| 对话框 | `AlertDialog` + `showClaudroidDialog` |
 | 输入框 | prism_ui 的 `TextField`（镜像 Flutter 构造器）；聊天输入框外层是单个 `LiquidGlass` 胶囊 |
 | 可点击卡片 | `Card`（`onPressed`）/ `PressSurface` |
 | 按钮 | `TextButton` / `GlassTonalButton`（主操作）/ `TonalButton`（危险操作） |
@@ -121,6 +121,8 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
 
 - 弹层（菜单、对话框）用 prism_ui 自带的转场与玻璃模糊；左侧抽屉是
   `showLeftSideSheet` 的 `PopupRoute`，复用 `SideSheet` 与 `SheetCoverRouteMixin`。
+  对话框统一走 `dialog_motion.dart` 的 `showClaudroidDialog`：280ms 从 +10dp 上浮到 0、
+  0.96→1 微缩放并玻璃淡入，退出 180ms；prism 的玻璃遮罩与 `AlertDialog` 表面不变。
   **不要手写** `AnimatedOpacity` / `BackdropFilter`。
 - 动效时长统一走 `context.motionDuration`，无障碍「减少动效」打开时它自动归零；
   `context.disableAnimations` 可作显式判断。**不要**写死 `Duration(milliseconds: …)`。

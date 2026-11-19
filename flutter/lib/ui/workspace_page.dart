@@ -9,6 +9,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
+import 'dialog_motion.dart';
 import 'glass_controls.dart';
 import 'glyphs.dart';
 import 'layout.dart';
@@ -247,7 +248,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   Future<void> _deleteFile(String path, String name) async {
-    final confirmed = await showFloatingDialog<bool>(
+    final confirmed = await showClaudroidDialog<bool>(
       context: context,
       child: AlertDialog(
         title: '删除文件',

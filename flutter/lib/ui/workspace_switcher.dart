@@ -23,7 +23,7 @@ Future<bool> showWorkspaceSwitcher(
     return false;
   }
   if (!context.mounted) return false;
-  final changed = await showFloatingDialog<bool>(
+  final changed = await showClaudroidDialog<bool>(
     context: context,
     child: _WorkspaceSwitcherDialog(
       bridge: bridge,
@@ -117,7 +117,7 @@ class _WorkspaceSwitcherDialogState extends State<_WorkspaceSwitcherDialog> {
 
   Future<void> _remove(WorkspaceSpace space) async {
     if (_busy) return;
-    final confirmed = await showFloatingDialog<bool>(
+    final confirmed = await showClaudroidDialog<bool>(
       context: context,
       child: AlertDialog(
         title: '删除工作区？',
@@ -157,7 +157,7 @@ class _WorkspaceSwitcherDialogState extends State<_WorkspaceSwitcherDialog> {
     required String hint,
     String initial = '',
   }) async {
-    final value = await showFloatingDialog<String>(
+    final value = await showClaudroidDialog<String>(
       context: context,
       child: SettingsTextPrompt(
         title: title,
