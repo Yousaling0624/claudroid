@@ -2,9 +2,9 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/color.dart';
 import 'package:prism_ui/color_scheme.dart';
 
-/// Seed for the whole palette: Claudroid's terracotta, the same value as
-/// `ui/theme/Theme.kt`'s `orange`, so the derived surfaces stay on the warm
-/// paper side instead of drifting blue.
+/// Seed for the whole palette: Claude's clay orange, the accent claude.ai
+/// uses in both its light and dark themes, so the derived surfaces stay on the
+/// warm paper side instead of drifting blue.
 ///
 /// Lives outside `app.dart` so the settings preview can rebuild the light and
 /// dark schemes without importing the shell (which imports the settings page).
@@ -33,10 +33,12 @@ const _inkDark = Color(0xFFF2EAE0);
 const _graphiteDark = Color(0xFFC9BFB3);
 const _outlineDark = Color(0xFF8A7D6E);
 const _sandDark = Color(0xFF443C34);
-const _accentInkDark = Color(0xFFE8A184);
 
 /// The app's colour scheme: FlClash's generated structure and liquid-glass
 /// tints, with Claude's warm neutral paper swapped in for every surface role.
+///
+/// Dark mode keeps the brand clay as `primary` instead of a lightened tint:
+/// the old salmon-leaning `#E08B6C` read as washed out on the warm dark paper.
 ///
 /// Both schemes are built once: `seededColorScheme` runs a full seed palette
 /// derivation, and progress events rebuild the settings pages (and the theme
@@ -63,7 +65,7 @@ ColorScheme _buildScheme(Brightness brightness) {
       onSurfaceVariant: _graphiteDark,
       outline: _outlineDark,
       outlineVariant: _sandDark,
-      primary: const Color(0xFFE08B6C),
+      primary: kSeedColor,
       onPrimary: const Color(0xFF33170E),
       primaryContainer: const Color(0xFF5A2E1E),
       onPrimaryContainer: const Color(0xFFF6D8C9),
@@ -91,20 +93,23 @@ ColorScheme _buildScheme(Brightness brightness) {
     onPrimaryContainer: _accentInkLight,
     inverseSurface: _inkLight,
     onInverseSurface: _paperBrightLight,
-    inversePrimary: const Color(0xFFE8A184),
+    inversePrimary: kSeedColor,
   );
 }
 
-/// Text-safe terracotta for links and small accent labels. `primary` is tuned
-/// for fills and icons; it is too light for body-size text on paper.
+/// Text-safe terracotta for links and small accent labels. In light mode
+/// `primary` is too light for body-size text on paper, so links use the darker
+/// clay ink; dark mode can use the brand clay itself.
 Color linkColor(ColorScheme scheme) =>
-    scheme.brightness == Brightness.dark ? _accentInkDark : _accentInkLight;
+    scheme.brightness == Brightness.dark ? scheme.primary : _accentInkLight;
 
 /// Accent pairs for the settings hub's icon badges.
 ///
 /// The reference layout gives every section its own colour, but Claude's
-/// palette is all paper and clay: these three tones stay desaturated enough
-/// to sit on the warm surfaces without turning the hub into a colour wall.
+/// palette is all paper and clay: honey and sage stay desaturated enough to
+/// sit on the warm surfaces without turning the hub into a colour wall, while
+/// clay keeps the brand orange so the accent reads the same as the rest of
+/// the app.
 enum SettingsTone { clay, honey, sage }
 
 class ToneColors {
@@ -121,7 +126,7 @@ ToneColors settingsTone(ColorScheme scheme, SettingsTone tone) {
   final dark = scheme.brightness == Brightness.dark;
   return switch (tone) {
     SettingsTone.clay => dark
-        ? const ToneColors(ink: Color(0xFFE8A184), fill: Color(0xFF3A241B))
+        ? const ToneColors(ink: kSeedColor, fill: Color(0xFF3A241B))
         : const ToneColors(ink: Color(0xFFB4543A), fill: Color(0xFFF4E1D5)),
     SettingsTone.honey => dark
         ? const ToneColors(ink: Color(0xFFE0B96A), fill: Color(0xFF342B18))

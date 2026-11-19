@@ -76,8 +76,11 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
 
 深色：`surface #1B1815`、`surfaceBright #24201C`、`surfaceContainerHigh #2A251F`、
 `surfaceContainerHighest #332D26`、`onSurface #F2EAE0`、`onSurfaceVariant #C9BFB3`、
-`outline #8A7D6E`、`outlineVariant #443C34`、`primary #E08B6C`、`onPrimary #33170E`、
+`outline #8A7D6E`、`outlineVariant #443C34`、`primary #D97757`、`onPrimary #33170E`、
 `primaryContainer #5A2E1E`、`onPrimaryContainer #F6D8C9`。
+
+暗色的 `primary` 直接复用品牌 clay `#D97757`（claude.ai 暗色主题同样沿用这个值），
+不再用提亮版：旧值 `#E08B6C` 在暖黑纸面上会发粉、显得不够鲜艳。
 
 两条取色规则：
 
@@ -87,10 +90,10 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   `.block` = `surfaceContainer`、`.inset` = `surfaceContainerHighest`。
 - 橙色 `primary` 只做**填充与图标**（发送/停止、当前会话标记、聚焦描边），单屏填充面积
   不超过 5%；正文里的链接、裸 URL、来源标题等**文字**场景用 `linkColor(scheme)`（浅色
-  `#A64C2F`、深色 `#E8A184`），保证对比度。
-- 设置根页的图标徽章用 `palette.dart` 的 `SettingsTone`（clay / honey / sage）：每组一个
-  去饱和的暖色，`fill` 是圆形底、`ink` 是描边图标色，浅深色各有一套。不要在页面里另写
-  十六进制色值。
+  `#A64C2F`、深色直接用品牌色 `#D97757`），保证对比度。
+- 设置根页的图标徽章用 `palette.dart` 的 `SettingsTone`（clay / honey / sage）：clay 用
+  品牌 clay（暗色即 `#D97757`），honey / sage 用去饱和的暖色；`fill` 是圆形底、`ink` 是
+  描边图标色，浅深色各有一套。不要在页面里另写十六进制色值。
 
 ## 3. 材质与动画
 
