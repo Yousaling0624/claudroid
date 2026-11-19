@@ -172,6 +172,26 @@ class TerminalSessionTest {
     }
 
     @Test
+    fun `crlf text gives bare lf a carriage return`() {
+        // The no-PTY fallback: bash echoes commands and prints output with bare LFs, and
+        // the VT model keeps the column on LF, so the session drifts right line by line.
+        assertEquals("root@localhost:/work# ls\r\n", TerminalSession.crlfText("root@localhost:/work# ls\n"))
+        assertEquals("a\r\nb\r\n", TerminalSession.crlfText("a\nb\n"))
+        assertEquals("\r\n", TerminalSession.crlfText("\n"))
+    }
+
+    @Test
+    fun `crlf text keeps real crlfs, lone crs and escape sequences`() {
+        // A PTY session already receives CRLF; translating again must not double the CR.
+        assertEquals("hi\r\n", TerminalSession.crlfText("hi\r\n"))
+        // Lone CR (progress-bar redraws) must stay a redraw, not become a new line.
+        assertEquals("10%\r20%\r30%", TerminalSession.crlfText("10%\r20%\r30%"))
+        assertEquals("one\r\ntwo\r\nthree\rfour", TerminalSession.crlfText("one\r\ntwo\nthree\rfour"))
+        val colored = "\u001b[32mok\u001b[0m\n"
+        assertEquals("\u001b[32mok\u001b[0m\r\n", TerminalSession.crlfText(colored))
+    }
+
+    @Test
     fun `exit status parser accepts a shell code and rejects garbage`() {
         assertEquals(0, TerminalSession.parseExitCode("0\n"))
         assertEquals(7, TerminalSession.parseExitCode(" 7 \n"))

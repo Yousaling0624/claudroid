@@ -229,6 +229,11 @@ namespace，**chroot 进程退出后它们仍然存在**。此时对容器目录
 工作区终端另有一个常驻 PTY：guest 里的 util-linux `script(1)` 用 `/dev/pts` 分配伪终端。
 启动前会先跑一次 `script -q -c true` 探测；guest 没有可用 devpts 时（例如旧 jail 的
 `/dev/pts` 未挂载）降级为无 PTY 的持久 shell 并在终端里提示，而不是直接以退出码 1 结束。
+无 PTY 时没有 tty 驱动的 ONLCR，交互式 bash 回显的命令和输出都是裸 `\n`，而 VT 模型按
+规范在 LF 时保留列号，整屏会逐行右移成阶梯状。因此 `TerminalSession` 在首次 flush 时按
+`.tty` 文件是否存在判定会话有没有 PTY，无 PTY 才把裸 LF 补成 CRLF（对已有 CRLF 幂等，
+单独的 `\r` 进度条不受影响）；不要把这个转换放进 Flutter 的 VT 解析器——`cud1=\n` 是
+terminfo 的标准行为，全局改写会破坏有 PTY 时 curses 程序的定位。
 
 此外每个 chroot turn / 终端命令结束后，App 会调 `RootExec.unmountJail()` 清掉这次留下的
 挂载；终端和对话可能并发，所以用 `chrootBegin()/chrootEnd()` 计数，只要还有别的 chroot

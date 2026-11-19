@@ -67,6 +67,17 @@ class TerminalSession(
     private val pendingLock = Any()
     private val pending = StringBuilder()
     private val wake = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Decided once, on the first flush: whether the guest runs without a PTY. Only a tty
+     * driver turns `\n` into `\r\n` (ONLCR); on the fallback branch bare LFs reach the VT
+     * model, which keeps the column on LF by design, so every line after the first drifts
+     * right. The inner script publishes `.tty` before the shell can print its prompt, so
+     * a missing file at the first flush means the fallback is running. Misdetecting the
+     * other way is harmless: [crlfText] leaves existing CRLFs alone.
+     */
+    private var translateNewlines: Boolean? = null
+
     /**
      * Single-writer input queue. Keystrokes arrive on the platform thread; writing the
      * pipe from there (or from a pool of IO threads) could interleave bytes or reorder
@@ -434,7 +445,7 @@ class TerminalSession(
     }
 
     private suspend fun flushPending() {
-        val text = synchronized(pendingLock) {
+        var text = synchronized(pendingLock) {
             if (pending.isEmpty()) {
                 ""
             } else {
@@ -442,6 +453,12 @@ class TerminalSession(
             }
         }
         if (text.isEmpty()) return
+        val noTty = translateNewlines ?: run {
+            val decided = !ttyHost.isFile
+            translateNewlines = decided
+            decided
+        }
+        if (noTty) text = crlfText(text)
         emit(mapOf("type" to "chunk", "text" to text))
     }
 
@@ -697,6 +714,20 @@ class TerminalSession(
             appendLine("fi")
             appendLine("exec ${TurnScripts.quote(shell)} -i")
         }
+
+        /**
+         * Emulates the tty driver's ONLCR for the no-PTY fallback: gives every LF a
+         * preceding CR while leaving existing CRLFs and lone CRs (progress bars) alone.
+         * Piped interactive bash echoes each command with a bare LF, so without this the
+         * whole session renders as a staircase. Idempotent, so a chunk boundary between
+         * `\r` and `\n` only produces a harmless extra CR.
+         */
+        internal fun crlfText(text: String): String =
+            if (text.indexOf('\n') < 0) {
+                text
+            } else {
+                text.replace("\r\n", "\n").replace("\n", "\r\n")
+            }
 
         /** `stty -F` needs the slave device path; only paths under `/dev` are trusted. */
         internal fun parseTty(text: String?): String? {
