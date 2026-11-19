@@ -93,13 +93,16 @@ abstract final class AppGlyphs {
     ], role: GlyphRole.detail),
   ]);
 
+  /// A clockwise circular arrow. Both pieces are [GlyphRole.line]: icon buttons
+  /// paint with `fill: 1`, and a body-role arc would be filled as a pie there
+  /// instead of stroked.
   static const refresh = Glyph([
-    GlyphArc(12, 12, 7.5, 3.6, 4.4),
+    GlyphArc(12, 12, 7.5, -0.7, 5.45, role: GlyphRole.line),
     GlyphPolyline([
-      GlyphVertex(18.6, 4.6),
-      GlyphVertex(19.4, 9.2),
-      GlyphVertex(14.9, 8.2),
-    ], role: GlyphRole.detail),
+      GlyphVertex(9.17, 7.39),
+      GlyphVertex(12.28, 4.5),
+      GlyphVertex(9.39, 1.39),
+    ], role: GlyphRole.line),
   ]);
 
   /// A branch leaving the conversation: one trunk, a second lane, three nodes.

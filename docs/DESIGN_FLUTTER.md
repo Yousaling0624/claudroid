@@ -138,6 +138,9 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   否则最后一帧还会再播一次高度动画，看上去像整页刷新。**不要**在 `streaming` 结束时
   引入任何新的淡入淡出。
 - 图标一律矢量 glyph，不用 emoji、不用位图，不随字号放大而变糊。
+- 自定义 `Glyph` 的开放线条（弧线、折线）必须标 `GlyphRole.line`。顶栏图标键以
+  `fill: 1` 绘制：`body` 角色的开放弧线会被当成闭合面填充成一块实心扇面，`detail`
+  则会被挖成透明；只有 `line` 在两种填充下都保持描边。
 
 ## 4. 字体与排版
 
