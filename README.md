@@ -87,8 +87,8 @@ Android 10 起，`targetSdk ≥ 29` 的应用**不允许 exec() 自己数据目�
 
 没有 root 时，容器在 `filesDir/engine/jail`，PRoot 把工作区、`/dev`、`/proc`、`/system`
 等 bind 进去；有 root 时容器改放 `/data/adb/claudroid`，换成 `chroot`，并额外挂载
-`/data` 与 `/sdcard`。两种方式都从 OCI registry 拉官方的 `debian:13-slim` layer
-（sha256 摘要钉死，官方源失败时回退 DaoCloud 镜像），apt 装好 bash、git、grep 等基础工具。
+`/data` 与 `/sdcard`。两种方式都从 OCI registry 拉官方的 `debian:13` layer
+（sha256 摘要钉死，官方源失败时回退 DaoCloud 镜像），apt 装好 bash、git、grep、top、ps、ip 等基础工具。
 
 删除容器目录前必须先卸载这些 bind 挂载：挂载在进程退出后仍然存在，直接 `rm -rf`
 会穿过挂载点删掉宿主目录（App 内部统一走 `RootExec.deleteJail()` 做「先 umount、再删除」）。
@@ -161,7 +161,7 @@ cd flutter && flutter analyze && flutter test
 | 权限模式 | **自动（官方 Auto）** / `完全放行` / `自动改文件` / `默认（只读）` / `只读规划` |
 | 功能与实验 | Agent teams、workflows、auto memory、后台任务、扩展思考、effort、子代理模型、Auto 分类器模型 |
 
-首次启动会在后台拉 Debian rootfs（约 30 MB）、下载内置 CLI（约 150 MB，解包后约 300 MB），
+首次启动会在后台拉 Debian rootfs（约 50 MB）、下载内置 CLI（约 150 MB，解包后约 300 MB），
 再用 apt 装基础工具（bash / git / grep / sed / awk 等，约 50 MB），建议 Wi-Fi。
 完成后点**自检**，看到 `2.1.x (Claude Code)` 和实际启动方式（PRoot / root + chroot）说明这台机器能跑。
 

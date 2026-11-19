@@ -16,19 +16,20 @@ import java.util.concurrent.TimeUnit
  * Provisioning of the embedded backend.
  *
  * The engine is no longer a hand-built Alpine mini-jail. We install a real Debian
- * rootfs (the official `debian:13-slim` OCI layer, pinned by digest) and run the
+ * rootfs (the official standard `debian:13` OCI layer, pinned by digest) and run the
  * official Claude Code glibc build inside it under PRoot (no root) or chroot (root):
  *
  *   1. rootfs layer             -> filesDir/engine/jail (or /data/adb/claudroid)
  *   2. basic userland           -> apt-get install bash git grep coreutils sed awk
- *                                  tar gzip xz-utils curl ca-certificates less
+ *                                  tar gzip xz-utils curl ca-certificates less, plus
+ *                                  common tools (procps, psmisc, iproute2, ping, editors)
  *   3. the CLI binary           -> opt/claude/<version>/claude
  *   4. jail config              -> etc/resolv.conf, etc/hosts, apt sources/retries
  *
  * The rootfs is downloaded at install time, never shipped in the APK. Both the OCI
  * layer digest (SHA-256 of the compressed blob) and the npm `sha512` integrity are
  * verified before anything is unpacked; a cached file is reused only when it re-hashes
- * to the same value. A truncated 30 MB layer or 300 MB ELF otherwise fails much later
+ * to the same value. A truncated 50 MB layer or 300 MB ELF otherwise fails much later
  * with an opaque "Bus error".
  *
  * With root the jail is assembled by a root shell under /data/adb/claudroid, because
@@ -75,10 +76,10 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         val canUpgrade = !force && existing != null && existing.rootMode == useRoot &&
             existing.rootfsVersion == spec.version && existing.rootfsSha256 == spec.digest &&
             verify(existing, useRoot)
-        // Peak: 30 MB layer -> ~115 MB tree, ~300 MB CLI binary, a second copy in the
-        // jail, plus apt downloads. Upgrading only adds a new CLI on top of an existing
-        // jail, hence the much smaller number.
-        requireFreeSpace(if (canUpgrade) 700 else 1200)
+        // Peak: 50 MB layer -> ~135 MB tree, a ~150 MB CLI archive plus its ~300 MB
+        // extraction, a second copy of the CLI in the jail, and apt downloads. Upgrading
+        // only adds a new CLI on top of an existing jail, hence the much smaller number.
+        requireFreeSpace(if (canUpgrade) 700 else 1500)
 
         val staging = Paths.staging(ctx)
         onProgress(Progress("下载 CLI $latest", 0.05f, target.abi))
@@ -834,7 +835,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
 
     private fun cleanupStaging(claude: File) {
         // Keep the verified archives: switching root <-> proot re-extracts without a new
-        // 30 MB layer / ~100 MB CLI download. Drop the staged binary (a second ~300 MB
+        // 50 MB layer / ~150 MB CLI download. Drop the staged binary (a second ~300 MB
         // copy that is already inside the jail) and the root staging tree.
         runCatching { claude.delete() }
         runCatching { File(Paths.staging(ctx), "rootfs-stage").deleteRecursively() }
@@ -1052,14 +1053,18 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         private const val NEW_SUFFIX = ".new"
         private const val OLD_SUFFIX = ".old"
 
-        /** Base tools the agent needs (git, grep, sed/awk …). */
+        /** Base tools the agent needs (git, grep, sed/awk, top/ps/ip …). */
         val TOOLS = listOf(
             "bash", "git", "grep", "sed", "awk", "tar", "gzip", "xz", "curl", "less",
+            "top", "ps", "free", "pgrep", "pkill", "killall", "ip", "ping",
+            "whiptail", "nano", "file", "wget", "unzip", "zip",
         )
 
         private val TOOL_PACKAGES = listOf(
             "bash", "git", "grep", "coreutils", "sed", "mawk", "tar", "gzip",
             "xz-utils", "curl", "ca-certificates", "less",
+            "procps", "psmisc", "iproute2", "iputils-ping", "whiptail", "nano",
+            "file", "wget", "unzip", "zip", "ncurses-term",
         )
 
         internal fun guestEnv(): Map<String, String> = linkedMapOf(
@@ -1169,7 +1174,9 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                 text.contains("APT_INSTALL_FAIL") ->
                     "apt 安装基础工具失败，常见原因是磁盘空间不足或软件源不稳定。" +
                         "请清理空间后重试；仍失败可在「终端」里手动执行 " +
-                        "apt-get install -y bash git grep coreutils sed mawk tar gzip xz-utils curl ca-certificates less。"
+                        "apt-get install -y bash git grep coreutils sed mawk tar gzip xz-utils curl " +
+                        "ca-certificates less procps psmisc iproute2 iputils-ping whiptail nano " +
+                        "file wget unzip zip ncurses-term。"
                 !missing.isNullOrBlank() ->
                     "安装完成后仍缺少工具：$missing。请重试安装，或在「终端」里手动 apt-get install。"
                 text.contains("CLAUDE_MISSING") ->

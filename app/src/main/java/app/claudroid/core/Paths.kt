@@ -26,7 +26,7 @@ data class Installation(
     /** GNU bash is always present in the Debian rootfs; the default keeps old JSON valid. */
     val hasBash: Boolean = false,
     val installedAt: Long = System.currentTimeMillis(),
-    /** e.g. "debian-13-slim"; blank on an Alpine-era install. */
+    /** e.g. "debian-13"; blank on an Alpine-era install. */
     val rootfs: String = "",
     /** Debian release ("13"); blank marks a legacy install that must be reinstalled. */
     val rootfsVersion: String = "",

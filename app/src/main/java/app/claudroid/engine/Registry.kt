@@ -56,15 +56,20 @@ data class PackageInfo(val version: String, val tarball: String, val integrity: 
 /**
  * A Debian rootfs image pinned by the SHA-256 of its (compressed) layer blob.
  *
- * Source: Docker Hub `library/debian:13-slim`, the official Debian image. We pull the
- * single gzip layer through the OCI registry API instead of proot-distro because
+ * Source: Docker Hub `library/debian:13`, the official standard Debian image. We pull
+ * the single gzip layer through the OCI registry API instead of proot-distro because
  * proot-distro only publishes `.tar.xz` assets and adding an xz decoder to the app is
- * not worth it. The pinned digests were downloaded and re-hashed on 2026-11-06:
+ * not worth it. The pinned digests were downloaded and re-hashed on 2026-11-19:
  *
- *   arm64  sha256:acd43e9bebc37bc4ba7a5f47bd7598913337803e53d468f37d940f11f5d5f1ef
- *          30,214,037 bytes
- *   amd64  sha256:37fb86c2a767b88d500c6872195f88078f64765fe0d2f9cc375cc2efbd4c0a41
- *           29,856,132 bytes
+ *   arm64  sha256:23b69c48ce5c2a6fb0681d959fa700427ad2a7cf7e6be5d25249170a1853d7ad
+ *          49,778,604 bytes
+ *   amd64  sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f
+ *          49,412,508 bytes
+ *
+ * The standard image unpacks to ~135 MB / 5443 entries. Its installed package set is
+ * identical to `-slim` (the extra ~40 MB is documentation/manpages), so tools such as
+ * `top`, `ps` and `ip` still come from apt (`procps`/`psmisc`/`iproute2`), not the
+ * base image.
  *
  * The digest is the content address used by the registry: it therefore also protects
  * against a mirror serving different bytes. Bumping Debian means updating both the
@@ -82,7 +87,7 @@ object Registry {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** Committed image tag; only informational (the digest is what we verify). */
-    const val ROOTFS_TAG = "13-slim"
+    const val ROOTFS_TAG = "13"
 
     /** Docker Hub repository for the OCI pull. */
     const val ROOTFS_REPOSITORY = "library/debian"
@@ -109,21 +114,21 @@ object Registry {
     )
 
     private const val DEBIAN_ARM64_DIGEST =
-        "sha256:acd43e9bebc37bc4ba7a5f47bd7598913337803e53d468f37d940f11f5d5f1ef"
+        "sha256:23b69c48ce5c2a6fb0681d959fa700427ad2a7cf7e6be5d25249170a1853d7ad"
     private const val DEBIAN_X86_64_DIGEST =
-        "sha256:37fb86c2a767b88d500c6872195f88078f64765fe0d2f9cc375cc2efbd4c0a41"
+        "sha256:a6dd1c05fbba4f9028078a11f143cbb625d2408921eb8207bfa1dd1ad301276f"
 
     val ROOTFS_ARM64 = RootfsSpec(
         image = "debian:$ROOTFS_TAG",
         digest = DEBIAN_ARM64_DIGEST,
-        sizeBytes = 30_214_037L,
+        sizeBytes = 49_778_604L,
         version = "13",
     )
 
     val ROOTFS_X86_64 = RootfsSpec(
         image = "debian:$ROOTFS_TAG",
         digest = DEBIAN_X86_64_DIGEST,
-        sizeBytes = 29_856_132L,
+        sizeBytes = 49_412_508L,
         version = "13",
     )
 

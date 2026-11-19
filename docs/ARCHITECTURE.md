@@ -45,7 +45,7 @@ size: 337,438,136 B (321.8 MiB)             ← tarball 158,364,311 B
 2. **需要一整套 glibc 用户态**，而不只是一个加载器。二进制还依赖 `libc.so.6`、`libm.so.6`、
    `libpthread.so.0`、`libdl.so.2`、`librt.so.1` 等共享库，`PT_INTERP` 只是入口
    （C++/Rust 运行库是静态链进二进制的，所以没有 `libstdc++` 依赖）。手工凑这些库既容易漏，
-   也跟不上上游发版，所以直接用**官方 `debian:13-slim` rootfs**：glibc、coreutils
+   也跟不上上游发版，所以直接用**官方 `debian:13` rootfs**：glibc、coreutils
    都是现成的，缺的工具再用 apt 装。
 3. **必须是绝对路径上的 `/lib/ld-linux-aarch64.so.1`**。Android 的 `/lib` 属于系统分区
    （多数机型只是 `/system/lib64` 的软链），既不可写也不保证存在，于是用 **chroot**
@@ -98,17 +98,18 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 
 有 root 时在 `/data/adb/claudroid/`（不可写则退回 `/data/local/tmp/claudroid`）；没有 root
 时同一套布局在 `filesDir/engine/jail/`，由 PRoot 当 rootfs 使用。两边都是官方
-`debian:13-slim` 的 OCI layer（压缩 blob 30,214,037 B，解开约 100 MB / 2678 个文件），
+`debian:13` 的 OCI layer（压缩 blob 49,778,604 B，解开约 135 MB / 5443 个条目），
 再按需 apt 装工具。
 
 ```
 /data/adb/claudroid/                    （或 filesDir/engine/jail/）
 ├── lib/ld-linux-aarch64.so.1          Debian glibc 加载器（usrmerge 下软链到 usr/lib/aarch64-linux-gnu/）
 ├── usr/lib/aarch64-linux-gnu/         libc.so.6、libm.so.6、librt.so.1 …（base 自带）
-├── bin/bash → usr/bin/bash            base 自带（slim 也有 bash、grep、sed、mawk、tar、gzip）
+├── bin/bash → usr/bin/bash            base 自带（标准镜像同样只有 required 包，bash、grep、sed、mawk、tar、gzip 都自带）
 ├── usr/bin/{git,curl,xz,less}         apt: git curl xz-utils less（base 没有）
+├── usr/bin/{top,ps,ip,ping,nano,…}    apt: procps psmisc iproute2 iputils-ping whiptail nano file wget unzip zip
 ├── etc/ssl/certs/ca-certificates.crt  apt: ca-certificates（base 没有 CA bundle）
-├── usr/share/zoneinfo                 base 自带（tzdata 已被 slim 裁到 509 个条目）
+├── usr/share/zoneinfo                 base 自带（tzdata 509 个条目）
 ├── opt/claude/<version>/claude        官方 glibc 二进制（337,438,136 B，只保留当前版本）
 ├── etc/debian_version                 Debian 13（"13.7"）
 ├── etc/claudroid-rootfs               镜像 tag + layer digest，供日志/排障
@@ -123,8 +124,10 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 ```
 
 工具列表是固定的（`Toolchain.TOOL_PACKAGES`）：`bash git grep coreutils sed mawk tar gzip
-xz-utils curl ca-certificates less`。其中 bash、grep、sed、mawk、tar、gzip 在 slim layer 里
-已经有了，apt 实际补的是 git、coreutils、curl、xz、less、CA bundle 及它们的依赖，约 50 MB。
+xz-utils curl ca-certificates less procps psmisc iproute2 iputils-ping whiptail nano file
+wget unzip zip ncurses-term`。标准镜像与 slim 的已安装包相同（多出的约 40 MB 只是文档 /
+manpage），bash、grep、sed、mawk、tar、gzip 仍然自带；apt 补的是 git、curl、xz、less、
+CA bundle 以及 top / ps / ip / ping 等常用工具和它们的依赖。
 apt 失败会重试 3 次；`APT::Sandbox::User` 必须改成 root，因为 PRoot 把 app uid 呈现成
 uid 0，`_apt` 沙箱用户打不开自己的文件。`ca-certificates` 装好之前 sources 用
 `http://deb.debian.org`（不是 https）。
@@ -261,8 +264,8 @@ apt 装工具 + verify（debian_version、bash、git、CLI > 100 MB）
 下次 turn 即生效
 ```
 
-rootfs 本身也走 OCI：`library/debian:13-slim`，digest 钉死在 `Registry.kt`
-（arm64 `sha256:acd43e9b…` 30,214,037 B；amd64 `sha256:37fb86c2…` 29,856,132 B）。
+rootfs 本身也走 OCI：`library/debian:13`，digest 钉死在 `Registry.kt`
+（arm64 `sha256:23b69c48…` 49,778,604 B；amd64 `sha256:a6dd1c05…` 49,412,508 B）。
 先试 Docker Hub，失败再试 DaoCloud 镜像 `docker.m.daocloud.io`；两边的 token 端点与
 `service` 值不同，blob 都是 307 到签名 URL，重取时**不带 `Authorization`**（S3 会拒绝
 双重认证）。字节一律按同一个 sha256 校验，镜像换不了内容。本地缓存的 blob 每次复用前

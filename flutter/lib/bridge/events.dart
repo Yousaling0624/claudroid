@@ -441,16 +441,22 @@ class ChatEvents {
 // Terminal events
 // ---------------------------------------------------------------------------
 
-/// One message from `app.claudroid/terminal`. Output is a stream of
-/// [TerminalChunkEvent]s; exactly one of done/stopped/error ends a run.
+/// One message from `app.claudroid/terminal`. A persistent shell streams
+/// [TerminalChunkEvent]s between `started` and exactly one `exit`; `stopped`
+/// and `error` close the session instead. `done` is the older one-off command
+/// completion and is kept so an older host still renders.
 sealed class TerminalEvent {
   const TerminalEvent();
 
   static TerminalEvent? fromMap(Object? raw) {
     if (raw is! Map) return null;
     switch (raw['type']) {
+      case 'started':
+        return const TerminalStartedEvent();
       case 'chunk':
         return TerminalChunkEvent(raw['text'] as String? ?? '');
+      case 'exit':
+        return TerminalExitEvent((raw['exitCode'] as num?)?.toInt() ?? 0);
       case 'done':
         return TerminalDoneEvent(
           exitCode: (raw['exitCode'] as num?)?.toInt() ?? 0,
@@ -468,10 +474,22 @@ sealed class TerminalEvent {
   }
 }
 
+/// The PTY accepted `terminal.start`; input is now safe to write.
+class TerminalStartedEvent extends TerminalEvent {
+  const TerminalStartedEvent();
+}
+
 class TerminalChunkEvent extends TerminalEvent {
   const TerminalChunkEvent(this.text);
 
   final String text;
+}
+
+/// The shell process ended. [exitCode] is the PTY child's status.
+class TerminalExitEvent extends TerminalEvent {
+  const TerminalExitEvent(this.exitCode);
+
+  final int exitCode;
 }
 
 class TerminalDoneEvent extends TerminalEvent {

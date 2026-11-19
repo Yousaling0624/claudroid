@@ -245,6 +245,17 @@ class Bridge {
     );
   }
 
+  /// Starts (or replaces) the persistent interactive shell.
+  Future<void> terminalStart({required int rows, required int cols}) =>
+      _call('terminal.start', {'rows': rows, 'cols': cols});
+
+  /// Writes raw terminal input; ordering is preserved by the platform channel.
+  Future<void> terminalWrite(String data) =>
+      _call('terminal.write', {'data': data});
+
+  Future<void> terminalResize({required int rows, required int cols}) =>
+      _call('terminal.resize', {'rows': rows, 'cols': cols});
+
   Future<void> terminalRun(String command, {String cwdRel = ''}) =>
       _call('terminal.run', {'command': command, 'cwdRel': cwdRel});
 

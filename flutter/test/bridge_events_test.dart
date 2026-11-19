@@ -118,6 +118,23 @@ void main() {
     expect(TerminalEvent.fromMap({'type': 'unknown'}), isNull);
   });
 
+  test('terminal lifecycle decodes started and exit', () {
+    expect(
+      TerminalEvent.fromMap({'type': 'started'}),
+      isA<TerminalStartedEvent>(),
+    );
+    final exit = TerminalEvent.fromMap({
+      'type': 'exit',
+      'exitCode': 130,
+    })! as TerminalExitEvent;
+    expect(exit.exitCode, 130);
+
+    // A host that omits the code still leaves the page in a usable state.
+    final missing =
+        TerminalEvent.fromMap({'type': 'exit'})! as TerminalExitEvent;
+    expect(missing.exitCode, 0);
+  });
+
   test('workspace entries decode directory flags and relative paths', () {
     final entry = WorkspaceEntry.fromJson({
       'name': 'report.md',

@@ -20,6 +20,7 @@ import app.claudroid.data.Providers
 import app.claudroid.data.ReleaseCheck
 import app.claudroid.engine.SuggestionGenerator
 import app.claudroid.engine.TerminalRunner
+import app.claudroid.engine.TerminalSession
 import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.chat.ChatController
 import app.claudroid.chat.chatStatusLine
@@ -83,10 +84,15 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private var activityBinding: ActivityPluginBinding? = null
     private var pendingPick: CompletableDeferred<Uri?>? = null
 
-    /** One terminal pane at a time; `terminal.run` rejects overlap. */
+    /**
+     * One terminal pane at a time. `terminalSession` is the persistent TTY shell;
+     * `terminalJob` still means "something is running" (a session's wait job or a
+     * one-shot `terminal.run`), so the workspace-switch guard stays valid.
+     */
     private var terminalChannel: EventChannel? = null
     private var terminalSink: EventChannel.EventSink? = null
     private var terminalJob: Job? = null
+    private var terminalSession: TerminalSession? = null
     private val terminalRunner by lazy {
         TerminalRunner(container.appContext, container.engine.rootExec)
     }
@@ -130,11 +136,16 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         globalChannel = null
         globalJob?.cancel()
         globalJob = null
+        val session = terminalSession
+        if (terminalSession === session) terminalSession = null
         terminalJob?.cancel()
         terminalJob = null
         terminalSink = null
         terminalChannel?.setStreamHandler(null)
         terminalChannel = null
+        // A live shell must not outlive the engine. `stop` is idempotent, so racing a
+        // page-level `terminal.stop` is harmless.
+        if (session != null) scope.launch { session.stop() }
         val ids = synchronized(chatChannels) { chatChannels.keys.toList() }
         ids.forEach { unregisterChatChannel(it) }
         // Controllers and running turns belong to the app, not the engine: detaching
@@ -206,6 +217,9 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "workspace.rename" -> workspaceRename(call)
             "workspace.remove" -> workspaceRemove(call)
             "terminal.info" -> terminalInfo()
+            "terminal.start" -> terminalStart(call)
+            "terminal.write" -> terminalWrite(call)
+            "terminal.resize" -> terminalResize(call)
             "terminal.run" -> terminalRun(call)
             "terminal.stop" -> terminalStop()
             "logs.read" -> mapOf("ok" to true, "linesJson" to BridgeWire.stringListJson(Logx.lines.value))
@@ -533,7 +547,94 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         )
     }
 
+    /**
+     * Opens the persistent TTY shell. Returns as soon as the process exists; `started`
+     * arrives on the event channel, and `exit` / `stopped` later. A failure to launch is
+     * thrown so the caller can show it and retry.
+     */
+    private suspend fun terminalStart(call: MethodCall): Map<String, Any?> {
+        if (terminalSession != null) throw IllegalStateException("终端会话正在运行")
+        if (terminalJob?.isActive == true) throw IllegalStateException("终端已有命令在运行")
+        // Captured by identity: the page can unsubscribe while the shell is starting
+        // (a slow su dialog, PRoot startup). Then this sink is gone and assigning the
+        // session would leave a shell nobody can see or stop.
+        val expectedSink = terminalSink ?: throw IllegalStateException("终端未连接")
+        val settings = container.settings.current()
+        settingsSnapshot = settings
+        val issue = container.engine.startIssue(settings)
+        if (issue != null) throw IllegalStateException(issue)
+        val plan = container.engine.shellPlan(settings)
+            ?: throw IllegalStateException("引擎未安装，请先在设置中安装 Claude Code。")
+        val session = TerminalSession(
+            ctx = container.appContext,
+            root = container.engine.rootExec,
+            workspace = workspaceRoot(),
+        ) { event ->
+            // The page may be gone by the time a late chunk is flushed; a null sink is
+            // normal shutdown, not a crash.
+            withContext(Dispatchers.Main) { terminalSink?.success(event) }
+        }
+        // Assign before starting: `started` can reach Dart before start() returns, and
+        // the first keystrokes must find the session instead of being dropped.
+        terminalSession = session
+        try {
+            session.start(
+                plan,
+                call.int("rows", TerminalSession.DEFAULT_ROWS),
+                call.int("cols", TerminalSession.DEFAULT_COLS),
+            )
+        } catch (e: Exception) {
+            if (terminalSession === session) terminalSession = null
+            throw e
+        }
+        if (terminalSink !== expectedSink || terminalSession !== session) {
+            // The page unsubscribed, or terminal.stop ran while the shell was starting.
+            // Do not leave a shell nobody tracks; the stop path may have observed a
+            // null process, so call stop again now that the process exists.
+            session.stop()
+            if (terminalSession === session) terminalSession = null
+            throw IllegalStateException("终端启动已取消")
+        }
+        // LAZY so `terminalJob` is assigned before the body can reach its finally block.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                session.awaitTermination()
+            } finally {
+                // A stop path may already have cleared these for an immediate
+                // reconnect; only clear fields that still point at this session so a
+                // newer session's job is never clobbered.
+                if (terminalSession === session) {
+                    terminalSession = null
+                    terminalJob = null
+                }
+            }
+        }
+        terminalJob = job
+        job.start()
+        return ok()
+    }
+
+    private fun terminalWrite(call: MethodCall): Map<String, Any?> {
+        // No session is a normal state (the page may still be attaching); stay silent
+        // instead of failing the keystroke.
+        val session = terminalSession ?: return ok()
+        val data = (call.arguments as? Map<*, *>)?.get("data") as? String ?: return ok()
+        // Enqueue on Main.immediate in call order; the session's single writer thread
+        // drains the queue, so two fast calls cannot race or reorder.
+        session.write(data)
+        return ok()
+    }
+
+    private suspend fun terminalResize(call: MethodCall): Map<String, Any?> {
+        terminalSession?.resize(
+            call.int("rows", TerminalSession.DEFAULT_ROWS),
+            call.int("cols", TerminalSession.DEFAULT_COLS),
+        )
+        return ok()
+    }
+
     private suspend fun terminalRun(call: MethodCall): Map<String, Any?> {
+        if (terminalSession != null) throw IllegalStateException("终端会话正在运行")
         if (terminalJob?.isActive == true) throw IllegalStateException("终端已有命令在运行")
         if (terminalSink == null) throw IllegalStateException("终端未连接")
         val command = call.require("command")
@@ -593,8 +694,21 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         return ok()
     }
 
-    private fun terminalStop(): Map<String, Any?> {
-        terminalJob?.cancel()
+    private suspend fun terminalStop(): Map<String, Any?> {
+        val session = terminalSession
+        if (session != null) {
+            // Idempotent and bounded (~1 s): emits `stopped` once. Clear the fields
+            // before returning so the page can reconnect immediately; the wait job's
+            // finally is identity-guarded and stays silent for this session.
+            session.stop()
+            if (terminalSession === session) {
+                terminalSession = null
+                terminalJob = null
+            }
+        } else {
+            // One-shot `terminal.run` still stops through job cancellation.
+            terminalJob?.cancel()
+        }
         return ok()
     }
 
@@ -813,8 +927,11 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             terminalSink = null
             // The terminal page cancels its command on dispose; this covers a dropped
             // subscription too, so a child process never outlives the pane.
+            val session = terminalSession
+            if (terminalSession === session) terminalSession = null
             terminalJob?.cancel()
             terminalJob = null
+            if (session != null) scope.launch { session.stop() }
         }
     }
 

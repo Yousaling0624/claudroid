@@ -15,7 +15,7 @@ class RegistryTest {
         assertEquals("aarch64", target.arch)
 
         val rootfs = Registry.rootfsFor(target)
-        assertEquals("debian:13-slim", rootfs.image)
+        assertEquals("debian:13", rootfs.image)
         assertEquals("13", rootfs.version)
         assertEquals(Registry.ROOTFS_ARM64.digest, rootfs.digest)
     }
@@ -40,8 +40,8 @@ class RegistryTest {
         listOf(Registry.ROOTFS_ARM64, Registry.ROOTFS_X86_64).forEach { spec ->
             assertEquals(64, HttpUtil.digestHex(spec.digest).length)
             assertTrue(spec.digest.startsWith("sha256:"))
-            // A debian:13-slim layer is ~30 MB; catches a copy/paste of a wrong image.
-            assertTrue("unexpected layer size ${spec.sizeBytes}", spec.sizeBytes in 20_000_000L..40_000_000L)
+            // A debian:13 standard layer is ~50 MB; catches a copy/paste of a wrong image.
+            assertTrue("unexpected layer size ${spec.sizeBytes}", spec.sizeBytes in 40_000_000L..60_000_000L)
         }
         // The two architectures must not share a digest.
         assertTrue(Registry.ROOTFS_ARM64.digest != Registry.ROOTFS_X86_64.digest)

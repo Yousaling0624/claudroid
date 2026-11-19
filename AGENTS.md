@@ -106,9 +106,10 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 - 官方 Claude Code 2.x 的 Linux 包是 **glibc 原生二进制**，不需要 Node；容器的 glibc
   直接满足它，不再需要 musl loader。
 - 运行时是一个 **Debian rootfs 容器**：安装时从 OCI registry 拉官方的
-  `debian:13-slim` layer（sha256 摘要钉死在 `Registry.kt`），解包成容器，再用 apt 装
+  `debian:13` layer（sha256 摘要钉死在 `Registry.kt`），解包成容器，再用 apt 装
   bash / git / grep / coreutils / sed / awk / tar / gzip / xz / curl / ca-certificates /
-  less。CLI 放在 `/opt/claude/<version>/claude`。
+  less；top / ps / ip 等常用工具由 apt 的 procps / psmisc / iproute2 安装。
+  CLI 放在 `/opt/claude/<version>/claude`。
   - 官方 `registry-1.docker.io` 不可达时回退 DaoCloud 镜像；两者都按同一摘要校验，
     镜像不能替换字节。
   - 旧的 Alpine 安装没有 `rootfsVersion`，会被判定为不健康并自动重装。

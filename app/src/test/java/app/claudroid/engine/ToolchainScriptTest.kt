@@ -15,14 +15,19 @@ class ToolchainScriptTest {
         listOf(
             "bash", "git", "grep", "coreutils", "sed", "mawk", "tar", "gzip",
             "xz-utils", "curl", "ca-certificates", "less",
+            "procps", "psmisc", "iproute2", "iputils-ping", "whiptail", "nano",
+            "file", "wget", "unzip", "zip", "ncurses-term",
         ).forEach { pkg ->
             assertTrue("missing package $pkg in $installLine", installLine.contains(" $pkg"))
         }
         // Commands checked afterwards use the Debian command name, not the package name.
-        listOf("bash", "git", "grep", "sed", "awk", "tar", "gzip", "xz", "curl", "less")
-            .forEach { tool ->
-                assertTrue("missing tool $tool", script.contains("for t in ") && script.contains(" $tool"))
-            }
+        listOf(
+            "bash", "git", "grep", "sed", "awk", "tar", "gzip", "xz", "curl", "less",
+            "top", "ps", "free", "pgrep", "pkill", "killall", "ip", "ping",
+            "whiptail", "nano", "file", "wget", "unzip", "zip",
+        ).forEach { tool ->
+            assertTrue("missing tool $tool", script.contains("for t in ") && script.contains(" $tool"))
+        }
     }
 
     @Test
@@ -92,6 +97,8 @@ class ToolchainScriptTest {
         val text = Toolchain.toolsFailureText(22, "E: You don't have enough free space\nAPT_INSTALL_FAIL")
         assertTrue(text, text.contains("磁盘空间"))
         assertTrue(text, text.contains("apt-get install -y bash git grep"))
+        assertTrue(text, text.contains("procps psmisc iproute2"))
+        assertTrue(text, text.contains("whiptail nano file wget unzip zip ncurses-term"))
         assertTrue(text, text.contains("exit=22"))
     }
 
