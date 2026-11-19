@@ -1,14 +1,15 @@
 # Flutter 前端视觉规范
 
-Compose 前端的设计系统在 [`DESIGN.md`](DESIGN.md)。本文只覆盖 **Flutter 前端**，它是发布
-APK 实际使用的前端（`release.yml` 传 `-PflutterUi=true`）。视觉方向是
-**FlClash 结构 + Claude 质感**：材质、图标、动画与设置页排版沿用
+`flutter/` 是应用唯一的前端；Compose 实现已移除，[`DESIGN.md`](DESIGN.md) 只作历史参考。
+视觉方向是 **FlClash 结构 + Claude 质感**：材质、图标、动画与设置页排版沿用
 [FlClash](https://github.com/chen08209/FlClash)，页面底色、文字气质与克制的赤陶色改用
 `DESIGN.md` 的暖纸方案：
 
 > 材质、图标、动画效果照抄 flclash，设置页面的排版也要借鉴一下，聊天页面保持当前布局。
 
 ## 1. 依赖与组件映射
+
+下表的左列是已移除的 Compose 实现，保留作对照；右列是当前唯一实现。
 
 | Compose（`ui/`） | Flutter（`flutter/lib/ui/`） |
 | --- | --- |
@@ -128,6 +129,9 @@ const kSeedColor = Color(0xFFD97757); // 与 ui/theme/Theme.kt 的 orange 同值
   / `tool:<blockId>` 记忆，列表回收后不丢。折叠头不允许再次手写 `if (open)`。
 - 「实时思考/活动行 → 最终 WorkDisclosure」是状态驱动的结构性切换，用
   `AnimatedFold(fade: false)` 只做高度过渡，不做整块淡入淡出；用户手动展开折叠时仍保留淡入。
+  流式结束时这些结构折叠传 `animate: false`（`AnimatedFold.animate`），直接落到终态：
+  否则最后一帧还会再播一次高度动画，看上去像整页刷新。**不要**在 `streaming` 结束时
+  引入任何新的淡入淡出。
 - 图标一律矢量 glyph，不用 emoji、不用位图，不随字号放大而变糊。
 
 ## 4. 字体与排版
@@ -191,9 +195,16 @@ FlClash 的观感来自这些统一的行高。
   收起时只显示标题与一行摘要。来源列表、输入与输出都属于展开后的详情，默认不占卡片
   高度；展开后来源按 `web_sources.dart` 的结果显示可点卡片。失败工具用错误色描边，
   错误条用 `errorContainer` 淡底 + `error` 描边。
-- 顶栏搜索图标进入会话内搜索（`chat_search.dart`）：只保留命中正文/错误的消息并显示匹配
-  数，搜索时暂停自动跟随与回到底部。顶栏菜单的「复制整段对话」用
-  `conversation_export.dart` 导出纯文本（剥掉尾部 `Sources:`，跳过思考/工具）。
+- 顶栏只保留模型键与新对话键，不再放搜索键；会话内搜索（`chat_search.dart`）从标题菜单的
+  「搜索当前对话 / 退出搜索」进入：只保留命中正文/错误的消息并显示匹配数，搜索时暂停
+  自动跟随与回到底部。顶栏菜单的「复制整段对话」用
+  `conversation_export.dart` 导出纯文本（剥掉尾部 `Sources:` 与附件引用，跳过思考/工具）。
+- 每条回答结束后的动作行**只用图标键**，不显示文字：重新回答（仅最后一条）、复制（复制后
+  变勾）、分出新对话（`AppGlyphs.fork`，调 `chat.fork`）。tooltip 负责解释图标。
+- 附件不出现在输入框文本里：`composer.dart` 与用户消息气泡都用 `attachments.dart` 的
+  `AttachmentPreviewStrip` 显示缩略图（图片走 `workspace.preview` 字节，其他文件显示
+  文件卡片 + 扩展名，可点 × 移除）；提交时才由 `composeChatPrompt` 把
+  `@attachments/<name>` 追加到真正发送的 prompt。
 - 回到底部是 48dp 可按压按钮，用 `AnimatedVisibility.bottomNavigation` 淡入并轻微缩放，
   列表底部预留 56dp，最后一条消息不会被遮住。
 - 流式更新按帧合并：`ChatState` 每帧最多刷新一次，顶栏只在可见签名变化时重建，Markdown
@@ -275,9 +286,9 @@ FlClash 的设置页是「分组标题 + 一组行 + 行尾值/箭头」的列�
 
 `prism_ui` 的 `Glyphs` 只有通用图标（`arrowBack`、`chevronForward`、`close`、`check`、
 `more`、`search`、`eye`、`copy`、`paste`、`sort`、`pin`、`dragHandle` 等）。业务图标
-（`plus`、`send`、`stop`、`sparkle`、`trash`、`edit`、`refresh`、`menu`、`settings`、
-`attachment`、`search`、`globe`、`terminal`、`folder`、`checklist`、`agents`、`plug`、
-`read`）放在
+（`plus`、`send`、`stop`、`sparkle`、`trash`、`edit`、`refresh`、`fork`、`menu`、
+`settings`、`attachment`、`search`、`globe`、`terminal`、`folder`、`checklist`、`agents`、
+`plug`、`read`）放在
 `flutter/lib/ui/glyphs.dart` 的 `AppGlyphs`，沿用 24 单位网格、`GlyphRole.line` /
 `GlyphRole.detail` 的描边角色，与内置图标同视觉重量。新增图标按同样网格画，不要混入
 Material Icons。
@@ -293,5 +304,5 @@ Material Icons。
 
 - `prism_ui` 是 **GPL v3**（chen08209），版本 0.1.2。已在
   [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) 登记。
-- 发布 APK 用 Flutter 前端（`release.yml` 以 `-PflutterUi=true` 构建），所以 `prism_ui`
-  也随发布物分发。两边都是 GPLv3，本项目自身的 GPLv3 条款已覆盖这一义务。
+- 发布 APK 只包含 Flutter 前端，所以 `prism_ui` 也随发布物分发。两边都是 GPLv3，
+  本项目自身的 GPLv3 条款已覆盖这一义务。

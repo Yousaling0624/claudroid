@@ -7,7 +7,7 @@ Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执
 
 ```
 ┌──────────── Android App（Kotlin 引擎 + Flutter 前端）────────────┐
-│  会话列表 / 对话流 / 设置（Flutter；Compose 保留为回退）           │
+│  会话列表 / 对话流 / 设置（Flutter，唯一前端）                    │
 │    · 流式输出、思考/工具合并折叠、消息编辑/重新回答、费用/耗时   │
 │    · Anthropic / OpenAI 兼容端点 + 服务商预设 + 模型列表         │
 ├─────────────────── 引擎层（纯 Kotlin，零第三方 SDK）─────────────┤
@@ -28,12 +28,11 @@ Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执
 
 ## 界面
 
-发布 APK 使用 **Flutter 前端**（`flutter/`），视觉方向是 **FlClash 结构 + Claude 质感**：
+应用使用 **Flutter 前端**（`flutter/`，唯一前端）：视觉方向是 **FlClash 结构 + Claude 质感**：
 分组列表、液态玻璃与统一动效沿用 FlClash，底色与文字改用暖纸 + 陶土橙，助手正文与首页问候
-使用衬线。不带 `-PflutterUi=true` 的本地构建仍是 Compose 前端，作为回退与对照；两套前端
-共享同一个 Kotlin 引擎与桥接契约。Flutter 的视觉规则见
-[`docs/DESIGN_FLUTTER.md`](docs/DESIGN_FLUTTER.md)，Compose 的见
-[`docs/DESIGN.md`](docs/DESIGN.md)。
+使用衬线。界面只由 Flutter 渲染，业务逻辑仍全部在 Kotlin 引擎里，两者通过冻结的桥接契约
+通信。视觉规则见 [`docs/DESIGN_FLUTTER.md`](docs/DESIGN_FLUTTER.md)；Compose 时代的
+[`docs/DESIGN.md`](docs/DESIGN.md) 只作历史参考。
 
 | 首页 | 侧边栏抽屉 | 对话（浅色） |
 | --- | --- | --- |
@@ -47,7 +46,7 @@ Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执
 | --- | --- |
 | ![模型选择](docs/screenshots/models.png) | ![思考与工具折叠](docs/screenshots/thinking.png) |
 
-截图来自 MuMu 模拟器上的发布前端（Flutter，720×1280），覆盖浅色 / 深色、模型下拉与嵌套折叠。
+截图来自 MuMu 模拟器上的 Flutter 前端（720×1280），覆盖浅色 / 深色、模型下拉与嵌套折叠。
 模型档位从顶栏的模型按钮向下展开。`prototype/index.html` 是 Compose 时期的可点击原型，
 保留作历史交互参考，支持深链：`#chat` / `#settings`、`?theme=dark`、`?still=1`。
 
@@ -107,34 +106,37 @@ Android 10 起，`targetSdk ≥ 29` 的应用**不允许 exec() 自己数据目�
 
 ### 构建
 
-需要 JDK 17、Android SDK（platform 35 + build-tools 35）、Python 3。
+需要 JDK 17、Android SDK（platform 35 + build-tools 35）、Python 3，以及 **Flutter SDK**
+（界面唯一实现是 `flutter/`，Gradle 构建必须能找到它）。
 
 ```bash
 python3 tools/fetch-proot.py --all     # 下载并打包 PRoot 运行时
-./gradlew testDebugUnitTest
-./gradlew assembleDebug
+cd flutter && flutter pub get          # 生成 flutter/.android/
+cd .. && ./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Windows 可用仓库脚本一键装工具链，再执行 `tools/build-apk.sh`：
+Gradle 通过 `local.properties` 的 `flutter.sdk`（或环境变量 `FLUTTER_ROOT`）定位 Flutter。
+`-Pandroid.newDsl=false` 是 Flutter Gradle 插件 + AGP 9 的已知兼容开关，原因见
+[`docs/FLUTTER.md`](docs/FLUTTER.md)。
+
+Windows 可用仓库脚本一键装工具链，再执行 `tools/build-apk.sh`（Flutter SDK 需另行安装，
+并在 `local.properties` 写 `flutter.sdk`，或导出 `FLUTTER_ROOT`）：
 
 ```bash
 bash tools/setup-toolchain.sh     # JDK17 / cmdline-tools / SDK / Gradle → C:\dev-toolchain
-bash tools/build-apk.sh
+cd flutter && flutter pub get
+cd .. && bash tools/build-apk.sh
 ```
 
 也可以用 Android Studio 直接打开项目。
 
-`flutter/` 是 **发布用的前端**：GitHub Release 的 APK 以 `-PflutterUi=true` 构建，启动后直接进
-Flutter 界面。不带 flag 的本地构建仍是 Compose 前端（产物与上面完全一致），用于回退与对照。
-要自己构建 Flutter 版：
+改了 `flutter/` 时另跑纯前端检查（WSL 没有 Flutter，在 Windows 侧执行）：
 
 ```bash
-cd flutter && flutter pub get                 # 生成 .android/
-./gradlew assembleDebug -PflutterUi=true -Pandroid.newDsl=false
+cd flutter && flutter analyze && flutter test
 ```
 
-细节与两个 flag 的由来见 [`docs/FLUTTER.md`](docs/FLUTTER.md)。
 
 ### CI / 发版
 
@@ -174,7 +176,8 @@ cd flutter && flutter pub get                 # 生成 .android/
 - `看看当前目录结构，解释这个项目怎么构建`
 
 每个工具调用在对话里就是一张可展开的卡片（命令 / 入参 / 输出 / 成败）。
-输入框左侧 `+` 可以把任意文件复制进工作区，并自动插入 `@attachments/文件名`。
+输入框左侧 `+` 可以把任意文件复制进工作区，输入框上方随即出现缩略图（图片直接预览，
+其他文件显示文件卡片）；真正发送的 prompt 里仍带 `@attachments/文件名`。
 
 ## 跟随官方升级
 
@@ -206,22 +209,20 @@ claudroid/
 │   ├── core/Paths.kt           安装记录（版本 / jail 位置 / 模式）、工作区、会话目录
 │   ├── data/                   设置(DataStore) + 服务商预设 + 会话(JSON 文件)
 │   ├── engine/                 容器组装、PRoot / chroot、CLI 进程与 OpenAI 兼容桥
-│   ├── ui/                     Compose 回退前端：home / chat / settings / markdown / theme
-│   └── ui/theme/               暖纸色 + 陶土橙配色
-├── app/src/main/flutter/java/app/claudroid/
-│   ├── bridge/                 Flutter 桥接：通道注册、文件与 HTML 预览平台视图
-│   └── ui/                     FlutterHostActivity：复用缓存引擎并挂载 Flutter
-├── app/src/test/java/…         单测（协议翻译 / 解析 / tar / proot 参数 / 设置）
-├── flutter/                    发布前端（add-to-app 模块）
+│   ├── chat/                   会话逻辑：回合、历史重放、中断修复、分支
+│   ├── bridge/                 Flutter 桥接：MethodChannel / EventChannel、平台视图
+│   └── MainActivity.kt         唯一宿主：复用缓存引擎并挂载 Flutter
+├── app/src/test/java/…         单测（协议翻译 / 解析 / tar / proot 参数 / 会话逻辑）
+├── flutter/                    唯一前端（add-to-app 模块）
 │   ├── lib/bridge/             MethodChannel / EventChannel 封装与事件折叠
 │   ├── lib/models/             Dart 侧数据结构
 │   └── lib/ui/                 页面、设置二级页与 prism_ui 组件
 ├── prototype/index.html        Compose 时期的高保真原型（历史参考）
 ├── docs/
 │   ├── ARCHITECTURE.md         引擎架构、执行路径与 Auto 模型
-│   ├── DESIGN.md               Compose 回退前端的视觉规范
-│   ├── DESIGN_FLUTTER.md       Flutter 发布前端的视觉规范
-│   ├── FLUTTER.md              Flutter 模块结构、构建配方与两个 flag 的由来
+│   ├── DESIGN.md               Compose 时期的视觉规范（历史参考）
+│   ├── DESIGN_FLUTTER.md       Flutter 前端的视觉规范
+│   ├── FLUTTER.md              Flutter 模块结构、构建配方与 flag 的由来
 │   ├── BRIDGE_CONTRACT.md      Kotlin ↔ Dart 桥接契约（冻结）
 │   ├── AGENT_WORKFLOW.md       subagent 分工与成本分层
 │   └── screenshots/            发布前端截图
@@ -279,7 +280,7 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 - PRoot 模式受 Android 沙箱限制，不能改 `/system` 或其他应用数据；需要这些能力请用 root 模式。
 - 没有「逐条批准工具调用」的图形界面；headless 下由 CLI 的权限模式决定。
 - 一个 turn 一个进程（+ `--resume`），换来稳定；代价是每轮约 100 ms 启动开销。
-- 截图为发布前端（Flutter）的真实截图；Compose 回退前端的排版与截图略有差异。
+- 截图为 Flutter 前端的真实截图。
 
 ## 许可证
 

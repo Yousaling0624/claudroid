@@ -1,4 +1,5 @@
 import '../models/models.dart';
+import 'attachments.dart';
 import 'web_sources.dart';
 
 /// A plain-text transcript suitable for the clipboard: user and assistant
@@ -15,7 +16,11 @@ String conversationToText(List<ChatMessage> messages) {
     if (speaker == null) continue;
     final text = message.blocks
         .whereType<TextBlock>()
-        .map((block) => WebSources.stripTrailingSources(block.text))
+        .map(
+          (block) => splitAttachmentRefs(
+            WebSources.stripTrailingSources(block.text),
+          ).text,
+        )
         .where((text) => text.trim().isNotEmpty)
         .join('\n\n')
         .trim();

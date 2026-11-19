@@ -102,6 +102,23 @@ abstract final class AppGlyphs {
     ], role: GlyphRole.detail),
   ]);
 
+  /// A branch leaving the conversation: one trunk, a second lane, three nodes.
+  static const fork = Glyph([
+    GlyphCircle(6.5, 5.5, 2),
+    GlyphCircle(6.5, 18.5, 2),
+    GlyphCircle(17.5, 9, 2),
+    GlyphPolyline([
+      GlyphVertex(6.5, 7.5),
+      GlyphVertex(6.5, 16.5),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(17.5, 11),
+      GlyphVertex(17.5, 12.5),
+      GlyphVertex(15, 15),
+      GlyphVertex(6.5, 15),
+    ], role: GlyphRole.line),
+  ]);
+
   /// Sliders rather than a gear: it stays legible at 14dp and needs no arcs.
   static const settings = Glyph([
     GlyphPolyline([

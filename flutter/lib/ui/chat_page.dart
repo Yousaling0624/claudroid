@@ -8,6 +8,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
+import 'attachments.dart';
 import 'chat_search.dart';
 import 'composer.dart';
 import 'conversation_export.dart';
@@ -39,6 +40,7 @@ class ChatPage extends StatefulWidget {
     required this.onOpenSettings,
     required this.onOpenWorkspace,
     required this.onNewChat,
+    required this.onOpenSession,
     required this.onUpdateSettings,
     required this.onToast,
   });
@@ -51,6 +53,9 @@ class ChatPage extends StatefulWidget {
   final ValueChanged<SettingsDestination> onOpenSettings;
   final VoidCallback onOpenWorkspace;
   final VoidCallback onNewChat;
+
+  /// Opens a session created here (a fork), so the shell swaps the page.
+  final ValueChanged<String> onOpenSession;
   final Future<void> Function(Map<String, dynamic> patch) onUpdateSettings;
   final void Function(String text, {bool isError}) onToast;
 
@@ -265,19 +270,25 @@ class _ChatPageState extends State<ChatPage> {
   // -- actions -------------------------------------------------------------
 
   Future<void> _submit() async {
+    final composer = _composerKey.currentState;
+    final paths = composer?.attachments ?? const <String>[];
     final text = _input.text.trim();
-    if (text.isEmpty || text.startsWith('/') || _chat.running) return;
+    if ((text.isEmpty && paths.isEmpty) || text.startsWith('/') || _chat.running) {
+      return;
+    }
     final editing = _editingId;
+    final prompt = composeChatPrompt(text, paths);
     try {
       final accepted = editing == null
-          ? await widget.bridge.send(widget.sessionId, text)
-          : await widget.bridge.resendFrom(widget.sessionId, editing, text);
+          ? await widget.bridge.send(widget.sessionId, prompt)
+          : await widget.bridge.resendFrom(widget.sessionId, editing, prompt);
       if (!accepted) {
         widget.onToast('这一轮还没结束。先点停止，再发送。', isError: true);
         return;
       }
       chatDrafts.remove(widget.sessionId);
       _input.clear();
+      composer?.clearAttachments();
       if (!mounted) return;
       setState(() {
         _editingId = null;
@@ -300,6 +311,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _clear() async {
     _input.clear();
+    _composerKey.currentState?.clearAttachments();
     setState(() => _editingId = null);
     try {
       await widget.bridge.clear(widget.sessionId);
@@ -324,17 +336,43 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// Branches the conversation at [message]: the host copies everything up to
+  /// and including that answer into a new session and we open it.
+  Future<void> _fork(ChatMessage message) async {
+    try {
+      final sessionId = await widget.bridge.forkChat(
+        widget.sessionId,
+        message.id,
+      );
+      if (!mounted) return;
+      widget.onOpenSession(sessionId);
+      widget.onToast('已从这条回答分出新对话');
+    } catch (error) {
+      widget.onToast('分叉失败（$error）。再点一次。', isError: true);
+    }
+  }
+
   void _startEditing(ChatMessage message) {
-    final text = message.blocks
+    final joined = message.blocks
         .whereType<TextBlock>()
         .map((b) => b.text)
         .join('\n');
+    // Attachment tokens belong to the composer's thumbnail row, not its text
+    // field; moving them back keeps edit-and-resend lossless.
+    final split = splitAttachmentRefs(joined);
     setState(() => _editingId = message.id);
     _input.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: text.length),
+      text: split.text,
+      selection: TextSelection.collapsed(offset: split.text.length),
     );
+    _composerKey.currentState?.setAttachments(split.paths);
     _inputFocus.requestFocus();
+  }
+
+  void _cancelEdit() {
+    _input.clear();
+    _composerKey.currentState?.clearAttachments();
+    setState(() => _editingId = null);
   }
 
   void _openSearch() {
@@ -365,7 +403,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _copy(ChatMessage message) async {
     final text = message.blocks
         .whereType<TextBlock>()
-        .map((b) => WebSources.stripTrailingSources(b.text))
+        .map((b) => splitAttachmentRefs(WebSources.stripTrailingSources(b.text)).text)
         .where((text) => text.trim().isNotEmpty)
         .join('\n\n')
         .trim();
@@ -519,6 +557,12 @@ class _ChatPageState extends State<ChatPage> {
               items: [
                 if (_chat.messages.isNotEmpty)
                   PopupMenuItem(
+                    label: _searching ? '退出搜索' : '搜索当前对话',
+                    glyph: _searching ? Glyphs.close : Glyphs.search,
+                    onPressed: _searching ? _closeSearch : _openSearch,
+                  ),
+                if (_chat.messages.isNotEmpty)
+                  PopupMenuItem(
                     label: '复制整段对话',
                     glyph: Glyphs.copy,
                     onPressed: _copyConversation,
@@ -544,15 +588,6 @@ class _ChatPageState extends State<ChatPage> {
           );
         },
         actions: [
-          if (_chat.messages.isNotEmpty)
-            (context) => IconButton(
-              onPressed: _searching ? _closeSearch : _openSearch,
-              icon: GlyphIcon(
-                _searching ? Glyphs.close : Glyphs.search,
-                size: 19,
-              ),
-              tooltip: _searching ? '退出搜索' : '搜索当前对话',
-            ),
           (context) => ModelTierButton(
             labels: widget.labels,
             settings: widget.settings,
@@ -685,10 +720,10 @@ class _ChatPageState extends State<ChatPage> {
           return RepaintBoundary(
             key: ValueKey(message.id),
             child: _MessageView(
+              bridge: widget.bridge,
               message: message,
               model: widget.labels.chat,
               statusLine: _chat.statusLine,
-              isLastAssistant: isLastAssistant,
               running: _chat.running,
               copied: _copiedId == message.id,
               foldOpen: _foldOpen,
@@ -697,6 +732,7 @@ class _ChatPageState extends State<ChatPage> {
                   ? () => _startEditing(message)
                   : null,
               onRegenerate: isLastAssistant ? () => _regenerate(message) : null,
+              onFork: () => _fork(message),
               onCopy: () => _copy(message),
               onOpenUrl: _openUrl,
             ),
@@ -721,10 +757,7 @@ class _ChatPageState extends State<ChatPage> {
         onStop: _stop,
         onToast: widget.onToast,
         editing: _editingId != null,
-        onCancelEdit: () {
-          _input.clear();
-          setState(() => _editingId = null);
-        },
+        onCancelEdit: _cancelEdit,
         actions: _slashActions(),
         onChanged: (value) {
           if (_editingId == null) chatDrafts[widget.sessionId] = value;
@@ -860,48 +893,55 @@ class _EmptyConversationState extends State<_EmptyConversation> {
 
 class _MessageView extends StatelessWidget {
   const _MessageView({
+    required this.bridge,
     required this.message,
     required this.model,
     required this.statusLine,
-    required this.isLastAssistant,
     required this.running,
     required this.copied,
     required this.foldOpen,
     required this.onToggleFold,
     this.onEdit,
     this.onRegenerate,
+    required this.onFork,
     required this.onCopy,
     required this.onOpenUrl,
   });
 
+  final Bridge bridge;
   final ChatMessage message;
   final String model;
   final String statusLine;
-  final bool isLastAssistant;
   final bool running;
   final bool copied;
   final bool Function(String key) foldOpen;
   final ValueChanged<String> onToggleFold;
   final VoidCallback? onEdit;
   final VoidCallback? onRegenerate;
+  final VoidCallback onFork;
   final VoidCallback onCopy;
   final ValueChanged<String> onOpenUrl;
 
   @override
   Widget build(BuildContext context) {
     if (message.role == Role.user) {
-      return _UserBubble(message: message, onEdit: onEdit);
+      return _UserBubble(
+        bridge: bridge,
+        message: message,
+        onEdit: onEdit,
+      );
     }
     return _AssistantMessage(
       message: message,
       model: model,
       statusLine: statusLine,
-      showActions: isLastAssistant,
+      showActions: true,
       running: running,
       copied: copied,
       foldOpen: foldOpen,
       onToggleFold: onToggleFold,
       onRegenerate: onRegenerate,
+      onFork: onFork,
       onCopy: onCopy,
       onOpenUrl: onOpenUrl,
     );
@@ -909,18 +949,27 @@ class _MessageView extends StatelessWidget {
 }
 
 class _UserBubble extends StatelessWidget {
-  const _UserBubble({required this.message, this.onEdit});
+  const _UserBubble({
+    required this.bridge,
+    required this.message,
+    this.onEdit,
+  });
 
+  final Bridge bridge;
   final ChatMessage message;
   final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
-    final text = message.blocks
+    final raw = message.blocks
         .whereType<TextBlock>()
         .map((b) => b.text)
         .join('\n');
+    final split = splitAttachmentRefs(raw);
+    final text = split.text;
+    final paths = split.paths;
+    final hasBody = text.trim().isNotEmpty;
     return LayoutBuilder(
       builder: (context, constraints) => Column(
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -944,11 +993,26 @@ class _UserBubble extends StatelessWidget {
                     color: scheme.surfaceContainerHigh,
                     borderRadius: AppRadius.lg,
                   ),
-                  child: SelectableText(
-                    text,
-                    style: context.listTitleStyle.copyWith(
-                      color: scheme.onSurface,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (paths.isNotEmpty)
+                        AttachmentPreviewStrip(
+                          bridge: bridge,
+                          paths: paths,
+                          wrap: true,
+                          size: 54,
+                          padding: EdgeInsets.only(bottom: hasBody ? 8 : 0),
+                        ),
+                      if (hasBody)
+                        SelectableText(
+                          text,
+                          style: context.listTitleStyle.copyWith(
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -1034,6 +1098,7 @@ class _AssistantMessage extends StatelessWidget {
     required this.foldOpen,
     required this.onToggleFold,
     this.onRegenerate,
+    required this.onFork,
     required this.onCopy,
     required this.onOpenUrl,
   });
@@ -1047,6 +1112,7 @@ class _AssistantMessage extends StatelessWidget {
   final bool Function(String key) foldOpen;
   final ValueChanged<String> onToggleFold;
   final VoidCallback? onRegenerate;
+  final VoidCallback onFork;
   final VoidCallback onCopy;
   final ValueChanged<String> onOpenUrl;
 
@@ -1121,6 +1187,7 @@ class _AssistantMessage extends StatelessWidget {
         AnimatedFold(
           open: !hasOutput && message.streaming,
           fade: false,
+          animate: message.streaming,
           child: Padding(
             padding: EdgeInsets.zero,
             child: _ThinkingPill(
@@ -1135,6 +1202,7 @@ class _AssistantMessage extends StatelessWidget {
         AnimatedFold(
           open: !hasOutput && message.streaming && tools.isNotEmpty,
           fade: false,
+          animate: message.streaming,
           child: Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Column(
@@ -1147,6 +1215,7 @@ class _AssistantMessage extends StatelessWidget {
               (hasOutput || !message.streaming) &&
               (thinkingSegments.isNotEmpty || tools.isNotEmpty),
           fade: false,
+          animate: message.streaming,
           child: _WorkDisclosure(
             messageId: message.id,
             blocks: blocks,
@@ -1167,12 +1236,9 @@ class _AssistantMessage extends StatelessWidget {
             visibleTexts[index],
             message.streaming && index == lastTextIndex,
           ),
-        if (!message.streaming &&
-            (meta.isNotEmpty ||
-                (showActions && copyText.isNotEmpty) ||
-                (showActions && !running && onRegenerate != null)))
+        if (!message.streaming && (meta.isNotEmpty || showActions))
           Padding(
-            padding: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.only(top: 2),
             child: Row(
               children: [
                 if (meta.isNotEmpty)
@@ -1187,14 +1253,25 @@ class _AssistantMessage extends StatelessWidget {
                 else
                   const Spacer(),
                 if (showActions && !running && onRegenerate != null)
-                  TextButton(
+                  IconButton(
                     onPressed: onRegenerate,
-                    child: const Text('重新回答'),
+                    icon: const GlyphIcon(AppGlyphs.refresh, size: 18),
+                    tooltip: '重新回答',
                   ),
                 if (showActions && copyText.isNotEmpty)
-                  TextButton(
+                  IconButton(
                     onPressed: onCopy,
-                    child: Text(copied ? '已复制' : '复制'),
+                    icon: GlyphIcon(
+                      copied ? Glyphs.check : Glyphs.copy,
+                      size: 18,
+                    ),
+                    tooltip: copied ? '已复制' : '复制',
+                  ),
+                if (showActions)
+                  IconButton(
+                    onPressed: onFork,
+                    icon: const GlyphIcon(AppGlyphs.fork, size: 18),
+                    tooltip: '分出新对话',
                   ),
               ],
             ),

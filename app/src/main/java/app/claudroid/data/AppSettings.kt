@@ -260,3 +260,13 @@ object Providers {
         haikuModel = "",
     )
 }
+
+/**
+ * A preset is active only when both the protocol and the normalized base URL match.
+ * Anything else is a hand-edited endpoint, which the UI labels 自定义.
+ */
+fun activeProviderPreset(settings: AppSettings): ProviderPreset? =
+    Providers.all.firstOrNull {
+        settings.apiFlavor == it.flavor &&
+            settings.baseUrl.trimEnd('/') == it.baseUrl.trimEnd('/')
+    }

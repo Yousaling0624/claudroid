@@ -41,7 +41,12 @@ JAVA_HOME='C:\dev-toolchain\jdk' WSLENV=JAVA_HOME cmd.exe /c \
 
 - 只回传失败段和 `FAILURE:` 之后的尾部，不要贴全量日志。
 - 动了 `flutter/` 时，在 Windows 侧再跑 `flutter analyze` 与 `flutter test`，并跑一次
-  `assembleDebug -PflutterUi=true -Pandroid.newDsl=false`。
+  `assembleDebug -Pandroid.newDsl=false`。
+- 通过 WSL/UNC 路径（`\\wsl.localhost\...`）构建时，Flutter 写出的 `flutter_build.d`
+  会把个别产物记成 `\\?\UNC\...`，Gradle 第二次读取时报
+  `UNC path is missing hostname: \\`。这是环境问题：删除
+  `flutter/.android/Flutter/build/intermediates/flutter/debug/flutter_build.d` 后重跑即可，
+  不要改仓库代码去绕过。
 - 区分「环境问题」与「代码问题」；环境偶发失败可重试一次并注明。
 - 如果构建缓存导致 `compileDebugKotlin UP-TO-DATE` 而本次有 Kotlin 改动，使用 `--rerun-tasks --no-build-cache` 复核一次。
 

@@ -318,6 +318,15 @@ class Bridge {
   Future<void> regenerate(String sessionId, String messageId) =>
       _call('chat.regenerate', {'sessionId': sessionId, 'messageId': messageId});
 
+  /// Branches the conversation at [messageId]; returns the new session id.
+  Future<String> forkChat(String sessionId, String messageId) async {
+    final map = await _call('chat.fork', {
+      'sessionId': sessionId,
+      'messageId': messageId,
+    });
+    return map['sessionId'] as String? ?? '';
+  }
+
   Future<void> stop(String sessionId) => _call('chat.stop', {'sessionId': sessionId});
 
   Future<void> clear(String sessionId) =>

@@ -122,22 +122,21 @@ jobs:
 
       # -Pandroid.newDsl=false is required by Flutter's Gradle plugin (it resolves AGP's
       # legacy BaseExtension); it cannot be set from settings.gradle.kts, so it stays on
-      # the command line. -PflutterUi=true makes the shipped APK use the Flutter UI.
+      # the command line. The Flutter UI is always part of the app now.
       - name: Unit tests
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testDebugUnitTest \
-            -PflutterUi=true -Pandroid.newDsl=false
+          ./gradlew --no-daemon testDebugUnitTest -Pandroid.newDsl=false
 
       - name: Assemble release APK
         run: |
           ./gradlew --no-daemon assembleRelease \
             -PversionName="${{ steps.version.outputs.version }}" \
             -PversionCode="${{ steps.version.outputs.version_code }}" \
-            -PflutterUi=true -Pandroid.newDsl=false
+            -Pandroid.newDsl=false
 
-      # A Compose-only APK also builds fine, so assert the Flutter frontend really made
-      # it in — otherwise a silent flag regression would ship the wrong UI.
+      # The Flutter UI is the only frontend; assert its engine and assets really made
+      # it into the APK so a packaging regression cannot silently ship an empty shell.
       - name: Verify Flutter frontend is packaged
         run: |
           apk="app/build/outputs/apk/release/app-release.apk"

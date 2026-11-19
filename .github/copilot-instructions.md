@@ -4,8 +4,8 @@
 
 最低限度必须遵守：
 
-- 主要改 `app/`；`flutter/` 是发布 APK 实际使用的前端（`release.yml` 以 `-PflutterUi=true`
-  构建），改它需另跑 `flutter analyze` / `flutter test`，并验证带 flag 的构建。
+- 主要改 `app/`；`flutter/` 是应用唯一的前端（Gradle 构建必需），改它需另跑
+  `flutter analyze` / `flutter test`，并验证 `./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false`。
 - 不要提交 `app/src/main/jniLibs/`、APK、keystore。
 - 改完跑 `./gradlew testDebugUnitTest assembleDebug`。
 - `targetSdk = 28` 是 PRoot 能执行的前提，不要随手升。

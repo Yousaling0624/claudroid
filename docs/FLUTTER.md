@@ -1,12 +1,9 @@
 # Flutter 前端
 
-**发布的 APK 用 Flutter 前端**：`release.yml` 以 `-PflutterUi=true` 构建，所以 GitHub Release
-里的包启动后直接进 `FlutterHostActivity`。`flutter/` 仍是一个 **add-to-app 模块**，由
-`settings.gradle.kts` 按 flag 决定是否 `include(":flutter")`——本地不带 flag 的
-`./gradlew assembleDebug` 依旧是 Compose 前端，产物与引入 Flutter 之前完全一致，
-也不需要在 WSL 里装 Flutter SDK。
-
-Compose 前端保留为对照实现与本地回退路径；两边功能追平后可以彻底删掉。
+**Flutter 是应用的唯一前端**：`release.yml` 和本地构建都会包含 `flutter/`，启动后直接进
+`MainActivity`（`FlutterActivity`）。Kotlin 侧只保留引擎、数据、会话逻辑与桥接；
+Compose 回退前端与 `-PflutterUi` 开关已经删除。`flutter/` 仍以 add-to-app 模块的形式
+接入（`settings.gradle.kts` 固定 `include(":flutter")`），因此构建需要 Flutter SDK。
 
 ## 目录
 
@@ -72,7 +69,7 @@ flutter/
 
 - **导航**：`ui/app.dart` 只有 `home` 与 `chat:<sessionId>` 两个常驻目的地，左上角用
   `showLeftSideSheet` 从左缘展开会话抽屉，设置页用 `BaseNavigator.push` 叠加。冷启动与「新对话」都落在首页；从首页发送第一条消息时才调用
-  `sessions.create` 并切到聊天页（与 Compose `MainActivity.AppRoot` 一致）。
+  `sessions.create` 并切到聊天页。
 - **首页**：`home_page.dart` 的衬线问候语来自本地时间，左侧是缓慢呼吸/旋转的有机光晕；
   AI 建议走 Kotlin 的 `SuggestionGenerator`（`app.suggestions`），加载骨架与 chip 都可点，
   切换新对话时重新生成。最近一条有内容的会话显示为「继续上次对话」卡，点击直接进入。
@@ -82,9 +79,14 @@ flutter/
   开始输出或结束后汇总成默认折叠的 `WorkDisclosure`，展开后仍是按时间的思考折叠 + 工具卡。
   正文前的尾部
   `Sources:` 列表会被剥离并显示成来源卡，Markdown 链接与裸 URL 经 `app.openUrl` 打开。
-  用户消息空闲时显示「编辑」动作；顶栏可搜索当前会话或复制整段对话。流式状态按帧合并，
-  Markdown 解析结果按输入缓存，正文限宽 760。助手正文用无衬线，每条回答的署名读
-  `ChatMessage.model`（开回合时由 Kotlin 冻结），切换模型或档位不会改写旧回答的签名。
+  用户消息空闲时显示「编辑」动作；每条回答的底部动作行是图标键：重新回答（仅最后一条）、
+  复制与「分出新对话」。顶栏只留模型键与新对话键；会话内搜索从标题菜单进入，避免顶栏拥挤。
+  流式结束时实时思考/活动行切到 `WorkDisclosure` 不做动画（`AnimatedFold(animate: false)`），
+  页面不会在最后一帧再刷新一次。Markdown 解析结果按输入缓存，正文限宽 760。助手正文用无衬线，
+  每条回答的署名读 `ChatMessage.model`（开回合时由 Kotlin 冻结），切换模型或档位不会改写旧回答的签名。
+- **附件**：`composer.dart` 只显示预览图（图片走 `workspace.preview` 的字节，其他文件显示文件
+  卡片），路径不再插进输入框；提交时由 `composeChatPrompt` 把 `@attachments/<name>` 追加到真正
+  发送的 prompt，用户消息气泡也把路径还原成缩略图。
 - **设置页**：根页按「模型与引擎 / 应用 / 其他」分三组，每行是带线条拟物图标的入口，
   用 `OpenContainer` 打开对应二级页：服务与模型、Claude Code 引擎、功能与实验、外观、
   高级、关于与诊断；工作区单独复用 `workspace_page.dart`。从外部快捷入口进入时，
@@ -118,16 +120,25 @@ cd flutter && flutter pub get
 flutter.sdk=C\:\\dev-toolchain\\flutter
 #    或者导出 FLUTTER_ROOT
 
-# 3. 带 flag 构建
-./gradlew assembleDebug -PflutterUi=true -Pandroid.newDsl=false
+# 3. 构建；Flutter 模块是必需的
+./gradlew assembleDebug -Pandroid.newDsl=false
 ```
 
-产物里会多出 `lib/*/libflutter.so` 与 `assets/flutter_assets/`，其余部分不变。
+产物里包含 `lib/*/libflutter.so` 与 `assets/flutter_assets/`。
+
+### WSL + UNC 构建的一个环境坑
+
+在 WSL 里通过 `\\wsl.localhost\...`（`wslpath -w`）让 Windows Gradle 构建时，Flutter 会在
+`flutter/.android/Flutter/build/intermediates/flutter/debug/flutter_build.d` 里把个别产物
+记成 `\\?\UNC\wsl.localhost\...`。下一次构建 Gradle 读这个 depfile 当输出列表，会在
+`UNC path is missing hostname: \\` 处失败。这是路径形态问题，不是代码问题：
+删掉 `flutter_build.d`（或整个 `flutter/.android/Flutter/build`）后重跑即可。
+CI 用普通盘符路径，不会触发。
 
 `release.yml` 走的就是这条路径：装 Flutter 3.47.9、写 `local.properties` 的
-`flutter.sdk`、跑 `flutter pub get`，再以 `-PflutterUi=true -Pandroid.newDsl=false`
-`assembleRelease`，最后用 `unzip -l` 断言 `libapp.so` 与 `assets/flutter_assets/` 真的在包里
-——只有 Compose 的 APK 同样能构建成功，不校验就会悄悄发错前端。
+`flutter.sdk`、跑 `flutter pub get`，再以 `-Pandroid.newDsl=false` `assembleRelease`，
+最后用 `unzip -l` 断言 `libapp.so` 与 `assets/flutter_assets/` 真的在包里，防止打包回归
+发出一个没有界面的 APK。
 
 ### 为什么必须 `-Pandroid.newDsl=false`
 
@@ -137,8 +148,9 @@ Flutter 的 Gradle 插件（`FlutterPluginUtils.getLegacyAndroidExtension`）用
 NPE。**这个 flag 只能在命令行传**：AGP 在 settings 脚本执行之前就读它，所以在
 `settings.gradle.kts` 里改 `gradle.startParameter` 无效（已实测）。
 
-不要把它写进 `gradle.properties`——那会让 Compose 的默认构建也退回旧 DSL。等 Flutter
-插件支持新 DSL 后，删掉这个 flag 即可。
+不要把它写进 `gradle.properties`：AGP 在 settings 脚本执行之前就读这个参数，写在属性文件里
+会让 `settings.gradle.kts` 与命令行求值顺序不一致。等 Flutter 插件支持新 DSL 后，删掉这个
+flag 即可。
 
 ### 为什么必须 apply `module_plugin_loader.gradle`
 
@@ -153,7 +165,7 @@ loader 会对除 `:flutter` 以外的所有 project 设置 `evaluationDependsOn(
 
 Flutter 插件在配置期执行 `rootProject.allprojects { repositories.maven { ... } }` 拉引擎
 产物（`io.flutter:flutter_embedding_*`、`libflutter.so`），与
-`FAIL_ON_PROJECT_REPOS` 冲突。`settings.gradle.kts` 的解法是：flag 打开时在
+`FAIL_ON_PROJECT_REPOS` 冲突。`settings.gradle.kts` 的解法是：在
 `dependencyResolutionManagement` 里声明 `https://storage.googleapis.com/download.flutter.io`，
 并把 mode 切成 `PREFER_SETTINGS`。构建会打三条 "prefer settings repositories" 警告，属预期。
 
@@ -168,7 +180,7 @@ Flutter 插件在配置期执行 `rootProject.allprojects { repositories.maven {
 工作区的 HTML 预览没有引入 `webview_flutter`：它的 Android 实现在 add-to-app + AGP 9 下
 无法配置（要么重新 apply 已被 AGP 9 移除的 `kotlin-android`，要么用 Kotlin DSL 访问器读
 不到 Flutter 的扩展）。改为在 `BridgePlugin` 里直接注册一个宿主 `WebView` 的平台视图
-（`HtmlPreviewView`），Dart 侧只用 `AndroidView`，同时沿用 Compose 的安全策略：null base
+（`HtmlPreviewView`），Dart 侧只用 `AndroidView`，同时沿用原先的安全策略：null base
 URL、关闭文件与 content provider 访问。
 
 `flutter/lib/**` 只用 `package:flutter/widgets.dart`（`ValueListenable` 一类从
@@ -181,34 +193,19 @@ URL、关闭文件与 content provider 访问。
 ## 与 Kotlin 侧的契约
 
 桥接协议冻结在 [`BRIDGE_CONTRACT.md`](BRIDGE_CONTRACT.md)。Kotlin 侧的平台通道实现放在
-`app/src/main/flutter/java/`（只在 `flutterUi` 打开时进 sourceSet），所以默认构建的
-classpath 里不会出现 Flutter embedding。
+`app/src/main/java/app/claudroid/bridge/`，与会话逻辑（`app/src/main/java/app/claudroid/chat/`）
+一起编进 `:app`。
 
-### 前端切换：`MainActivity` 的 trampoline
+### `MainActivity`：唯一的宿主
 
-`MainActivity.onCreate` 开头做一次运行期探测：
+`MainActivity` 直接继承 `FlutterActivity`，manifest 的 launcher 指向它；
+`TurnService` 的通知也指向它，点击后复用同一个缓存引擎，不会叠出第二个宿主。
 
-```kotlin
-if (flutterHostAvailable()) {
-    startActivity(Intent().setClassName(packageName, "app.claudroid.ui.FlutterHostActivity"))
-    finish()
-    return
-}
-```
+三条约束：
 
-`flutterHostAvailable()` 就是 `Class.forName(...)` 是否成功。于是同一个 APK 两种形态：
-
-- 默认构建：`FlutterHostActivity` 类不存在，探测失败，**行为完全不变**（Compose 前端）。
-- `-PflutterUi=true`：类存在，`MainActivity` 立刻转发到 `FlutterHostActivity` 并结束自己。
-
-用 trampoline 而不是改 manifest 的 `android:name`，是为了让 `TurnService` 里硬编码的
-`Intent(this, MainActivity::class.java)` 通知跳转继续可用——它仍然先落到 `MainActivity`，
-再被转发进聊天页。
-
-`FlutterHostActivity` 的三条约束：
-
-- `BridgeBootstrap.install()` 必须在 `super.onCreate(savedInstanceState)` **之前**调用，否则
-  引擎缓存已经建好、通道却没注册。
+- `BridgePlugin.prewarm(applicationContext)` 必须在 `super.onCreate(savedInstanceState)`
+  **之前**调用，否则引擎缓存已经建好、通道却没注册（`ClaudroidApp.onCreate` 也会预热一次，
+  两条路径幂等）。
 - `provideFlutterEngine` 复用 `FlutterEngineCache` 里 key 为 `claudroid` 的引擎（先 `get`，
   没有就 `BridgePlugin.attachCachedEngine(context)`，再 `get`）。
 - `shouldDestroyEngineWithHost() = false`：Activity 销毁不能带走缓存引擎，否则热重启和

@@ -3,7 +3,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
@@ -97,11 +96,6 @@ val appVersionName = (project.findProperty("versionName") as String?) ?: localVe
 val envKeystore = System.getenv("CLAUDROID_KEYSTORE") ?: (project.findProperty("keystorePath") as String?)
 val hasEnvKeystore = envKeystore != null && File(envKeystore).isFile
 
-// Flutter is an opt-in add-to-app module: the Compose UI stays the shipped frontend
-// until the Dart one reaches feature parity. settings.gradle.kts only includes
-// :flutter under the same flag, so this block is inert for a normal build.
-val flutterUi = (project.findProperty("flutterUi") as String?) == "true"
-
 android {
     namespace = "app.claudroid"
     // AGP 9 splits the platform minor version out of compileSdk; the installed
@@ -153,7 +147,6 @@ android {
     }
 
     buildFeatures {
-        compose = true
         buildConfig = true
     }
 
@@ -175,16 +168,6 @@ android {
         // lintVital pulls another lint-gradle artifact at release time; it adds nothing
         // here because the targetSdk warning is deliberate. Run `lintDebug` explicitly.
         checkReleaseBuilds = false
-    }
-
-    if (flutterUi) {
-        // Platform-channel bridge. Kept out of src/main/java so the default build
-        // never needs the Flutter embedding on the classpath. AGP 9's built-in Kotlin
-        // compiles `.kt` only from the `kotlin` source dir, so both have to be named.
-        sourceSets.getByName("main").apply {
-            java.srcDir("src/main/flutter/java")
-            kotlin.srcDir("src/main/flutter/java")
-        }
     }
 }
 
@@ -217,38 +200,11 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
-    if (flutterUi) {
-        implementation(project(":flutter"))
-    }
+    // The Flutter UI is the app's only frontend (settings.gradle.kts always includes it).
+    implementation(project(":flutter"))
 
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
-    implementation(composeBom)
-    androidTestImplementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-
-    // Async image decoding with a memory/disk cache: thumbnails and the zoomable
-    // preview would otherwise each decode a full bitmap on the main-thread budget.
-    implementation("io.coil-kt:coil-compose:2.7.0")
-
-    // Frosted top bars / sheets: a real blur pass instead of a flat translucent fill.
-    // 2.1.0 glass is the reason this project runs AGP 9 / compileSdk 37 / Compose 1.12;
-    // do not downgrade without also downgrading the UI to the Haze 1.x API.
-    implementation("dev.chrisbanes.haze:haze:2.1.0")
-    implementation("dev.chrisbanes.haze:haze-blur:2.1.0")
-    implementation("dev.chrisbanes.haze:haze-glass:2.1.0")
-
-    // Organic corner morphs for the loading/brand moment; 1.1.0 is built on Kotlin 2.0.21.
-    implementation("androidx.graphics:graphics-shapes:1.1.0")
 
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

@@ -15,11 +15,18 @@ class AnimatedFold extends StatefulWidget {
     super.key,
     required this.open,
     this.fade = true,
+    this.animate = true,
     required this.child,
   });
 
   final bool open;
   final bool fade;
+
+  /// False makes state changes swap instantly. The live thinking/activity rows
+  /// use this once a turn ends: the reader already saw that content, and
+  /// animating it into the final disclosure made the whole page appear to
+  /// refresh and fade on the last streamed frame.
+  final bool animate;
   final Widget child;
 
   @override
@@ -59,6 +66,12 @@ class _AnimatedFoldState extends State<AnimatedFold>
   @override
   void didUpdateWidget(covariant AnimatedFold oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!widget.animate) {
+      final target = widget.open ? 1.0 : 0.0;
+      _includeChild = widget.open;
+      if (_controller.value != target) _controller.value = target;
+      return;
+    }
     if (widget.open == oldWidget.open) return;
     if (widget.open) {
       _includeChild = true;

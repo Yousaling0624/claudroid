@@ -2,11 +2,11 @@ package app.claudroid
 
 import android.app.Application
 import android.content.Context
-import app.claudroid.bridge.FlutterBridgeHost
+import app.claudroid.bridge.BridgePlugin
 import app.claudroid.data.SettingsRepository
 import app.claudroid.data.SessionStore
 import app.claudroid.engine.EngineManager
-import app.claudroid.ui.chat.ChatController
+import app.claudroid.chat.ChatController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,9 +20,9 @@ class ClaudroidApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        // No-op in the default build: only the optional Flutter source set installs a
-        // registrar, so `src/main/java` never has to name a Flutter class.
-        FlutterBridgeHost.start(this)
+        // The Flutter UI is the only frontend: prewarm its engine and register the
+        // platform channels once, so Activity recreation never rebuilds the bridge.
+        BridgePlugin.prewarm(this)
         container.engine.startNetworkMonitoring()
         container.scope.launch {
             container.engine.bootstrap()

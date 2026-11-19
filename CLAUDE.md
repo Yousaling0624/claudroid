@@ -4,27 +4,27 @@
 
 最低限度必须遵守：
 
-- 主要改 `app/`；`flutter/` 是发布用的前端；`tools/` 是构建期工具；不要提交 `app/src/main/jniLibs/`、APK、keystore。
+- 主要改 `app/`；`flutter/` 是应用唯一的前端（Gradle 构建必需）；`tools/` 是构建期工具；不要提交 `app/src/main/jniLibs/`、APK、keystore。
 - 改完先验证：
 
   ```bash
-  ./gradlew testDebugUnitTest assembleDebug
+  ./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false
   ```
 
-  动了 `flutter/` 时另跑 `flutter analyze` / `flutter test` 与带 `-PflutterUi=true` 的构建（WSL 没有 Flutter，在 Windows 侧执行）。
+  动了 `flutter/` 时另跑 `flutter analyze` / `flutter test`，以及 `./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false`（WSL 没有 Flutter，在 Windows 侧执行）。
 
 - `targetSdk = 28` 是**有意为之**（PRoot / jail 需要 exec 应用目录里的文件）；不要随手升。
 - 不要手动升版本号、打 tag、发 Release；CI 自动生成 `v0.1.<run_number>`。
 - 签名密钥只放 GitHub Secrets；仓库和日志里绝不能出现 API Key / 密码。
 - commit 标题使用 `Android：一句话总结`，正文用列表写具体改动（Release notes 会直接使用）。
-- 提交/推送遵循用户当次指示；push `main` 后 CI 自动构建并发布 APK。
+- 完成后直接 commit 并 push `main`，无需询问或等待指示（已长期授权）；push 后 CI 自动构建并发布 APK。验证失败时仍不提交。
 
 ## Agent team
 
 `.claude/agents/` 定义了按模块划分的 subagent。**不要自动分派**：只有用户当次明确要求
 （例如「派给子代理」「用 subagent」）时才启动 subagent，否则主会话直接实现。
 
-- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`ui/`、`res/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；`engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`。
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`chat/`、`bridge/`、`flutter/lib/`、`flutter/test/` → `compose-ui`（设计）或 `ui-impl`（按冻结 spec 实现）；`engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`。
 - 验证分层：例行构建/单测/工作树检查 → `qa-build`（Haiku，省成本）；协议、持久化、并发等高风险 diff 的深度审查 → `qa-reviewer`（Sonnet）。
 - 用户要求分派时，主会话只做需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
 - 跨领域任务并行分派互不重叠的部分，由主会话汇总。

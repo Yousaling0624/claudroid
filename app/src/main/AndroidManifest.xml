@@ -36,7 +36,7 @@
         android:theme="@style/Theme.Claudroid">
 
         <activity
-            android:name=".ui.MainActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:windowSoftInputMode="adjustResize"
@@ -46,15 +46,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Optional Flutter frontend (`-PflutterUi=true`). The class only exists in that
-             build; MainActivity probes for it by name, so this entry stays inert otherwise. -->
-        <activity
-            android:name=".ui.FlutterHostActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
-            android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.Claudroid" />
 
         <service
             android:name=".engine.TurnService"

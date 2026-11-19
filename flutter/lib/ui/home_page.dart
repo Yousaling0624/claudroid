@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'attachments.dart';
 import 'composer.dart';
 import 'glyphs.dart';
 import 'layout.dart';
@@ -133,13 +134,20 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _submit() async {
+    final composer = _composerKey.currentState;
+    final paths = composer?.attachments ?? const <String>[];
     final text = _input.text.trim();
-    if (text.isEmpty || text.startsWith('/') || _sending) return;
+    if ((text.isEmpty && paths.isEmpty) || text.startsWith('/') || _sending) {
+      return;
+    }
     setState(() => _sending = true);
-    final accepted = await widget.onSend(text);
+    final accepted = await widget.onSend(composeChatPrompt(text, paths));
     if (!mounted) return;
     setState(() => _sending = false);
-    if (accepted) _input.clear();
+    if (accepted) {
+      _input.clear();
+      composer?.clearAttachments();
+    }
   }
 
   void _patch(Map<String, dynamic> patch) {

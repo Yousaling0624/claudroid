@@ -6,6 +6,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
+import 'attachments.dart';
 import 'glyphs.dart';
 
 /// One entry in the slash palette. [command] is what the user types after `/`;
@@ -31,9 +32,10 @@ class SlashAction {
 /// The input capsule shared by the home page and the chat page.
 ///
 /// It owns only presentation: expanding the panel for `/`, opening the system
-/// file picker, and inserting the returned `@attachments/...` references. The
-/// text itself lives in the caller's [controller], so drafts and "edit and
-/// resend" stay under the page's control.
+/// file picker, and holding the picked files as preview chips. The picked paths
+/// are handed to the page on submit (`composeChatPrompt` appends them to the
+/// prompt); the text itself lives in the caller's [controller], so drafts and
+/// "edit and resend" stay under the page's control.
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
@@ -86,6 +88,26 @@ class ChatComposer extends StatefulWidget {
 class ChatComposerState extends State<ChatComposer> {
   bool _picking = false;
 
+  /// Workspace-relative paths picked through the host, in pick order.
+  final List<String> _attachments = [];
+
+  List<String> get attachments => List.unmodifiable(_attachments);
+
+  /// Used by "edit and resend": the old message's attachment tokens become
+  /// preview chips again.
+  void setAttachments(List<String> paths) {
+    setState(() {
+      _attachments
+        ..clear()
+        ..addAll(paths.where((path) => path.trim().isNotEmpty));
+    });
+  }
+
+  void clearAttachments() {
+    if (_attachments.isEmpty) return;
+    setState(_attachments.clear);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -113,7 +135,8 @@ class ChatComposerState extends State<ChatComposer> {
     if (mounted) setState(() {});
   }
 
-  bool get _hasText => widget.controller.text.trim().isNotEmpty;
+  bool get _hasContent =>
+      widget.controller.text.trim().isNotEmpty || _attachments.isNotEmpty;
 
   bool get _slashOpen =>
       widget.controller.text.startsWith('/') &&
@@ -169,21 +192,11 @@ class ChatComposerState extends State<ChatComposer> {
     try {
       final paths = await widget.bridge.pickAttachments();
       if (!mounted || paths.isEmpty) return;
-      final text = widget.controller.text;
-      final selection = widget.controller.selection;
-      final start = selection.isValid ? selection.start : text.length;
-      final end = selection.isValid ? selection.end : text.length;
-      final insert = '${paths.map((p) => '@$p').join(' ')} ';
-      // A leading space keeps two consecutive picks from merging into one
-      // token the host would not recognise.
-      final prefix = start > 0 && !text.substring(0, start).endsWith(' ')
-          ? ' '
-          : '';
-      final next = text.replaceRange(start, end, '$prefix$insert');
-      widget.controller.value = TextEditingValue(
-        text: next,
-        selection: TextSelection.collapsed(offset: start + prefix.length + insert.length),
-      );
+      setState(() {
+        for (final path in paths) {
+          if (!_attachments.contains(path)) _attachments.add(path);
+        }
+      });
       widget.focusNode.requestFocus();
     } catch (error) {
       widget.onToast('没能添加附件（$error）。再试一次。', isError: true);
@@ -196,7 +209,7 @@ class ChatComposerState extends State<ChatComposer> {
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     final matches = _slashOpen ? _slashMatches : const <SlashAction>[];
-    final active = widget.running || (_hasText && !widget.busy);
+    final active = widget.running || (_hasContent && !widget.busy);
     final buttonStyle = ButtonStyle(
       backgroundColor: WidgetStatePropertyAll(
         active ? scheme.primary : scheme.surfaceContainerHighest,
@@ -249,50 +262,66 @@ class ChatComposerState extends State<ChatComposer> {
           _GlassComposerSurface(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  IconButton(
-                    onPressed: pickAttachments,
-                    icon: _picking
-                        ? ActivityIndicator(
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          )
-                        : const GlyphIcon(AppGlyphs.attachment, size: 19),
-                    tooltip: '添加附件',
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: widget.controller,
-                      focusNode: widget.focusNode,
-                      minLines: 1,
-                      maxLines: 6,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      decoration: InputDecoration(
-                        hintText: widget.editing
-                            ? '修改这条消息…'
-                            : widget.hintText,
-                        border: const NoInputBorder(),
-                      ),
-                      onChanged: _onChanged,
+                  if (_attachments.isNotEmpty)
+                    AttachmentPreviewStrip(
+                      bridge: widget.bridge,
+                      paths: _attachments,
+                      size: 56,
+                      padding: const EdgeInsets.fromLTRB(4, 2, 4, 6),
+                      onRemove: (path) =>
+                          setState(() => _attachments.remove(path)),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    onPressed: widget.running ? _stopPressed : _sendPressed,
-                    style: buttonStyle,
-                    icon: widget.busy
-                        ? ActivityIndicator(
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          )
-                        : GlyphIcon(
-                            widget.running ? AppGlyphs.stop : AppGlyphs.send,
-                            size: 20,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        onPressed: pickAttachments,
+                        icon: _picking
+                            ? ActivityIndicator(
+                                size: 16,
+                                color: scheme.onSurfaceVariant,
+                              )
+                            : const GlyphIcon(AppGlyphs.attachment, size: 19),
+                        tooltip: '添加附件',
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: widget.controller,
+                          focusNode: widget.focusNode,
+                          minLines: 1,
+                          maxLines: 6,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.newline,
+                          decoration: InputDecoration(
+                            hintText: widget.editing
+                                ? '修改这条消息…'
+                                : widget.hintText,
+                            border: const NoInputBorder(),
                           ),
-                    tooltip: widget.running ? '停止' : '发送',
+                          onChanged: _onChanged,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        onPressed: widget.running ? _stopPressed : _sendPressed,
+                        style: buttonStyle,
+                        icon: widget.busy
+                            ? ActivityIndicator(
+                                size: 16,
+                                color: scheme.onSurfaceVariant,
+                              )
+                            : GlyphIcon(
+                                widget.running
+                                    ? AppGlyphs.stop
+                                    : AppGlyphs.send,
+                                size: 20,
+                              ),
+                        tooltip: widget.running ? '停止' : '发送',
+                      ),
+                    ],
                   ),
                 ],
               ),

@@ -166,8 +166,8 @@ Kotlin，Dart 不复制：
 
 ### 为什么需要 `delta` 而不是全量 `messages`
 
-`ChatController` 目前把整个 `messages: StateFlow<List<ChatMessage>>` 当作唯一真相。Compose 侧
-订阅它是零成本的（进程内重组）。**跨平台通道不一样**：一轮长对话的 JSON 可达数百 KB，
+`ChatController` 目前把整个 `messages: StateFlow<List<ChatMessage>>` 当作唯一真相。进程内的
+旧前端订阅它是零成本的（直接重组）。**跨平台通道不一样**：一轮长对话的 JSON 可达数百 KB，
 按 token 频率全量序列化会直接把主线程拖垮。所以桥接层必须转发增量。
 
 实现要求（Kotlin 侧）：
@@ -231,6 +231,7 @@ Kotlin，Dart 不复制：
 | `chat.send` | `sessionId`, `text` | `{ok, accepted: bool}` | `accepted=false` 表示已有 turn 在跑 |
 | `chat.resendFrom` | `sessionId`, `messageId`, `text` | `{ok, accepted: bool}` | 消息不存在时 `accepted=false` |
 | `chat.regenerate` | `sessionId`, `messageId` | `{ok}` | 只允许重生成最后一条助手消息 |
+| `chat.fork` | `sessionId`, `messageId` | `{ok, sessionId}` | 以该消息为终点复制到新会话；消息不存在时 `ok:false` |
 | `chat.stop` | `sessionId` | `{ok}` | |
 | `chat.clear` | `sessionId` | `{ok}` | 清空上下文 |
 | `chat.consumeTitleNotice` | `sessionId` | `{ok}` | |
@@ -248,8 +249,14 @@ Kotlin，Dart 不复制：
 ```
 
 `status` 保留原文是为了排查；界面一律用 `statusLine`。`chatStatusLine` 目前是
-`app.claudroid.ui.chat` 里的 `internal fun`，同属 `:app` 模块，桥接层可直接调用，**不要**在
+`app.claudroid.chat` 里的 `internal fun`，同属 `:app` 模块，桥接层可直接调用，**不要**在
 Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来还会变）。
+
+`chat.fork` 的语义：新会话的 `messages` 是源会话到 `messageId`（含）为止的副本，
+`claudeSessionId` 为 `null`，标题是源标题加 ` · 分支`。新会话首次 `chat.send` 时，
+`ChatController` 用 `ConversationPrompt.build` 把可见历史重放进 prompt——官方 CLI
+只能 resume 它自己记录的完整会话，无法在任意消息处截断，所以分支必须从本地历史起步。
+`chat.fork` 只写一个会话文件，不启动 turn；Dart 收到新 id 后走正常的 `chat.attach`。
 
 ### 6.4 应用扩展（首页 / 关于 / 附件 / 日志）
 
@@ -272,8 +279,9 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 ```
 
 `attachments.pick` 必须在当前 Activity 上启动选择器；用户取消时返回
-`{"ok":true,"cancelled":true,"relativePathsJson":"[]"}`。Dart 把每个路径拼成
-`@attachments/<name> ` 追加到草稿。
+`{"ok":true,"cancelled":true,"relativePathsJson":"[]"}`。Dart 把每个路径当作待发送附件，
+在提交时用 `composeChatPrompt` 把 `@attachments/<name>` 追加到 prompt；界面只显示预览图，
+不再把路径插进输入框。预览图直接复用 `workspace.preview` 读取图片字节，不新增通道方法。
 
 ### 6.5 服务商与模型
 
@@ -292,8 +300,8 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
   "model":"claude-sonnet-5-5","hint":"..."}]
 ```
 
-`activeId` 为 `null` 表示自定义端点。`modelsJson` 是模型 ID 的字符串数组，保留给
-Compose/旧前端。`modelDetailsJson` 是同一批模型的元数据数组：
+`activeId` 为 `null` 表示自定义端点。`modelsJson` 是模型 ID 的字符串数组，保留给旧前端
+兼容；Flutter 只用 `modelDetailsJson`。`modelDetailsJson` 是同一批模型的元数据数组：
 
 ```json
 [{"id":"auto/dfmodel","displayName":"DeepSeek-Flash",

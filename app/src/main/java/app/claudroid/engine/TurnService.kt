@@ -11,8 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import app.claudroid.MainActivity
 import app.claudroid.R
-import app.claudroid.ui.MainActivity
 
 /**
  * Keeps a running turn alive when the user leaves the app and gives it a visible
@@ -78,20 +78,16 @@ class TurnService : Service() {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     /**
-     * Flutter builds ship a different host: tapping the notification must land on the
-     * Flutter Activity directly, otherwise MainActivity's trampoline stacks a second
-     * Flutter host on top of the existing one. A class lookup keeps this file free of
-     * any Flutter type in the default build.
+     * The Flutter host is the only frontend, so the notification opens it
+     * directly; it reuses the cached engine instead of stacking a second host.
      */
-    private fun hostActivity(): Class<*> =
-        runCatching { Class.forName(FLUTTER_HOST) }.getOrDefault(MainActivity::class.java)
+    private fun hostActivity(): Class<*> = MainActivity::class.java
 
     companion object {
         private const val CHANNEL_ID = "claudroid_turns"
         private const val NOTIFICATION_ID = 1001
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_DETAIL = "detail"
-        private const val FLUTTER_HOST = "app.claudroid.ui.FlutterHostActivity"
 
         fun start(context: Context, title: String, detail: String) {
             val intent = Intent(context, TurnService::class.java)

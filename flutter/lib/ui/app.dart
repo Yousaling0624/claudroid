@@ -329,6 +329,7 @@ class _Shell extends StatelessWidget {
           _openSettings(context, destination),
       onOpenWorkspace: () => _openWorkspace(context),
       onNewChat: onNewSession,
+      onOpenSession: onOpenSession,
       onUpdateSettings: onUpdateSettings,
       onToast: onToast,
     );

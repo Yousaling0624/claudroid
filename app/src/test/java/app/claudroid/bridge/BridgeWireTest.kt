@@ -11,8 +11,8 @@ import app.claudroid.data.ProviderPreset
 import app.claudroid.data.Role
 import app.claudroid.core.WorkspaceFiles
 import app.claudroid.engine.openai.ModelCatalog
-import app.claudroid.ui.chat.ChatEvent
-import app.claudroid.ui.chat.DeltaBlock
+import app.claudroid.chat.ChatEvent
+import app.claudroid.chat.DeltaBlock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
