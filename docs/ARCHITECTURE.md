@@ -117,7 +117,7 @@ argv = [proot, "-0", "-r", jail, "-w", "/work", ...binds, "--link2symlink", "--k
 ├── etc/claudroid-rootfs               镜像 tag + layer digest，供日志/排障
 ├── etc/resolv.conf                   当前网络的 DNS（ConnectivityManager 优先）
 ├── etc/hosts, hostname, passwd, group
-├── etc/apt/sources.list.d/debian.sources   trixie / trixie-updates / trixie-security
+├── etc/apt/sources.list.d/debian.sources   trixie / trixie-updates / trixie-security（默认 aliyun；更新失败时改写为 deb.debian.org 重试）
 ├── etc/apt/apt.conf.d/99claudroid     APT::Sandbox::User=root、重试 3 次、超时 30 s
 ├── root/                             HOME，`~/.claude` 会话记录落在这里
 │   └── .claude/settings.json         CLI 用户设置；启动前由 CliSettings 合入 skipWebFetchPreflight
@@ -131,8 +131,20 @@ wget unzip zip ncurses-term`。标准镜像与 slim 的已安装包相同（多�
 manpage），bash、grep、sed、mawk、tar、gzip 仍然自带；apt 补的是 git、curl、xz、less、
 CA bundle 以及 top / ps / ip / ping 等常用工具和它们的依赖。
 apt 失败会重试 3 次；`APT::Sandbox::User` 必须改成 root，因为 PRoot 把 app uid 呈现成
-uid 0，`_apt` 沙箱用户打不开自己的文件。`ca-certificates` 装好之前 sources 用
-`http://deb.debian.org`（不是 https）。
+uid 0，`_apt` 沙箱用户打不开自己的文件。`debian.sources` 用 deb822，默认只写
+`http://mirrors.aliyun.com/…` 一个源：deb822 的多个 `URIs:` 会被 apt 当成多个独立
+source 同时抓取索引，并不能按请求回退，写两个地址反而会让大陆网络继续请求
+`deb.debian.org`。apt update 带 `--error-on=any`（否则源全挂时 apt 只记 warning 并返回
+0）重试 3 次仍失败后，`toolsScript` 输出 `APT_MIRROR_FALLBACK`、用 `officialAptSources()`
+把 `debian.sources` 覆盖为 `http://deb.debian.org/…`，再重试 3 次；仍失败才报
+`APT_UPDATE_FAIL`。必须是 http：`ca-certificates` 正是由这次 apt 安装的，https 在新
+rootfs 上会直接失败。
+
+这两份配置（DNS/gai 与 apt 源）都由 `Toolchain.networkFiles()` 生成：安装时写进新树，
+之后每次 App 启动 `refreshNetworkConfig()` 都会比对并重写已有 jail，所以旧安装（只写了
+`deb.debian.org`）不需要重装，下次启动/升级就会迁移到 aliyun 镜像版本。root 模式写
+`/data/adb` 时走 `netConfigScript`，`safeEtcPath` 只允许 `etc/` 下的普通路径，并自动
+`mkdir -p` 诸如 `etc/apt/sources.list.d` 的父目录。
 
 WebFetch 抓取前会先请求 `api.anthropic.com/api/web/domain_info` 做域名黑名单检查；受限
 网络里该域名通常不可达（或经代理时证书校验失败），于是一次 WebFetch 都还没请求目标页
@@ -261,8 +273,9 @@ namespace，**chroot 进程退出后它们仍然存在**。此时对容器目录
 ## 6. 升级链路
 
 ```
-registry.npmjs.org/@anthropic-ai/claude-code/latest                   → 版本号
-registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/<ver>        → tarball + integrity
+registry.npmmirror.com/@anthropic-ai/claude-code/latest               → 版本号
+registry.npmmirror.com/@anthropic-ai/claude-code-linux-arm64/<ver>    → tarball + integrity
+（以上任一请求失败都自动改走 registry.npmjs.org；全部失败才报错）
         ↓ 下载（进度回调到 UI，支持断点续传与 3 次重试）
 sha512 与 integrity 比对，不一致立即删除缓存并报错
         ↓ 自研 TarGz 抽取 package/claude（有单测 + 真实 158 MB 包集成测试）

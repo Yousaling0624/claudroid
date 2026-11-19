@@ -54,6 +54,15 @@ data class PlatformTarget(
 data class PackageInfo(val version: String, val tarball: String, val integrity: String?)
 
 /**
+ * One npm registry that publishes the CLI metadata and its platform tarball.
+ *
+ * 国内镜像排第一：registry.npmjs.org 在部分大陆移动网络不可达或极慢，导致首次安装和
+ * 每次 CLI 升级都要翻墙。官方源保留为回退，境外网络仍可工作。镜像不能绕过校验：
+ * tarball 仍必须匹配同一 registry 返回的 dist.integrity（sha512），缺失即拒绝安装。
+ */
+data class NpmSource(val name: String, val baseUrl: String)
+
+/**
  * A Debian rootfs image pinned by the SHA-256 of its (compressed) layer blob.
  *
  * Source: Docker Hub `library/debian:13`, the official standard Debian image. We pull
@@ -113,6 +122,20 @@ object Registry {
         ),
     )
 
+    /**
+     * npm registries in the order they are tried. The mainland mirror goes first because
+     * the official registry is unreachable or very slow on some mobile networks; the
+     * official registry stays as the fallback for devices outside mainland China.
+     * Neither source may skip the sha512 check — see [platformPackage].
+     */
+    val NPM_SOURCES = listOf(
+        NpmSource("npmmirror 国内镜像", "https://registry.npmmirror.com"),
+        NpmSource("npm 官方源", "https://registry.npmjs.org"),
+    )
+
+    /** The CLI metadata package; its platform tarball is resolved separately. */
+    private const val CLI_PACKAGE = "@anthropic-ai/claude-code"
+
     private const val DEBIAN_ARM64_DIGEST =
         "sha256:23b69c48ce5c2a6fb0681d959fa700427ad2a7cf7e6be5d25249170a1853d7ad"
     private const val DEBIAN_X86_64_DIGEST =
@@ -162,24 +185,51 @@ object Registry {
         OCI_SOURCES.first().blobUrl(repository, digest)
 
     suspend fun latestCliVersion(): String = withContext(Dispatchers.IO) {
-        val body = HttpUtil.getText("https://registry.npmjs.org/@anthropic-ai/claude-code/latest")
-        json.parseToJsonElement(body).jsonObject["version"]!!.jsonPrimitive.content
+        firstMetadata(NPM_SOURCES) { source ->
+            val body = HttpUtil.getText(packageMetadataUrl(source, CLI_PACKAGE, version = null))
+            json.parseToJsonElement(body).jsonObject["version"]!!.jsonPrimitive.content
+        }
     }
 
     /** Tarball for the platform-specific binary package. */
-    suspend fun platformPackage(pkg: String, version: String? = null): PackageInfo = withContext(Dispatchers.IO) {
-        val url = if (version == null) {
-            "https://registry.npmjs.org/$pkg/latest"
-        } else {
-            "https://registry.npmjs.org/$pkg/$version"
+    suspend fun platformPackage(pkg: String, version: String? = null): PackageInfo =
+        withContext(Dispatchers.IO) {
+            firstMetadata(NPM_SOURCES) { source ->
+                val body = HttpUtil.getText(packageMetadataUrl(source, pkg, version))
+                val obj = json.parseToJsonElement(body).jsonObject
+                val dist = obj["dist"]!!.jsonObject
+                PackageInfo(
+                    version = obj["version"]!!.jsonPrimitive.content,
+                    tarball = dist["tarball"]!!.jsonPrimitive.content,
+                    integrity = dist["integrity"]?.jsonPrimitive?.content,
+                )
+            }
         }
-        val body = HttpUtil.getText(url)
-        val obj = json.parseToJsonElement(body).jsonObject
-        val dist = obj["dist"]!!.jsonObject
-        PackageInfo(
-            version = obj["version"]!!.jsonPrimitive.content,
-            tarball = dist["tarball"]!!.jsonPrimitive.content,
-            integrity = dist["integrity"]?.jsonPrimitive?.content,
-        )
+
+    /**
+     * `…/<pkg>/latest` or `…/<pkg>/<version>`. Kept pure so the mirror URL shape is
+     * unit-tested instead of only appearing in an HTTP call.
+     */
+    internal fun packageMetadataUrl(source: NpmSource, pkg: String, version: String?): String =
+        if (version == null) "${source.baseUrl}/$pkg/latest" else "${source.baseUrl}/$pkg/$version"
+
+    /**
+     * First successful [fetch] across [sources]; throws the last failure when all fail.
+     *
+     * Deliberately not `runCatching(...).getOrNull()`: a null result would let the caller
+     * install "nothing", while the original exception (timeout, HTTP 404, malformed JSON)
+     * is what the user needs to see. Kept generic and pure for unit tests.
+     */
+    internal fun <T> firstMetadata(sources: List<NpmSource>, fetch: (NpmSource) -> T): T {
+        require(sources.isNotEmpty()) { "npm 源列表为空" }
+        var last: Throwable? = null
+        for (source in sources) {
+            try {
+                return fetch(source)
+            } catch (t: Throwable) {
+                last = t
+            }
+        }
+        throw last ?: IllegalStateException("npm 元数据下载失败")
     }
 }

@@ -84,7 +84,7 @@ class ToolchainDnsTest {
     }
 
     @Test
-    fun `the root rewrite script writes only etc basenames and reports failure`() {
+    fun `the root rewrite script writes only paths inside etc and reports failure`() {
         val jail = "/data/adb/claudroid"
         val files = linkedMapOf(
             "etc/resolv.conf" to "nameserver 198.18.0.2\noptions timeout:2 attempts:3\n",
@@ -95,6 +95,13 @@ class ToolchainDnsTest {
         assertTrue(script.contains("mkdir -p \"\$D/etc\""))
         assertTrue(script.contains("printf '%s' ${TurnScripts.quote(files.getValue("etc/resolv.conf"))} > \"\$D/etc/resolv.conf\""))
         assertTrue(script.contains("> \"\$D/etc/gai.conf\""))
+        // Top-level files keep the exact write line they had before nested paths existed.
+        assertTrue(
+            script.contains(
+                "printf '%s' ${TurnScripts.quote(Toolchain.GAI_CONF)} > \"\$D/etc/gai.conf\" " +
+                    "|| { echo \"NETCONF_FAIL=gai.conf\"; FAILED=1; }",
+            )
+        )
         // A caller must not be able to redirect the write outside the jail's etc dir.
         assertFalse(script.contains("/etc/../"))
         assertTrue(script.contains("echo ${Toolchain.NETCONF_OK}"))
@@ -102,6 +109,45 @@ class ToolchainDnsTest {
         assertTrue(script.contains("exit 1"))
         // Best-effort script: a failed mkdir must not abort before the writes.
         assertTrue(script.lines().first() == "set +e")
+    }
+
+    @Test
+    fun `the root rewrite script creates subdirectories for nested etc paths`() {
+        val jail = "/data/adb/claudroid"
+        val sources = Toolchain.aptSources()
+        val files = linkedMapOf("etc/apt/sources.list.d/debian.sources" to sources)
+        val script = Toolchain.netConfigScript(jail, files)
+
+        assertTrue(script.contains("mkdir -p \"\$D/etc/apt/sources.list.d\" 2>/dev/null"))
+        assertTrue(
+            script.contains(
+                "printf '%s' ${TurnScripts.quote(sources)} > " +
+                    "\"\$D/etc/apt/sources.list.d/debian.sources\" " +
+                    "|| { echo \"NETCONF_FAIL=apt/sources.list.d/debian.sources\"; FAILED=1; }",
+            )
+        )
+        // The single top-level mkdir still comes first, so a plain jail layout works too.
+        assertTrue(script.indexOf("mkdir -p \"\$D/etc\"") < script.indexOf("mkdir -p \"\$D/etc/apt/sources.list.d\""))
+    }
+
+    @Test
+    fun `safe etc paths reject escapes, absolute paths and empty names`() {
+        listOf(
+            "etc/../data/x",
+            "etc//abs",
+            "",
+            "etc/",
+            "etc/a b",
+            "resolv.conf",
+        ).forEach { relative ->
+            val thrown = runCatching { Toolchain.safeEtcPath(relative) }.exceptionOrNull()
+            assertTrue("expected rejection of '$relative'", thrown is IllegalArgumentException)
+        }
+        assertEquals("resolv.conf", Toolchain.safeEtcPath("etc/resolv.conf"))
+        assertEquals(
+            "apt/sources.list.d/debian.sources",
+            Toolchain.safeEtcPath("etc/apt/sources.list.d/debian.sources"),
+        )
     }
 
     private fun nameservers(text: String): List<String> = text.lineSequence()

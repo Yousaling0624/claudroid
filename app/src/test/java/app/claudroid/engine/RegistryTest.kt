@@ -3,7 +3,9 @@ package app.claudroid.engine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
+import java.io.IOException
 
 class RegistryTest {
 
@@ -84,5 +86,54 @@ class RegistryTest {
         assertTrue(token.contains("service=docker.m.daocloud.io"))
         // The exact shape verified against the mirror; ':' and '/' are valid in a query.
         assertTrue(token.contains("scope=repository:library/debian:pull"))
+    }
+
+    @Test
+    fun `npm metadata tries the mainland mirror first and the official registry second`() {
+        assertEquals(2, Registry.NPM_SOURCES.size)
+        val (mirror, official) = Registry.NPM_SOURCES
+        assertEquals("https://registry.npmmirror.com", mirror.baseUrl)
+        assertEquals("https://registry.npmjs.org", official.baseUrl)
+        // Log and error lines must stay distinguishable per source.
+        assertEquals(2, Registry.NPM_SOURCES.map { it.name }.distinct().size)
+    }
+
+    @Test
+    fun `package metadata urls cover latest and pinned versions for scoped packages`() {
+        val source = Registry.NPM_SOURCES[0]
+        val pkg = "@anthropic-ai/claude-code-linux-arm64"
+        assertEquals(
+            "https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-arm64/latest",
+            Registry.packageMetadataUrl(source, pkg, version = null),
+        )
+        assertEquals(
+            "https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-arm64/2.1.318",
+            Registry.packageMetadataUrl(source, pkg, version = "2.1.318"),
+        )
+    }
+
+    @Test
+    fun `first metadata falls through on failure and throws the last exception`() {
+        val calls = mutableListOf<String>()
+        val result = Registry.firstMetadata(Registry.NPM_SOURCES) { source ->
+            calls += source.name
+            if (source == Registry.NPM_SOURCES[0]) throw IOException("mirror unreachable")
+            "2.1.318"
+        }
+        assertEquals(Registry.NPM_SOURCES.map { it.name }, calls)
+        assertEquals("2.1.318", result)
+
+        calls.clear()
+        try {
+            Registry.firstMetadata(Registry.NPM_SOURCES) { source ->
+                calls += source.name
+                throw IOException("unreachable: ${source.name}")
+            }
+            fail("expected both npm sources to fail")
+        } catch (e: IOException) {
+            // The caller sees the last source's failure, not a swallowed null.
+            assertTrue(e.message.orEmpty().contains(Registry.NPM_SOURCES[1].name))
+        }
+        assertEquals(Registry.NPM_SOURCES.map { it.name }, calls)
     }
 }

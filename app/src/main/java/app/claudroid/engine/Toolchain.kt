@@ -169,7 +169,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         val info = runCatching { Registry.platformPackage(target.npmPackage, version) }
             .getOrElse {
                 throw IllegalStateException(
-                    "官方未发布对应的 Linux glibc 安装包（${target.npmPackage} $version）。" +
+                    "镜像与 npm 官方源都未取到对应的 Linux glibc 安装包（${target.npmPackage} $version）。" +
                         "请检查网络后重试；如果持续失败，稍后再升级。",
                     it,
                 )
@@ -180,7 +180,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         val integrity = info.integrity
         if (integrity.isNullOrBlank()) {
             error(
-                "镜像未提供 sha512 摘要（${target.npmPackage} $version 的 dist.integrity 为空），" +
+                "registry 未提供 sha512 摘要（${target.npmPackage} $version 的 dist.integrity 为空），" +
                     "已拒绝安装。请检查网络（可能是代理改写了 registry 响应）后重试。",
             )
         }
@@ -515,36 +515,18 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         listOf(
             "work", "root", "tmp", "dev", "proc", "sys", "system", "data", "sdcard",
             "apex", "vendor", "odm", "product", "opt/claude/$version",
-            "etc/ssl/certs", "etc/apt/apt.conf.d",
+            "etc/ssl/certs", "etc/apt/apt.conf.d", "etc/apt/sources.list.d",
             "var/lib/apt/lists/partial", "var/cache/apt/archives/partial",
         ).forEach { File(root, it).mkdirs() }
 
-        // resolv.conf + gai.conf come from the same helper that refreshes an existing
-        // install ([refreshNetworkConfig]), so the fix cannot land in only one of them.
+        // resolv.conf + gai.conf + apt sources come from the same helper that refreshes
+        // an existing install ([refreshNetworkConfig]), so the fix cannot land in only
+        // one of them.
         networkFiles().forEach { (relative, content) -> File(root, relative).writeText(content) }
         File(root, "etc/hosts").writeText("127.0.0.1 localhost\n::1 localhost\n")
         File(root, "etc/hostname").writeText("claudroid\n")
         File(root, "etc/claudroid-rootfs").writeText(
             "${spec.image} ${spec.digest} sha256-verified ${spec.sizeBytes} bytes\n"
-        )
-
-        // Debian 13 ships deb822 sources pointing at the same mirror; rewrite them so the
-        // suite names are explicit and support can see exactly what we use. Plain http is
-        // intentional: ca-certificates is only installed afterwards.
-        File(root, "etc/apt/sources.list.d/debian.sources").writeText(
-            """
-            Types: deb
-            URIs: http://deb.debian.org/debian
-            Suites: trixie trixie-updates
-            Components: main
-            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
-
-            Types: deb
-            URIs: http://deb.debian.org/debian-security
-            Suites: trixie-security
-            Components: main
-            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
-            """.trimIndent() + "\n"
         )
 
         // PRoot presents the app uid as root; apt's _apt sandbox user then cannot open
@@ -713,6 +695,11 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         } else {
             installCli(existing.jail(), claude, version)
         }
+
+        // apt runs below, on the *existing* jail; rewrite its sources first so an old
+        // install (deb.debian.org only) migrates to the mirror without a reinstall.
+        runCatching { refreshNetworkConfig(existing) }
+            .onFailure { Logx.e("升级前刷新容器配置失败：${it.message}", ctx) }
 
         val tools = runGuest(updated, toolsScript(version), 900_000)
         if (!tools.ok || !tools.combined.contains("TOOLS_OK") || !tools.combined.contains("CLAUDE_OK")) {
@@ -883,29 +870,38 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     private fun dnsConfig(): String = dnsLines(networkServers())
 
     /**
-     * The two files that decide which address family the container resolves to.
+     * The jail files that decide DNS, address-family preference and where apt installs
+     * from, keyed by jail-relative path.
      *
      * Written both at install time ([configureJail]) and on every start of an existing
      * install ([refreshNetworkConfig]), so a fix here reaches users who never reinstall.
+     * The apt entry is also the migration path for old jails: their debian.sources only
+     * lists `deb.debian.org`, and the next launch/upgrade rewrites it to the mirror-first
+     * version without a reinstall.
      */
     private fun networkFiles(): Map<String, String> = linkedMapOf(
         "etc/resolv.conf" to dnsConfig() + "\n",
         "etc/gai.conf" to GAI_CONF,
+        "etc/apt/sources.list.d/debian.sources" to aptSources(),
     )
 
     /**
-     * Rewrites `etc/resolv.conf` and `etc/gai.conf` of an existing install.
+     * Rewrites `etc/resolv.conf`, `etc/gai.conf` and the apt sources of an existing
+     * install.
      *
      * `configureJail` only runs during an install, so without this an install created
      * before the IPv4-first fix would keep its old resolver forever (the WebFetch
-     * domain check would keep returning 403 through the TUN proxy's IPv6 edge).
+     * domain check would keep returning 403 through the TUN proxy's IPv6 edge), and one
+     * created before the mirror switch would keep going to `deb.debian.org` on every
+     * apt run. Refresh is therefore also called before apt in [upgradeInPlace].
      *
      * Idempotent and best-effort by contract: a failure only logs, it must never turn a
      * Ready engine into a Failed one — a stale resolv.conf is still functional, just
-     * with the WebFetch check failing. The content is compared first, so an already
-     * correct jail costs no `su` call.
+     * with the WebFetch check failing, and a stale apt source still resolves (just
+     * slower). The content is compared first, so an already correct jail costs no `su`.
+     *
+     * Returns true when at least one file was rewritten.
      */
-    /** Returns true when at least one of the two files was rewritten. */
     fun refreshNetworkConfig(installation: Installation): Boolean {
         val files = networkFiles()
         if (!installation.rootMode) {
@@ -926,7 +922,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         val result = rootExec.run(netConfigScript(installation.jailPath, files), 30_000)
         if (!result.out.contains(NETCONF_OK)) {
             Logx.e(
-                "重写容器 DNS 配置失败：${installation.jailPath}（exit=${result.code}，" +
+                "重写容器 DNS/apt 配置失败：${installation.jailPath}（exit=${result.code}，" +
                     "${result.combined.takeLast(200)}）",
                 ctx,
             )
@@ -1022,26 +1018,104 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
         }
 
         /**
-         * Root-side rewrite of the network files for an existing jail.
+         * Strips `etc/` and validates the remainder as a path *inside* `etc/`.
+         *
+         * The root rewrite script runs under `su`, so an unvalidated key could escape the
+         * jail (`../…`, an absolute path, or characters that need shell quoting). Only
+         * plain ASCII path segments are accepted; nested directories such as
+         * `apt/sources.list.d/debian.sources` are allowed and created by the script.
+         */
+        internal fun safeEtcPath(relative: String): String {
+            val path = relative.removePrefix("etc/")
+            require(
+                relative.startsWith("etc/") && path.isNotEmpty() &&
+                    !path.startsWith("/") && !path.contains("..") &&
+                    path.all { it.isAsciiPathChar() },
+            ) { "不安全的容器配置路径：$relative" }
+            return path
+        }
+
+        private fun Char.isAsciiPathChar(): Boolean =
+            this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9' ||
+                this == '.' || this == '_' || this == '-' || this == '/'
+
+        /**
+         * Root-side rewrite of the network/apt config files for an existing jail.
          *
          * Needed because `/data/adb/claudroid` belongs to root while the app runs as its
-         * own uid. Only the basename of each key is used, so a caller cannot write outside
-         * `<jail>/etc`; `printf '%s'` keeps the content verbatim (no `%` expansion).
+         * own uid. [safeEtcPath] keeps every write inside `<jail>/etc`, creating nested
+         * parent directories when needed; `printf '%s'` keeps the content verbatim
+         * (no `%` expansion).
          */
         internal fun netConfigScript(jailPath: String, files: Map<String, String>): String = buildString {
             appendLine("set +e")
             appendLine("D=${TurnScripts.quote(jailPath.trim().trimEnd('/'))}")
             appendLine("mkdir -p \"\$D/etc\" 2>/dev/null")
             files.forEach { (relative, content) ->
-                val name = relative.substringAfterLast('/')
+                val path = safeEtcPath(relative)
+                val dir = path.substringBeforeLast('/', missingDelimiterValue = "")
+                if (dir.isNotEmpty()) {
+                    appendLine("mkdir -p \"\$D/etc/$dir\" 2>/dev/null")
+                }
                 appendLine(
-                    "printf '%s' ${TurnScripts.quote(content)} > \"\$D/etc/$name\" " +
-                        "|| { echo \"NETCONF_FAIL=$name\"; FAILED=1; }",
+                    "printf '%s' ${TurnScripts.quote(content)} > \"\$D/etc/$path\" " +
+                        "|| { echo \"NETCONF_FAIL=$path\"; FAILED=1; }",
                 )
             }
             appendLine("if [ \"\${FAILED:-0}\" = 1 ]; then exit 1; fi")
             appendLine("echo $NETCONF_OK")
         }
+
+        /**
+         * Debian 13 deb822 sources, aliyun mirror only.
+         *
+         * deb822 `URIs:` is *not* a per-request fallback list: apt creates one source per
+         * URI and fetches every index from both, so listing deb.debian.org here would
+         * still hit the official host on mainland networks (duplicate index downloads or
+         * a 30 s timeout per request). The official source is therefore only written by
+         * [toolsScript] after the mirror update has failed for real.
+         *
+         * Plain http is intentional — `ca-certificates` is installed by this very apt
+         * transaction, so https would fail on a fresh rootfs. The keyring path is the
+         * one shipped in the standard `debian:13` image.
+         */
+        internal fun aptSources(): String =
+            """
+            Types: deb
+            URIs: http://mirrors.aliyun.com/debian
+            Suites: trixie trixie-updates
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+            Types: deb
+            URIs: http://mirrors.aliyun.com/debian-security
+            Suites: trixie-security
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+            """.trimIndent() + "\n"
+
+        /**
+         * Same deb822 layout pointed at the official Debian host.
+         *
+         * Written over `debian.sources` by [toolsScript] only after all mirror attempts
+         * failed (`APT_MIRROR_FALLBACK`), then update is retried. Kept separate from
+         * [aptSources] so the fallback content is unit-tested instead of hidden in a
+         * generated shell command.
+         */
+        internal fun officialAptSources(): String =
+            """
+            Types: deb
+            URIs: http://deb.debian.org/debian
+            Suites: trixie trixie-updates
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+            Types: deb
+            URIs: http://deb.debian.org/debian-security
+            Suites: trixie-security
+            Components: main
+            Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+            """.trimIndent() + "\n"
 
         private const val MAX_LOG_CHARS = 200_000
 
@@ -1096,9 +1170,20 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             appendLine("  echo \"APT_NEED:\$missing\"")
             appendLine("  ok=0")
             appendLine("  for i in 1 2 3; do")
-            appendLine("    if apt-get -q -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; then ok=1; break; fi")
+            appendLine("    if apt-get -q --error-on=any -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; then ok=1; break; fi")
             appendLine("    echo \"APT_UPDATE_RETRY \$i\"; sleep \$((i * 3))")
             appendLine("  done")
+            // Without --error-on=any apt treats a dead source as a warning and exits 0,
+            // so the mirror-vs-official decision below would never run.
+            appendLine("  if [ \"\$ok\" != 1 ]; then")
+            appendLine("    echo APT_MIRROR_FALLBACK")
+            appendLine("    printf '%s' ${TurnScripts.quote(officialAptSources())} > /etc/apt/sources.list.d/debian.sources")
+            appendLine("    ok=0")
+            appendLine("    for i in 1 2 3; do")
+            appendLine("      if apt-get -q --error-on=any -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; then ok=1; break; fi")
+            appendLine("      echo \"APT_UPDATE_RETRY_OFFICIAL \$i\"; sleep \$((i * 3))")
+            appendLine("    done")
+            appendLine("  fi")
             appendLine("  [ \"\$ok\" = 1 ] || { echo APT_UPDATE_FAIL; exit 21; }")
             appendLine("  ok=0")
             appendLine("  for i in 1 2 3; do")
@@ -1169,8 +1254,8 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                 .find(text)?.groupValues?.getOrNull(1)?.trim()?.take(200)
             val hint = when {
                 text.contains("APT_UPDATE_FAIL") ->
-                    "容器无法连接 Debian 软件源。请检查网络或 DNS（例如关闭代理/换网络）后重试；" +
-                        "也可以在「终端」里手动执行 apt-get update。"
+                    "容器无法连接 Debian 软件源（国内镜像与官方源都不可达）。请检查网络或 DNS" +
+                        "（例如关闭代理/换网络）后重试；也可以在「终端」里手动执行 apt-get update。"
                 text.contains("APT_INSTALL_FAIL") ->
                     "apt 安装基础工具失败，常见原因是磁盘空间不足或软件源不稳定。" +
                         "请清理空间后重试；仍失败可在「终端」里手动执行 " +

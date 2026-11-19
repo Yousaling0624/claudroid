@@ -113,6 +113,11 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
   - 官方 `registry-1.docker.io` 不可达时回退 DaoCloud 镜像；两者都按同一摘要校验，
     镜像不能替换字节。
   - 旧的 Alpine 安装没有 `rootfsVersion`，会被判定为不健康并自动重装。
+- 国内网络默认走镜像：npm 元数据与 CLI 平台包先试 npmmirror（失败回退
+  registry.npmjs.org）；容器 apt 默认只用 aliyun 镜像，`apt-get update` 失败时由
+  provisioning 脚本把 `debian.sources` 改写为 `deb.debian.org` 再重试（deb822 的多个
+  URI 会被 apt 当成多个源同时抓取，不是按请求回退）。镜像不能绕过校验：npm 仍校验
+  `dist.integrity`（sha512），rootfs 仍校验 OCI 摘要；缺失 integrity 时拒绝安装。
 - Android 10+ 对 `targetSdk >= 29` 禁止 exec 应用数据目录里的文件（W^X）。本项目
   **故意保持 `targetSdk 28`**，和 Termux / dsh-Go 同一策略。不要随手升 targetSdk；
   升之前必须先证明 PRoot、容器内二进制仍能执行。

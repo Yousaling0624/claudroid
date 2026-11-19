@@ -10,7 +10,7 @@ class ToolchainScriptTest {
 
     @Test
     fun `provisioning installs every tool the agent needs in one apt transaction`() {
-        assertTrue(script.contains("apt-get -q -o Acquire::Retries=3"))
+        assertTrue(script.contains("apt-get -q --error-on=any -o Acquire::Retries=3"))
         val installLine = script.lines().first { it.contains("--no-install-recommends") }
         listOf(
             "bash", "git", "grep", "coreutils", "sed", "mawk", "tar", "gzip",
@@ -28,6 +28,30 @@ class ToolchainScriptTest {
         ).forEach { tool ->
             assertTrue("missing tool $tool", script.contains("for t in ") && script.contains(" $tool"))
         }
+    }
+
+    @Test
+    fun `apt update falls back to the official sources when the mirror is unreachable`() {
+        // apt-get update returns 0 even when every source failed unless asked otherwise,
+        // so the fallback decision below depends on this flag being present.
+        assertEquals(2, Regex("--error-on=any").findAll(script).count())
+        assertTrue(script.contains("echo APT_MIRROR_FALLBACK"))
+        assertTrue(
+            script.contains(
+                "printf '%s' ${TurnScripts.quote(Toolchain.officialAptSources())} > " +
+                    "/etc/apt/sources.list.d/debian.sources",
+            )
+        )
+        // The mirror retries run first, then the rewrite, then the official retries; a
+        // failure of both sets still maps to the stable token and exit code.
+        val mirrorRetryAt = script.indexOf("APT_UPDATE_RETRY \$i")
+        val fallbackAt = script.indexOf("echo APT_MIRROR_FALLBACK")
+        val officialRetryAt = script.indexOf("APT_UPDATE_RETRY_OFFICIAL")
+        val updateFailAt = script.indexOf("echo APT_UPDATE_FAIL")
+        assertTrue(mirrorRetryAt in 0 until fallbackAt)
+        assertTrue(fallbackAt < officialRetryAt)
+        assertTrue(officialRetryAt < updateFailAt)
+        assertTrue(script.contains("exit 21"))
     }
 
     @Test
