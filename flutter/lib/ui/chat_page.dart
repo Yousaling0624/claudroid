@@ -22,6 +22,7 @@ import 'permission_menu.dart';
 import 'scaffold_bar.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_labels.dart';
+import 'sparkle_motion.dart';
 import 'tool_presentation.dart';
 import 'typography.dart';
 import 'web_sources.dart';
@@ -1414,9 +1415,8 @@ class _ThinkingPill extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                GlyphIcon(
-                  AppGlyphs.sparkle,
-                  size: 14,
+                ThinkingSparkle(
+                  active: active,
                   color: active ? scheme.primary : scheme.onSurfaceVariant,
                 ),
                 const SizedBox(width: 6),

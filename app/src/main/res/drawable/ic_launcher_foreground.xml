@@ -1,57 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground: a four-point cross sparkle, the same mark as
+  AppGlyphs.sparkle (flutter/lib/ui/glyphs.dart) but filled solid instead of
+  stroked.
+
+  Why this construction:
+  - Tips stay on the axes (up / right / down / left) so it reads as a cross
+    sparkle, not a diamond or the old eight-petal starburst.
+  - The glyph's straight inner edges are replaced by cubic curves: the waist
+    is a smooth tangent join (r = 9), while short 4.2-unit handles keep the
+    tips sharp. The waist is slightly fatter than the 24-unit glyph (r/R 0.35
+    vs 0.30) so the solid fill still has body at 48dp.
+  - A small companion star (R = 5.6) in the upper-right notch adds the
+    "sparkle" read and a second layer of depth without a second color.
+    Its farthest tip sits at r = 27.3 from center, inside the 33dp safe
+    circle; the main star tops out at R = 26.
+  Canvas is the standard 108x108 adaptive-icon viewport.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- warm paper tile -->
+    <!-- main star -->
     <path
-        android:fillColor="#00000000"
-        android:pathData="M0,0h108v108h-108z" />
-    <!-- Claude-style starburst: eight tapered petals, no outer ring.
-         Each rotated group needs its own pivot: VectorDrawable groups do not
-         inherit the parent's pivot, and the default (0,0) would swing every
-         petal but the first off the canvas. -->
-    <group android:pivotX="54" android:pivotY="54">
-        <group>
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="45" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="90" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="135" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="180" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="225" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="270" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-        <group android:rotation="315" android:pivotX="54" android:pivotY="54">
-            <path
-                android:fillColor="#FFD97757"
-                android:pathData="M51.4,52C52,43 53,34.5 54,26C55,34.5 56,43 56.6,52Z" />
-        </group>
-    </group>
+        android:fillColor="#FFD97757"
+        android:pathData="M54.00,28.00 C55.44,31.95 56.83,44.10 60.36,47.64 C63.90,51.17 76.05,52.56 80.00,54.00 C76.05,55.44 63.90,56.83 60.36,60.36 C56.83,63.90 55.44,76.05 54.00,80.00 C52.56,76.05 51.17,63.90 47.64,60.36 C44.10,56.83 31.95,55.44 28.00,54.00 C31.95,52.56 44.10,51.17 47.64,47.64 C51.17,44.10 52.56,31.95 54.00,28.00 Z" />
+    <!-- companion star, centered at (70.5, 38) -->
+    <path
+        android:fillColor="#FFD97757"
+        android:pathData="M70.50,32.40 C70.92,33.35 71.48,35.37 72.30,36.20 C73.13,37.02 75.15,37.58 76.10,38.00 C75.15,38.42 73.13,38.98 72.30,39.80 C71.48,40.63 70.92,42.65 70.50,43.60 C70.08,42.65 69.52,40.63 68.70,39.80 C67.87,38.98 65.85,38.42 64.90,38.00 C65.85,37.58 67.87,37.02 68.70,36.20 C69.52,35.37 70.08,33.35 70.50,32.40 Z" />
 </vector>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 13+ themed-icon layer. The system tints this silhouette, so it is a
+  single flat white fill with no background. It reuses the exact foreground
+  composition (main cross sparkle + companion) so the mark stays recognizable
+  when the launcher recolors it; older releases ignore the layer entirely.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54.00,28.00 C55.44,31.95 56.83,44.10 60.36,47.64 C63.90,51.17 76.05,52.56 80.00,54.00 C76.05,55.44 63.90,56.83 60.36,60.36 C56.83,63.90 55.44,76.05 54.00,80.00 C52.56,76.05 51.17,63.90 47.64,60.36 C44.10,56.83 31.95,55.44 28.00,54.00 C31.95,52.56 44.10,51.17 47.64,47.64 C51.17,44.10 52.56,31.95 54.00,28.00 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M70.50,32.40 C70.92,33.35 71.48,35.37 72.30,36.20 C73.13,37.02 75.15,37.58 76.10,38.00 C75.15,38.42 73.13,38.98 72.30,39.80 C71.48,40.63 70.92,42.65 70.50,43.60 C70.08,42.65 69.52,40.63 68.70,39.80 C67.87,38.98 65.85,38.42 64.90,38.00 C65.85,37.58 67.87,37.02 68.70,36.20 C69.52,35.37 70.08,33.35 70.50,32.40 Z" />
+</vector>
