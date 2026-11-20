@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
+import '../models/backup.dart';
 import '../models/model_info.dart';
 import '../models/models.dart';
 
@@ -332,6 +333,64 @@ class Bridge {
       _call('engine.uninstall', {'deleteWorkspace': deleteWorkspace});
 
   Future<void> engineCancel() => _call('engine.cancel');
+
+  // -- backup --------------------------------------------------------------
+
+  Future<BackupConfig> backupConfig() async => BackupConfig.fromJsonString(
+        (await _call('backup.config'))['configJson'] as String?,
+      );
+
+  Future<BackupConfig> saveBackupConfig(BackupConfig config) async =>
+      BackupConfig.fromJsonString(
+        (await _call('backup.saveConfig', {
+          'configJson': config.toJsonString(),
+        }))['configJson'] as String?,
+      );
+
+  Future<BackupStatus> backupStatus() async => BackupStatus.fromJsonString(
+        (await _call('backup.status'))['statusJson'] as String?,
+      );
+
+  /// Probes the target (HEAD / GET depending on the kind). The host returns a
+  /// ready-to-show Chinese message; [config] tests the current edits even
+  /// before the next save round-trips.
+  Future<String> testBackupTarget([BackupConfig? config]) async {
+    final map = await _call('backup.test', {
+      if (config != null) 'configJson': config.toJsonString(),
+    });
+    return map['message'] as String? ?? '';
+  }
+
+  Future<BackupResult> runBackup() async => BackupResult.fromJsonString(
+        (await _call('backup.run'))['resultJson'] as String?,
+      );
+
+  Future<RestoreResult> restoreBackup({bool restoreSettings = false}) async =>
+      RestoreResult.fromJsonString(
+        (await _call('backup.restore', {
+          'restoreSettings': restoreSettings,
+        }))['resultJson'] as String?,
+      );
+
+  /// The host returns `cancelled: true` when the user backs out of the system
+  /// document picker; that is not an error.
+  Future<({bool cancelled, int bytes})> exportBackup() async {
+    final map = await _call('backup.export');
+    return (
+      cancelled: map['cancelled'] as bool? ?? false,
+      bytes: (map['bytes'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Future<({bool cancelled, RestoreResult result})> importBackup() async {
+    final map = await _call('backup.import');
+    return (
+      cancelled: map['cancelled'] as bool? ?? false,
+      result: RestoreResult.fromJsonString(map['resultJson'] as String?),
+    );
+  }
+
+  Future<void> cancelBackup() => _call('backup.cancel');
 
   // -- chat ----------------------------------------------------------------
 

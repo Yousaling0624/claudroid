@@ -157,6 +157,26 @@ class WorkspaceStore(
         }
     }
 
+    /**
+     * Adds custom workspaces restored from a backup without touching what already
+     * exists (docs/BACKUP.md §3): existing ids keep the local name, [activeId] never
+     * changes, and nothing is removed. Returns how many entries were added.
+     */
+    fun mergeRestored(spaces: List<WorkspaceInfo>): Int = synchronized(lock) {
+        val known = _state.value.spaces.mapTo(mutableSetOf()) { it.id }
+        val additions = spaces
+            .asSequence()
+            .filter { isValidId(it.id) && it.id != DEFAULT_ID && it.id !in known }
+            .distinctBy { it.id }
+            .map { it.copy(name = normalizeName(it.name)) }
+            .toList()
+        if (additions.isEmpty()) return 0
+        additions.forEach { File(rootDir, it.id).mkdirs() }
+        _state.value = _state.value.copy(spaces = _state.value.spaces + additions)
+        persistLocked()
+        additions.size
+    }
+
     /** Used by the engine's "delete everything" uninstall. */
     fun deleteAll() {
         synchronized(lock) {

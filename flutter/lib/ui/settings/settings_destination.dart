@@ -10,5 +10,6 @@ enum SettingsDestination {
   features,
   appearance,
   advanced,
+  backup,
   about,
 }

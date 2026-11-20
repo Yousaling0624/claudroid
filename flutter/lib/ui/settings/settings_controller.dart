@@ -6,6 +6,7 @@ import '../../bridge/api.dart';
 import '../../bridge/events.dart';
 import '../../models/model_info.dart';
 import '../../models/models.dart';
+import 'backup_controller.dart';
 import 'settings_labels.dart';
 import 'settings_summary.dart';
 
@@ -24,12 +25,20 @@ class SettingsController extends ChangeNotifier {
     labels = state.labels;
     engine = state.engine;
     stateListenable.addListener(_sync);
+    backup.addListener(_onBackupChanged);
   }
 
   final Bridge bridge;
   final ValueListenable<AppState> stateListenable;
   final Future<void> Function(Map<String, dynamic> patch) onUpdateSettings;
   final void Function(String text, {bool isError}) onToast;
+
+  /// Owned here so the backup page and the root row share one event-channel
+  /// subscription; the page receives this controller like every other subpage.
+  late final BackupController backup = BackupController(
+    bridge: bridge,
+    onToast: onToast,
+  );
 
   late AppSettings settings;
   late ModelLabels labels;
@@ -77,13 +86,20 @@ class SettingsController extends ChangeNotifier {
   String get engineSummary => settingsEngineSummary(engine);
   String get featuresSummary => settingsFeaturesSummary(settings);
   String get advancedSummary => settingsAdvancedSummary(settings);
+  String get backupSummary =>
+      settingsBackupSummary(backup.status, backup.config);
   String get aboutSummary => settingsAboutSummary(appVersion, release);
 
   /// Loads the pieces the root page shows as subtitles. Failures are silent:
   /// custom endpoints simply keep the provider picker hidden, and a missing
   /// version just leaves the about subtitle generic.
   Future<void> start() async {
-    await Future.wait([loadProviders(), loadAppInfo(), refreshLogs()]);
+    await Future.wait([
+      loadProviders(),
+      loadAppInfo(),
+      refreshLogs(),
+      backup.start(),
+    ]);
   }
 
   Future<void> loadProviders() async {
@@ -391,10 +407,16 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _onBackupChanged() {
+    if (!_disposed) notifyListeners();
+  }
+
   @override
   void dispose() {
     _disposed = true;
     stateListenable.removeListener(_sync);
+    backup.removeListener(_onBackupChanged);
+    backup.dispose();
     super.dispose();
   }
 }

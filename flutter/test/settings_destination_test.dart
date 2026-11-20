@@ -33,6 +33,7 @@ void main() {
 
     expect(find.text('模型与引擎'), findsOneWidget);
     expect(find.text('应用'), findsOneWidget);
+    expect(find.text('备份与恢复'), findsOneWidget);
   });
 
   testWidgets('service-models destination opens that page directly', (
@@ -56,6 +57,18 @@ void main() {
     await tester.pump();
 
     expect(find.text('Claude Code 引擎'), findsWidgets);
+    expect(find.text('模型与引擎'), findsNothing);
+  });
+
+  testWidgets('backup destination opens the backup page directly', (
+    tester,
+  ) async {
+    final state = ValueNotifier(const AppState());
+    await tester.pumpWidget(_harness(state, SettingsDestination.backup));
+    await tester.pump();
+
+    expect(find.text('备份与恢复'), findsWidgets);
+    expect(find.text('状态'), findsOneWidget);
     expect(find.text('模型与引擎'), findsNothing);
   });
 }

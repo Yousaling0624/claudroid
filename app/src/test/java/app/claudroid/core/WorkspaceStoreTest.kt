@@ -97,6 +97,36 @@ class WorkspaceStoreTest {
     }
 
     @Test
+    fun `restored workspaces only fill the missing ids`() {
+        val store = store()
+        val local = store.create("本机")
+        store.select(local.id)
+
+        val added = store.mergeRestored(
+            listOf(
+                WorkspaceInfo(local.id, "备份里的名字", 1),
+                WorkspaceInfo("ws-restored", "恢复的项目", 42),
+                WorkspaceInfo("ws-restored", "重复", 43),
+                WorkspaceInfo("../escape", "坏路径", 44),
+                WorkspaceInfo(WorkspaceStore.DEFAULT_ID, "默认", 45),
+            ),
+        )
+
+        assertEquals(1, added)
+        assertEquals(local.id, store.activeId())
+        assertEquals("本机", store.active().name)
+        assertEquals(listOf(WorkspaceStore.DEFAULT_ID, local.id, "ws-restored"), store.all().map { it.id })
+        assertEquals("恢复的项目", store.all().last().name)
+        assertTrue(File(rootDir, "ws-restored").isDirectory)
+
+        // A reload must see the same merged index; nothing was renamed or removed.
+        val reloaded = store()
+        assertEquals(local.id, reloaded.activeId())
+        assertEquals("本机", reloaded.all().first { it.id == local.id }.name)
+        assertEquals(3, reloaded.all().size)
+    }
+
+    @Test
     fun `display names are trimmed, shortened and never blank`() {
         assertEquals(WorkspaceStore.DEFAULT_NAME, WorkspaceStore.normalizeName("   "))
         assertEquals("项目", WorkspaceStore.normalizeName("  项目  "))

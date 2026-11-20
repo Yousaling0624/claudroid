@@ -11,6 +11,7 @@ import 'palette.dart';
 import 'settings/about_page.dart';
 import 'settings/advanced_page.dart';
 import 'settings/appearance_page.dart';
+import 'settings/backup_page.dart';
 import 'settings/engine_page.dart';
 import 'settings/features_page.dart';
 import 'settings/service_models_page.dart';
@@ -76,6 +77,7 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsDestination.features => FeaturesPage(controller: _controller),
       SettingsDestination.appearance => AppearancePage(controller: _controller),
       SettingsDestination.advanced => AdvancedPage(controller: _controller),
+      SettingsDestination.backup => BackupPage(controller: _controller),
       SettingsDestination.about => AboutPage(controller: _controller),
     };
   }
@@ -136,6 +138,14 @@ class _SettingsPageState extends State<SettingsPage> {
               value: _controller.advancedSummary,
               tone: SettingsTone.honey,
               pageBuilder: (_) => AdvancedPage(controller: _controller),
+            ),
+            SettingsEntryRow(
+              key: const ValueKey('settings-backup'),
+              glyph: AppGlyphs.backup,
+              title: '备份与恢复',
+              value: _controller.backupSummary,
+              tone: SettingsTone.honey,
+              pageBuilder: (_) => BackupPage(controller: _controller),
             ),
           ],
         ),

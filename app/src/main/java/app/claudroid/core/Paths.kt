@@ -82,6 +82,15 @@ object Paths {
 
     fun sessions(ctx: Context): File = File(ctx.filesDir, "sessions").apply { mkdirs() }
 
+    /** Target config and the persisted last-result status (docs/BACKUP.md §4/§6). */
+    fun backup(ctx: Context): File = File(ctx.filesDir, "backup").apply { mkdirs() }
+
+    /**
+     * Scratch archives. Kept in cacheDir: they are large, reproducible from the data
+     * above, and the system may reclaim them if a transfer is interrupted.
+     */
+    fun backupCache(ctx: Context): File = File(ctx.cacheDir, "backup").apply { mkdirs() }
+
     fun engineLog(ctx: Context): File = File(engine(ctx), "engine.log")
 
     /** Preferred jail location when we have root. */

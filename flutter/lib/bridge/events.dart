@@ -9,6 +9,7 @@ library;
 
 import 'package:flutter/services.dart';
 
+import '../models/backup.dart';
 import '../models/models.dart';
 import 'api.dart';
 
@@ -528,6 +529,46 @@ class TerminalEvents {
       .map(TerminalEvent.fromMap)
       .where((event) => event != null)
       .cast<TerminalEvent>();
+}
+
+// ---------------------------------------------------------------------------
+// Backup events
+// ---------------------------------------------------------------------------
+
+/// One message from `app.claudroid/backup`. Today the host only pushes
+/// `{"type":"status","statusJson":"..."}`, including once on listen.
+sealed class BackupEvent {
+  const BackupEvent();
+
+  static BackupEvent? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    if (raw['type'] != 'status') return null;
+    return BackupStatusEvent(
+      BackupStatus.fromJsonString(raw['statusJson'] as String?),
+    );
+  }
+}
+
+class BackupStatusEvent extends BackupEvent {
+  const BackupStatusEvent(this.status);
+
+  final BackupStatus status;
+}
+
+class BackupEvents {
+  BackupEvents();
+
+  final EventChannel _channel = const EventChannel('app.claudroid/backup');
+
+  Stream<BackupEvent> get events => _channel
+      .receiveBroadcastStream()
+      .map(BackupEvent.fromMap)
+      .where((event) => event != null)
+      .cast<BackupEvent>();
+
+  Stream<BackupStatus> get statuses => events
+      .where((event) => event is BackupStatusEvent)
+      .map((event) => (event as BackupStatusEvent).status);
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,11 @@ package app.claudroid
 
 import android.app.Application
 import android.content.Context
+import app.claudroid.backup.BackupArchive
+import app.claudroid.backup.BackupManager
+import app.claudroid.backup.BackupStore
 import app.claudroid.bridge.BridgePlugin
+import app.claudroid.core.Paths
 import app.claudroid.core.WorkspaceStore
 import app.claudroid.data.SettingsRepository
 import app.claudroid.data.SessionStore
@@ -39,6 +43,23 @@ class AppContainer(app: Application) {
     val sessions = SessionStore(app)
     val workspaces = WorkspaceStore(app)
     val engine = EngineManager(app, settings, workspaces)
+
+    /** Packing/merging is plain file I/O; the manager owns the single-task slot. */
+    val backup = BackupManager(
+        archive = BackupArchive(
+            sessionsDir = Paths.sessions(app),
+            defaultWorkspaceDir = Paths.workspace(app),
+            workspacesRootDir = Paths.workspacesRoot(app),
+        ),
+        store = BackupStore(Paths.backup(app)),
+        workspaces = workspaces,
+        settings = { settings.current() },
+        applySettings = { restored -> settings.edit { restored } },
+        appVersion = BuildConfig.VERSION_NAME,
+        versionCode = BuildConfig.VERSION_CODE,
+        cacheDir = Paths.backupCache(app),
+        scope = scope,
+    )
 
     private val chats = mutableMapOf<String, ChatController>()
 

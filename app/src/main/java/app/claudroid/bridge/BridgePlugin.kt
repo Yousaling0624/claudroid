@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import app.claudroid.AppContainer
 import app.claudroid.BuildConfig
 import app.claudroid.ClaudroidApp
+import app.claudroid.backup.BackupWire
 import app.claudroid.core.Attachments
 import app.claudroid.core.FileKind
 import app.claudroid.core.Logx
@@ -50,6 +51,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Thin adapter exposing [AppContainer] to the Flutter frontend as one MethodChannel
@@ -74,6 +78,8 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private var methodChannel: MethodChannel? = null
     private var globalChannel: EventChannel? = null
     private var globalJob: Job? = null
+    private var backupChannel: EventChannel? = null
+    private var backupJob: Job? = null
 
     private val chatChannels = mutableMapOf<String, EventChannel>()
     private val chatJobs = mutableMapOf<String, Job>()
@@ -83,6 +89,9 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var pendingPick: CompletableDeferred<Uri?>? = null
+
+    /** One SAF picker at a time; export and import share this slot. */
+    private var pendingDocument: CompletableDeferred<Uri?>? = null
 
     /**
      * One terminal pane at a time. `terminalSession` is the persistent TTY shell;
@@ -98,13 +107,21 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     }
 
     private val pickResultListener = PluginRegistry.ActivityResultListener { code, result, data ->
-        if (code != ATTACHMENT_REQUEST) {
-            false
-        } else {
-            val pending = pendingPick
-            pendingPick = null
-            pending?.complete(if (result == Activity.RESULT_OK) data?.data else null)
-            true
+        val picked = if (result == Activity.RESULT_OK) data?.data else null
+        when (code) {
+            ATTACHMENT_REQUEST -> {
+                val pending = pendingPick
+                pendingPick = null
+                pending?.complete(picked)
+                true
+            }
+            BACKUP_EXPORT_REQUEST, BACKUP_IMPORT_REQUEST -> {
+                val pending = pendingDocument
+                pendingDocument = null
+                pending?.complete(picked)
+                true
+            }
+            else -> false
         }
     }
 
@@ -121,6 +138,9 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         }
         terminalChannel = EventChannel(messenger, TERMINAL_EVENTS, StandardMethodCodec.INSTANCE).also {
             it.setStreamHandler(TerminalStreamHandler())
+        }
+        backupChannel = EventChannel(messenger, BACKUP_EVENTS, StandardMethodCodec.INSTANCE).also {
+            it.setStreamHandler(BackupStreamHandler())
         }
         binding.platformViewRegistry.registerViewFactory(
             HtmlPreviewView.VIEW_TYPE,
@@ -143,6 +163,10 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         terminalSink = null
         terminalChannel?.setStreamHandler(null)
         terminalChannel = null
+        backupJob?.cancel()
+        backupJob = null
+        backupChannel?.setStreamHandler(null)
+        backupChannel = null
         // A live shell must not outlive the engine. `stop` is idempotent, so racing a
         // page-level `terminal.stop` is harmless.
         if (session != null) scope.launch { session.stop() }
@@ -176,6 +200,8 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         // A picker that never returned must not leave the Dart caller awaiting forever.
         pendingPick?.complete(null)
         pendingPick = null
+        pendingDocument?.complete(null)
+        pendingDocument = null
     }
 
     // ----------------------------------------------------------------- methods
@@ -261,6 +287,15 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             }
             "engine.uninstall" -> { container.engine.uninstall(call.bool("deleteWorkspace")); ok() }
             "engine.cancel" -> { container.engine.cancel(); ok() }
+            "backup.config" -> backupConfig()
+            "backup.saveConfig" -> backupSaveConfig(call)
+            "backup.status" -> backupStatus()
+            "backup.test" -> backupTest(call)
+            "backup.run" -> backupRun()
+            "backup.restore" -> backupRestore(call)
+            "backup.export" -> backupExport()
+            "backup.import" -> backupImport()
+            "backup.cancel" -> { container.backup.cancel(); ok() }
             "chat.attach" -> chatAttach(call)
             "chat.send" -> chatSend(call)
             "chat.resendFrom" -> chatResendFrom(call)
@@ -742,6 +777,152 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         )
     }
 
+    // ---------------------------------------------------------------- backup
+    //
+    // The bridge only moves bytes and JSON here; deciding what to pack, what to merge
+    // and how to reach a target lives in backup/BackupManager. Config JSON carries
+    // passwords and tokens, so it is never logged or echoed in errors.
+
+    private fun backupConfig(): Map<String, Any?> = mapOf(
+        "ok" to true,
+        "configJson" to BackupWire.configJson(container.backup.savedConfig()),
+    )
+
+    private suspend fun backupSaveConfig(call: MethodCall): Map<String, Any?> {
+        val raw = call.require("configJson")
+        val config = BackupWire.decodeConfig(raw)
+        container.backup.saveConfig(config)
+        return mapOf("ok" to true, "configJson" to BackupWire.configJson(config))
+    }
+
+    private fun backupStatus(): Map<String, Any?> = mapOf(
+        "ok" to true,
+        "statusJson" to BackupWire.statusJson(container.backup.status.value),
+    )
+
+    private suspend fun backupTest(call: MethodCall): Map<String, Any?> {
+        val raw = call.str("configJson")
+        val config = if (raw.isNullOrBlank()) {
+            container.backup.savedConfig()
+        } else {
+            BackupWire.decodeConfig(raw)
+        }
+        val message = container.backup.test(config)
+        return mapOf("ok" to true, "message" to message)
+    }
+
+    /**
+     * A running turn or terminal reads/writes the workspace and the session files the
+     * archive is made of; a merge underneath it could see half-written JSON.
+     */
+    private fun requireBackupIdle() {
+        if (container.engine.busy || terminalJob?.isActive == true) {
+            throw IllegalStateException("任务或终端正在运行，结束后再备份或恢复")
+        }
+        if (container.backup.busy) throw IllegalStateException("已有备份任务在进行")
+    }
+
+    private suspend fun backupRun(): Map<String, Any?> {
+        requireBackupIdle()
+        val result = container.backup.run()
+        return mapOf("ok" to true, "resultJson" to BackupWire.runResultJson(result))
+    }
+
+    private suspend fun backupRestore(call: MethodCall): Map<String, Any?> {
+        requireBackupIdle()
+        val result = container.backup.restore(call.bool("restoreSettings", false))
+        // The merge wrote files behind SessionStore/WorkspaceStore; refresh both so
+        // the drawer and workspace picker show the restored entries immediately.
+        container.sessions.load()
+        container.workspaces.load()
+        return mapOf("ok" to true, "resultJson" to BackupWire.restoreResultJson(result))
+    }
+
+    private suspend fun backupExport(): Map<String, Any?> {
+        requireBackupIdle()
+        val name = "claudroid-backup-${SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())}.zip"
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+            putExtra(Intent.EXTRA_TITLE, name)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+        val uri = requestDocument(intent, BACKUP_EXPORT_REQUEST)
+            ?: return mapOf("ok" to true, "cancelled" to true, "bytes" to 0)
+        val outcome = container.backup.export { file -> copyToUri(uri, file) }
+        return mapOf("ok" to true, "cancelled" to false, "bytes" to outcome.bytes)
+    }
+
+    private suspend fun backupImport(): Map<String, Any?> {
+        requireBackupIdle()
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // Some cloud providers label ZIPs as application/octet-stream.
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val uri = requestDocument(intent, BACKUP_IMPORT_REQUEST)
+            ?: return mapOf("ok" to true, "cancelled" to true)
+        val result = container.backup.import(
+            read = { dest -> copyFromUri(uri, dest) },
+            restoreSettings = false,
+        )
+        container.sessions.load()
+        container.workspaces.load()
+        return mapOf(
+            "ok" to true,
+            "cancelled" to false,
+            "resultJson" to BackupWire.restoreResultJson(result),
+        )
+    }
+
+    private suspend fun requestDocument(intent: Intent, requestCode: Int): Uri? {
+        val host = activity ?: throw IllegalStateException("界面不在前台，无法选择文件")
+        if (pendingDocument != null) throw IllegalStateException("已有文件选择正在进行")
+        val deferred = CompletableDeferred<Uri?>()
+        pendingDocument = deferred
+        host.startActivityForResult(intent, requestCode)
+        return try {
+            deferred.await()
+        } finally {
+            if (pendingDocument === deferred) pendingDocument = null
+        }
+    }
+
+    private suspend fun copyToUri(uri: Uri, file: File) {
+        withContext(Dispatchers.IO) {
+            val resolver = container.appContext.contentResolver
+            val output = resolver.openOutputStream(uri, "wt")
+                ?: throw IllegalStateException("无法写入所选位置")
+            output.use { target ->
+                file.inputStream().use { source -> source.copyTo(target) }
+            }
+        }
+    }
+
+    private suspend fun copyFromUri(uri: Uri, dest: File) {
+        withContext(Dispatchers.IO) {
+            val resolver = container.appContext.contentResolver
+            val input = resolver.openInputStream(uri)
+                ?: throw IllegalStateException("无法读取所选文件")
+            input.use { source ->
+                dest.outputStream().buffered(256 * 1024).use { target ->
+                    val buffer = ByteArray(256 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = source.read(buffer)
+                        if (n <= 0) break
+                        total += n
+                        if (total > MAX_IMPORT_BYTES) {
+                            throw IllegalStateException("备份文件超过 4 GiB，无法导入")
+                        }
+                        target.write(buffer, 0, n)
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun sessionsNew(call: MethodCall): Map<String, Any?> {
         // Deliberately not persisted here: an empty session is litter, and the first
         // turn writes it (ChatController.persist). Dart navigates into it directly.
@@ -935,6 +1116,35 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         }
     }
 
+    private inner class BackupStreamHandler : EventChannel.StreamHandler {
+        override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
+            backupJob?.cancel()
+            backupJob = scope.launch {
+                // Snapshot first, then follow: a status change between the two still
+                // arrives through the StateFlow replay, so nothing is lost.
+                sink.success(
+                    mapOf(
+                        "type" to "status",
+                        "statusJson" to BackupWire.statusJson(container.backup.status.value),
+                    ),
+                )
+                container.backup.status.collect { status ->
+                    sink.success(
+                        mapOf(
+                            "type" to "status",
+                            "statusJson" to BackupWire.statusJson(status),
+                        ),
+                    )
+                }
+            }
+        }
+
+        override fun onCancel(arguments: Any?) {
+            backupJob?.cancel()
+            backupJob = null
+        }
+    }
+
     private inner class ChatStreamHandler(private val sessionId: String) : EventChannel.StreamHandler {
 
         /**
@@ -1032,10 +1242,16 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         const val METHOD_CHANNEL = "app.claudroid/bridge"
         const val GLOBAL_EVENTS = "app.claudroid/events"
         const val TERMINAL_EVENTS = "app.claudroid/terminal"
+        const val BACKUP_EVENTS = "app.claudroid/backup"
         const val ENGINE_CACHE_KEY = "claudroid"
 
         private const val ATTACHMENT_REQUEST = 0x0A77
+        private const val BACKUP_EXPORT_REQUEST = 0x0A78
+        private const val BACKUP_IMPORT_REQUEST = 0x0A79
         private const val MAX_IMAGE_BYTES = 6L * 1024 * 1024
+
+        /** Same cap as the archive extractor (docs/BACKUP.md §2/§5.4). */
+        private const val MAX_IMPORT_BYTES = 4L * 1024 * 1024 * 1024
 
         /** Guards against attaching two plugins to the same engine (duplicate channels). */
         @Volatile private var attached = false

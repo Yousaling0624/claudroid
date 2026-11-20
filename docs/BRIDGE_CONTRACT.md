@@ -27,6 +27,7 @@ Dart 侧不直接读文件、不直接起进程、不持有 API Key 以外的任
 | `app.claudroid/events` | EventChannel，Kotlin → Dart | 全局状态：设置、引擎、会话列表 |
 | `app.claudroid/chat/<sessionId>` | EventChannel，Kotlin → Dart | 单会话状态与流式增量 |
 | `app.claudroid/terminal` | EventChannel，Kotlin → Dart | 工作区终端的流式输出与结束事件 |
+| `app.claudroid/backup` | EventChannel，Kotlin → Dart | 备份/恢复进度与上次结果 |
 
 `<sessionId>` 是 `ChatSession.id`（UUID）。通道名里的 UUID 含 `-`，符合 EventChannel 命名要求。
 
@@ -393,6 +394,15 @@ Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `pa
 `chunk` 是 stdout+stderr 合并后的增量，最多累计 1 MiB（超出后继续排空但不追加）；Dart 侧
 再按自己的显示上限裁剪。`done.cwdRel` 是下一条命令的起始目录；`stopped` 不改目录。
 `terminal.stop` 与页面关闭都只影响终端，不影响聊天 turn。
+
+### 6.8 备份与恢复
+
+方法、归档格式、恢复语义与目标配置见 [`BACKUP.md`](BACKUP.md)。要点：
+
+- 归档只含**会话、工作区文件与脱敏设置**；`apiKey` / `extraEnv` 不入包。
+- 恢复是**安全合并**：不删除、不覆盖本机已有文件；会话仅在备份较新时覆盖。
+- 支持 `WEBDAV` / `S3`（含兼容服务）/ `GITHUB` 仓库三种云端目标，以及 SAF 本地导入导出。
+- 进度通过 `app.claudroid/backup` 推送；同一时刻只允许一个任务，任务或终端运行时拒绝执行。
 
 ## 7. 线程与错误
 

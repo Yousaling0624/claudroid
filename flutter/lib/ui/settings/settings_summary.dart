@@ -1,3 +1,4 @@
+import '../../models/backup.dart';
 import '../../models/models.dart';
 import 'settings_labels.dart';
 
@@ -50,6 +51,32 @@ String settingsAdvancedSummary(AppSettings settings) {
   final maxTurns = settings.intOr('maxTurns');
   return '自动更新${autoUpdate ? '开' : '关'} · '
       '最大轮数 ${maxTurns == 0 ? '默认' : '$maxTurns'}';
+}
+
+/// One-line status for the "备份与恢复" row. [now] is injectable for tests.
+String settingsBackupSummary(
+  BackupStatus status,
+  BackupConfig config, {
+  DateTime? now,
+}) {
+  if (status.working) {
+    final stage = status.stage.isEmpty
+        ? '正在${backupActionLabel(status.action)}'
+        : status.stage;
+    return '$stage ${(status.fraction * 100).round()}%';
+  }
+  if ((status.error ?? '').isNotEmpty) return '备份异常，点击查看';
+  if (status.lastAt > 0) {
+    final relative = backupRelativeTime(status.lastAt, now: now);
+    if (relative.isNotEmpty) {
+      if (config.kind == BackupTargetKind.local) {
+        return '上次${backupActionLabel(status.lastAction)} · $relative';
+      }
+      return '${config.kind.label} · $relative';
+    }
+  }
+  if (config.kind == BackupTargetKind.local) return '未配置';
+  return '${config.kind.label} · 未备份';
 }
 
 /// One-line status for the "关于与诊断" row.

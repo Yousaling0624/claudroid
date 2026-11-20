@@ -496,6 +496,33 @@ abstract final class AppGlyphs {
     ], role: GlyphRole.detail),
   ]);
 
+  /// Archive box with an arrow entering it: the backup/export entry.
+  static const backup = Glyph([
+    GlyphPolyline([
+      GlyphVertex(4.5, 9.8),
+      GlyphVertex(4.5, 19.6),
+      GlyphVertex(19.5, 19.6),
+      GlyphVertex(19.5, 9.8),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(3.2, 7),
+      GlyphVertex(9, 7),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(15, 7),
+      GlyphVertex(20.8, 7),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(12, 2.8),
+      GlyphVertex(12, 14.2),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(9, 11.2),
+      GlyphVertex(12, 14.2),
+      GlyphVertex(15, 11.2),
+    ], role: GlyphRole.line),
+  ]);
+
   static const plug = Glyph([
     GlyphPolyline([GlyphVertex(9, 4), GlyphVertex(9, 9)], role: GlyphRole.line),
     GlyphPolyline([
