@@ -76,3 +76,27 @@ String formatBytes(int bytes) {
   }
   return '${value.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
 }
+
+/// Empty means "follow the system proxy"; anything else is a manual
+/// HTTP/HTTPS proxy the CLI should use (`networkProxy`, read by Kotlin).
+String networkProxyLabel(String proxy) {
+  if (proxy.isEmpty) return '自动（跟随系统）';
+  if (proxy.contains('@')) return '已设置（含凭据）';
+  return proxy;
+}
+
+String? validateNetworkProxy(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) return null;
+  if (text.toLowerCase().startsWith('socks')) {
+    return '只支持 HTTP/HTTPS 代理（Clash 请用混合端口）';
+  }
+  final uri = Uri.tryParse(text.contains('://') ? text : 'http://$text');
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty ||
+      (uri.hasPort && (uri.port < 1 || uri.port > 65535))) {
+    return '请填写 http://主机:端口';
+  }
+  return null;
+}

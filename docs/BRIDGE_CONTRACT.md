@@ -399,7 +399,7 @@ Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `pa
 
 方法、归档格式、恢复语义与目标配置见 [`BACKUP.md`](BACKUP.md)。要点：
 
-- 归档只含**会话、工作区文件与脱敏设置**；`apiKey` / `extraEnv` 不入包。
+- 归档只含**会话、工作区文件与脱敏设置**；`apiKey` / `extraEnv` / `networkProxy` 不入包。
 - 恢复是**安全合并**：不删除、不覆盖本机已有文件；会话仅在备份较新时覆盖。
 - 支持 `WEBDAV` / `S3`（含兼容服务）/ `GITHUB` 仓库三种云端目标，以及 SAF 本地导入导出。
 - 进度通过 `app.claudroid/backup` 推送；同一时刻只允许一个任务，任务或终端运行时拒绝执行。
@@ -413,7 +413,8 @@ Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `pa
 - 任何异常：`result.error("bridge", message, null)` 之外，优先用 `result.success(mapOf("ok" to false, "error" to ...))`，
   便于 Dart 侧统一处理。
 - 日志：桥接层只记 `Logx.i("bridge: <method>")` 级别，**绝不**打印 `apiKey`、`extraEnv`、
-  完整 prompt。`settingsJson` 在日志里必须先抹掉 `apiKey`。
+  `networkProxy`（可能含代理账号密码）、完整 prompt。`settingsJson` 在日志里必须先抹掉
+  `apiKey`。
 
 ## 8. Dart 侧对应要求
 

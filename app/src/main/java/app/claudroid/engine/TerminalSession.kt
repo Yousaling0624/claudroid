@@ -236,7 +236,8 @@ class TerminalSession(
         cols: Int,
     ): Pair<Process, Mode> {
         val shell = guestShell(plan)
-        val env = TerminalRunner.baseEnv(guest = true, home = "/root", tmp = "/tmp", shell = shell)
+        val env = TerminalRunner.baseEnv(guest = true, home = "/root", tmp = "/tmp", shell = shell) +
+            plan.proxyEnv
         guestEnv = env
         writeInner(rows, cols, shell)
         val outer = outerScript(
@@ -278,7 +279,8 @@ class TerminalSession(
         root.chrootBegin()
         chrootActive.set(true)
         val shell = guestShell(plan)
-        val env = TerminalRunner.baseEnv(guest = true, home = "/root", tmp = "/tmp", shell = shell)
+        val env = TerminalRunner.baseEnv(guest = true, home = "/root", tmp = "/tmp", shell = shell) +
+            plan.proxyEnv
         guestEnv = env
         writeInner(rows, cols, shell)
         val outer = outerScript(
@@ -302,12 +304,14 @@ class TerminalSession(
 
     /** Last resort: an app-side interactive shell. Persistent, but no PTY (no full-screen apps). */
     private fun launchDirect(): Pair<Process, Mode> {
+        // `start()` assigns the plan field before dispatching here; the direct shell has
+        // no EngineManager plan parameter of its own.
         val env = TerminalRunner.baseEnv(
             guest = false,
             home = home.absolutePath,
             tmp = ctx.cacheDir.absolutePath,
             shell = DIRECT_SHELL,
-        )
+        ) + plan?.proxyEnv.orEmpty()
         guestEnv = env
         val process = startWithEnv(listOf(DIRECT_SHELL, "-i"), env, workspace)
         return process to Mode.Direct

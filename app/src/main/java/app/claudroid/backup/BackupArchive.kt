@@ -307,8 +307,10 @@ class BackupArchive(
 
         val appliedSettings = archivedSettings?.copy(
             // Secrets never travel in the archive; keep the local ones when applying.
+            // networkProxy is in the same class: it may embed proxy credentials.
             apiKey = localSettings.apiKey,
             extraEnv = localSettings.extraEnv,
+            networkProxy = localSettings.networkProxy,
         )
 
         RestoreOutcome(
@@ -538,7 +540,7 @@ class BackupArchive(
 
         /** Secrets must never enter an archive (BACKUP.md §1). */
         fun sanitize(settings: AppSettings): AppSettings =
-            settings.copy(apiKey = "", extraEnv = "")
+            settings.copy(apiKey = "", extraEnv = "", networkProxy = "")
 
         /**
          * ZIP names must be relative and stay inside their root. Backslashes are

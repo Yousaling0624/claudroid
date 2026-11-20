@@ -94,6 +94,11 @@ class EngineManager(
         val useChroot: Boolean,
         val useProot: Boolean,
         val prootViaRoot: Boolean = false,
+        /**
+         * Proxy variables for the shell. Kept separate from the engine's own env so the
+         * terminal never gains ANTHROPIC_* credentials just to download a file.
+         */
+        val proxyEnv: Map<String, String> = emptyMap(),
     ) {
         val label: String
             get() = when {
@@ -475,12 +480,16 @@ class EngineManager(
         val root = wantRoot(settings)
         val useChroot = root && _state.value.chrootAvailable
         val useProot = !root && proot.available() && !installation.rootMode
+        val proxy = EngineProxy.effective(settings, ctx)
         return ShellPlan(
             installation = installation,
             useRoot = root,
             useChroot = useChroot,
             useProot = useProot,
             prootViaRoot = root && !useChroot && proot.available(),
+            proxyEnv = proxy?.let {
+                EngineProxy.env(it, settings.normalizedBaseUrl(), settings.isLocalEndpoint())
+            }.orEmpty(),
         )
     }
 
@@ -824,6 +833,11 @@ class EngineManager(
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_AUTOUPDATER"] = "1"
         env["IS_SANDBOX"] = "1"
+        // The self-test must see the same proxy as a real turn; otherwise it can report
+        // success while WebFetch still has no route.
+        EngineProxy.effective(s, ctx)?.let { proxy ->
+            env.putAll(EngineProxy.env(proxy, s.normalizedBaseUrl(), s.isLocalEndpoint()))
+        }
         return env
     }
 

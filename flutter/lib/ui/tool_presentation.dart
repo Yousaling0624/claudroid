@@ -190,7 +190,7 @@ String? webFetchFailureHint(String name, String? output) {
   if (RegExp(
     r'timed out|timeout|connection refused|connection reset|unreachable|tls|certificate|socket|econn',
   ).hasMatch(text)) {
-    return '连接网页失败：检查网络、代理与证书后重试；必要时「$refresh」。';
+    return '连接网页失败：检查网络、代理与证书；VPN 按应用分流时，到「设置 → Claude Code 引擎 → 网络代理」填写本机代理。';
   }
   return '网页抓取失败：展开查看原始错误；网络切换后可到「$refresh」。';
 }

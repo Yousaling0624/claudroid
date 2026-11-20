@@ -60,7 +60,7 @@ void main() {
     );
     expect(
       webFetchFailureHint('WebFetch', 'Connection timed out'),
-      contains('连接网页失败'),
+      allOf(contains('连接网页失败'), contains('网络代理')),
     );
     expect(
       webFetchFailureHint('WebFetch', 'unknown error'),

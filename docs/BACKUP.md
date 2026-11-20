@@ -11,8 +11,9 @@
   `docs/BRIDGE_CONTRACT.md` §3 的 `ChatMessage` 格式）。
 - **所有工作区文件**：默认工作区 `filesDir/workspace`，以及 `filesDir/workspaces/<id>`
   下的每个自定义工作区；工作区索引（`workspaces.json`）的元数据也会备份。
-- **设置**：`AppSettings` 中除密钥外的字段。**不包含** `apiKey` 与 `extraEnv`
-  （后者可能含自定义 token/环境密钥），备份里这两个字段一律写空。
+- **设置**：`AppSettings` 中除密钥外的字段。**不包含** `apiKey`、`extraEnv` 与
+  `networkProxy`（后两者可能含自定义 token、环境密钥或代理账号密码），备份里这三个
+  字段一律写空。
 
 不备份：
 
@@ -27,7 +28,7 @@
 
 ```
 manifest.json                 # 最后写入；见下
-settings.json                 # AppSettings（apiKey/extraEnv 已置空）
+settings.json                 # AppSettings（apiKey/extraEnv/networkProxy 已置空）
 workspaces/index.json         # {activeId, spaces:[{id,name,createdAt}]}
 workspaces/default/**         # 默认工作区文件（相对路径）
 workspaces/<id>/**            # 自定义工作区文件；<id> 必须通过 WorkspaceStore.isValidId
@@ -59,7 +60,7 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
 - 工作区索引：只补充本机缺失的自定义工作区；同名 id 保留本机名称；**不切换**
   `activeId`。
 - 设置：仅当调用方显式要求（`restoreSettings=true`）时应用；应用时保留本机
-  `apiKey` 与 `extraEnv`，其余字段采用备份值。
+  `apiKey`、`extraEnv` 与 `networkProxy`，其余字段采用备份值。
 - 恢复完成后由桥接层调用 `sessions.load()` 与 `workspaces.load()` 刷新列表。
 - 聊天 turn 或终端正在运行时拒绝备份/恢复/导入（读到的文件可能半写，恢复会与
   运行中的进程冲突），错误信息：`任务或终端正在运行，结束后再备份或恢复`。

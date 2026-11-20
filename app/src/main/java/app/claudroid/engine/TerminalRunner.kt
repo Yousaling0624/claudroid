@@ -65,6 +65,8 @@ class TerminalRunner(
 
         val hostCwd = File(workspace, startCwd).absolutePath
         val guestCwd = if (startCwd.isEmpty()) "/work" else "/work/$startCwd"
+        // Terminal commands get the same proxy as the CLI, so curl/git still work when
+        // the VPN excludes this app; no ANTHROPIC_* variables are added.
         val env = baseEnv(
             guest = guest,
             home = if (guest) "/root" else home.absolutePath,
@@ -74,7 +76,7 @@ class TerminalRunner(
                 plan.installation.hasBash -> "/bin/bash"
                 else -> "/bin/sh"
             },
-        )
+        ) + plan.proxyEnv
         val guestScript = if (guest) buildScript(guestCwd, "/work", command, statusRef) else null
         val hostBody = if (!guest) {
             buildScript(hostCwd, workspace.absolutePath, command, statusRef)

@@ -53,6 +53,7 @@ class EnginePage extends StatelessWidget {
       builder: (context) => [
         _statusSection(context),
         _runOptionsSection(context),
+        _networkSection(context),
         _maintenanceSection(context),
         _dangerSection(context),
         _reportsSection(context),
@@ -155,6 +156,42 @@ class EnginePage extends StatelessWidget {
     );
   }
 
+  Widget _networkSection(BuildContext context) {
+    final proxy = controller.settings.str('networkProxy');
+    return generateSection(
+      title: '网络',
+      footer: '留空自动使用系统代理。Clash 等按应用分流的 VPN 不会覆盖本应用：'
+          '把本应用加入 VPN 的分流列表，或在这里填它的 HTTP 代理端口'
+          '（Clash 默认 7890）。仅支持 HTTP/HTTPS。',
+      items: [
+        SettingsValueRow(
+          label: '网络代理',
+          value: networkProxyLabel(proxy),
+          onPressed: () => editSettingText(
+            context,
+            controller,
+            title: '网络代理',
+            key: 'networkProxy',
+            current: proxy,
+            hint: 'http://127.0.0.1:7890',
+            emptyLabel: '自动',
+            keyboardType: TextInputType.url,
+            singleLine: true,
+            validator: validateNetworkProxy,
+          ),
+        ),
+        SettingsActionRow(
+          label: controller.networkRefreshing ? '正在刷新网络配置…' : '刷新网络配置',
+          glyph: AppGlyphs.refresh,
+          busy: controller.networkRefreshing,
+          onPressed: controller.busy || controller.networkRefreshing
+              ? null
+              : controller.refreshNetwork,
+        ),
+      ],
+    );
+  }
+
   Widget _maintenanceSection(BuildContext context) {
     final engine = controller.engine;
     final working = engine.phase == 'Working';
@@ -204,14 +241,6 @@ class EnginePage extends StatelessWidget {
           onPressed: busy || controller.rootProbing
               ? null
               : controller.probeRoot,
-        ),
-        SettingsActionRow(
-          label: controller.networkRefreshing ? '正在刷新网络配置…' : '刷新网络配置',
-          glyph: AppGlyphs.refresh,
-          busy: controller.networkRefreshing,
-          onPressed: busy || controller.networkRefreshing
-              ? null
-              : controller.refreshNetwork,
         ),
         if (working)
           SettingsActionRow(

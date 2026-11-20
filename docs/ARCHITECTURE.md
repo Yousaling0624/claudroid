@@ -153,6 +153,21 @@ WebFetch 抓取前会先请求 `api.anthropic.com/api/web/domain_info` 做域名
 直接抓取目标页，同时不再把每个访问过的域名发给 Anthropic。`HOME` 在 PRoot、chroot 和
 直启三种模式下都指向 `filesDir/home`，所以只写这一处即可覆盖所有启动方式。
 
+CLI 的外部请求（WebFetch、Bash 里的 `curl`/`git`、API）只认进程环境里的
+`HTTPS_PROXY`/`HTTP_PROXY`，而 Android 的 VPN 是 TUN 分流：按应用代理时，被排除的
+应用根本收不到 VPN 路由，浏览器能开 GitHub 不代表 jail 也能。`EngineProxy` 因此把
+代理写进每个 turn 的环境：
+
+- 设置里的 `networkProxy` 非空时用它（`host:port` 自动补 `http://`，保留账号密码）；
+  只支持 HTTP/HTTPS，Claude Code 不支持 SOCKS。
+- 留空则跟随 Android 当前网络的 HTTP 代理（`LinkProperties.httpProxy`，兼容会在
+  VPN 上设置代理的应用；取不到再退回 `ProxySelector`），与 App 自身 HTTP 栈一致。
+- `NO_PROXY` 固定含 loopback（OpenAI 兼容代理走 `127.0.0.1`）；Base URL 是内网/本机
+  时也加入，避免把本来可用的 API 端点送进代理。
+- 环境在每个 turn 启动时重新计算，改设置或切网络后下一条消息即生效；工作区终端
+  （`ShellPlan.proxyEnv`）同样带上，`extraEnv` 仍然最后合并、可以覆盖。
+- 安装期的 apt 不使用该代理：默认走国内镜像；受限网络请先换网络完成安装。
+
 组装分两种：无 root 时直接在应用私有目录解包（`TarGz.extractAll`，Java NIO 改权限）；
 有 root 时先解到应用缓存 `rootfs-stage`，再让 root shell `cp -a` 到 `/data/adb`，
 `chown -Rh 0:0`、`chmod 1777 tmp`，最后断言 `etc/debian_version`、`bin/bash`、

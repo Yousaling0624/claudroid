@@ -158,6 +158,7 @@ cd flutter && flutter analyze && flutter test
 | 模型 | 可从接口拉取，也可手填；会写进 `ANTHROPIC_MODEL` 与 `--model` |
 | 自动路由 | 使用 Magpie 等网关的路由组时，把组 ID（如 `auto/dfmodel[1m]`）填进「默认模型」并保持「模型档位 → 默认 / 路由组」；App 会原样透传，由网关混合调度 |
 | 引擎模式 | **自动**（有 root 用 chroot，否则 PRoot）/ **Proot** / **Root** |
+| 网络代理 | 留空自动跟随系统 HTTP 代理；VPN 按应用分流时填它的 HTTP 端口（如 `http://127.0.0.1:7890`，仅 HTTP/HTTPS） |
 | 权限模式 | **自动（官方 Auto）** / `完全放行` / `自动改文件` / `默认（只读）` / `只读规划` |
 | 功能与实验 | Agent teams、workflows、auto memory、后台任务、扩展思考、effort、子代理模型、Auto 分类器模型 |
 
@@ -269,6 +270,7 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 | `chroot: can't change root` | 设备缺 `chroot(1)`，App 会自动降级为 `su` 下跑 PRoot。 |
 | 安装报「rootfs 下载失败（官方源与镜像均不可达）」 | Docker Hub 与 DaoCloud 镜像都没连上，或返回字节的 sha256 不符。换网络/代理后重试。 |
 | 请求超时 | jail 里 DNS 不通：PRoot 会自动写入当前网络的 DNS；root 模式检查 `/data/adb/claudroid/etc/resolv.conf`，或把 Base URL 换成 IP。 |
+| WebFetch 连接网页失败/超时（VPN 已开） | 按应用分流的 VPN 不覆盖被排除的应用：把本应用加入 VPN 的分流列表，或到 **设置 → Claude Code 引擎 → 网络代理** 填 VPN 的 HTTP 代理（Clash 默认 `http://127.0.0.1:7890`）。顺带点一次「刷新网络配置」。 |
 | `--dangerously-skip-permissions cannot be used with root/sudo privileges` | 官方在 uid 0 下禁止「完全放行」。App 会自动注入 `IS_SANDBOX=1`；若仍出现，把权限模式改成「默认（只读）」或「只读规划」。 |
 | 一直停在升级进度不动 | 到 registry.npmjs.org 的网络不稳：会自动重试 3 次并续传；仍失败可检查网络或代理。 |
 | OpenAI 兼容端点 400/404 | Base URL 要填到 `/v1`（代理会补 `/chat/completions`）；确认模型名和接口支持 tool_calls。 |

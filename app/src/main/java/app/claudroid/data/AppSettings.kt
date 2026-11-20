@@ -73,6 +73,13 @@ data class AppSettings(
     val themeMode: Int = 0, // 0 system, 1 light, 2 dark
     val extraSystemPrompt: String = "",
     val extraEnv: String = "",
+    /**
+     * HTTP proxy exported to the CLI and the workspace terminal. Blank follows Android's
+     * current system HTTP proxy; an explicit value must be `http://` or `https://`
+     * because Claude Code does not support SOCKS. It may contain proxy credentials, so
+     * it is never logged and never included in a backup.
+     */
+    val networkProxy: String = "",
     /** Experimental Claude Code features, surfaced as switches in 设置 → 功能与实验. */
     val agentTeams: Boolean = false,
     val workflows: Boolean = true,

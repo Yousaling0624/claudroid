@@ -62,7 +62,12 @@ class BackupArchiveTest {
             activeId = "ws-1",
             spaces = listOf(WorkspaceInfo("ws-1", "项目", 42)),
         )
-        val settings = AppSettings(apiKey = "local-secret", extraEnv = "TOKEN=1", model = "backup-model")
+        val settings = AppSettings(
+            apiKey = "local-secret",
+            extraEnv = "TOKEN=1",
+            model = "backup-model",
+            networkProxy = "http://backup-proxy.example:8080",
+        )
         val zip = File(cache, "backup.zip")
         val manifest = archive.write(zip, settings, index, appVersion = "9.9.9", versionCode = 42)
 
@@ -82,6 +87,8 @@ class BackupArchiveTest {
                 .bufferedReader().use { it.readText() }
             assertFalse(stored.contains("local-secret"))
             assertFalse(stored.contains("TOKEN=1"))
+            assertFalse(stored.contains("backup-proxy.example"))
+            assertTrue(stored.contains("\"networkProxy\":\"\""))
             assertTrue(stored.contains("\"model\":\"backup-model\""))
         }
 
@@ -89,7 +96,12 @@ class BackupArchiveTest {
         val outcome = restored.restore(
             zipFile = zip,
             restoreSettings = true,
-            localSettings = AppSettings(apiKey = "local-key", extraEnv = "LOCAL=1", model = "local"),
+            localSettings = AppSettings(
+                apiKey = "local-key",
+                extraEnv = "LOCAL=1",
+                model = "local",
+                networkProxy = "http://127.0.0.1:7890",
+            ),
         )
 
         assertEquals(2, outcome.sessionsAdded)
@@ -110,6 +122,8 @@ class BackupArchiveTest {
         // The archive never carries the secrets, so applying it keeps the local ones.
         assertEquals("local-key", applied.apiKey)
         assertEquals("LOCAL=1", applied.extraEnv)
+        // A proxy URL may embed credentials, so the archive never carries it either.
+        assertEquals("http://127.0.0.1:7890", applied.networkProxy)
     }
 
     // ---------------------------------------------------------------- merging

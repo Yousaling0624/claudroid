@@ -36,6 +36,8 @@ class SettingsRepository(private val context: Context) {
         val themeMode = intPreferencesKey("theme_mode")
         val extraSystemPrompt = stringPreferencesKey("extra_system_prompt")
         val extraEnv = stringPreferencesKey("extra_env")
+        // Missing on old installs; blank means "follow the system HTTP proxy".
+        val networkProxy = stringPreferencesKey("network_proxy")
         val agentTeams = booleanPreferencesKey("agent_teams")
         val workflows = booleanPreferencesKey("workflows")
         val autoMemory = booleanPreferencesKey("auto_memory")
@@ -75,6 +77,7 @@ class SettingsRepository(private val context: Context) {
             themeMode = p[K.themeMode] ?: d.themeMode,
             extraSystemPrompt = p[K.extraSystemPrompt] ?: d.extraSystemPrompt,
             extraEnv = p[K.extraEnv] ?: d.extraEnv,
+            networkProxy = p[K.networkProxy] ?: d.networkProxy,
             agentTeams = p[K.agentTeams] ?: d.agentTeams,
             workflows = p[K.workflows] ?: d.workflows,
             autoMemory = p[K.autoMemory] ?: d.autoMemory,
@@ -119,6 +122,7 @@ class SettingsRepository(private val context: Context) {
             p[K.themeMode] = next.themeMode
             p[K.extraSystemPrompt] = next.extraSystemPrompt
             p[K.extraEnv] = next.extraEnv
+            p[K.networkProxy] = next.networkProxy
             p[K.agentTeams] = next.agentTeams
             p[K.workflows] = next.workflows
             p[K.autoMemory] = next.autoMemory

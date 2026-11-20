@@ -401,6 +401,13 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         }
         EngineEnv.applyModel(env, s)
         EngineEnv.applyFeatures(env, s)
+        // A per-app VPN only routes apps the user included, and the CLI ignores
+        // Android's system proxy. Exporting it is the only way WebFetch / curl / git
+        // reach the network the browser uses. Merged before extraEnv so a user's own
+        // proxy variables still win.
+        EngineProxy.effective(s, ctx)?.let { proxy ->
+            env.putAll(EngineProxy.env(proxy, s.normalizedBaseUrl(), s.isLocalEndpoint()))
+        }
         // The app owns upgrades and there is no telemetry endpoint we want to reach.
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["DISABLE_TELEMETRY"] = "1"
