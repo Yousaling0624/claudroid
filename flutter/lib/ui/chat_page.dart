@@ -84,11 +84,30 @@ class _ChatPageState extends State<ChatPage> {
   ChatState _chat = const ChatState();
   ChatState? _pendingChat;
   bool _flushScheduled = false;
+  Timer? _deltaFlushTimer;
   String _barSignature = '';
+
+  /// Deltas arrive faster than the screen can draw. Coalescing them into one
+  /// rebuild every ~32 ms (about 31 fps) keeps the transcript readable while
+  /// leaving frames for scrolling; a Timer (rather than a per-frame callback)
+  /// guarantees the trailing delta is still committed when the stream pauses.
+  static const Duration _deltaFlushInterval = Duration(milliseconds: 32);
 
   /// Sticks to the bottom while the answer streams, and lets go as soon as
   /// the reader scrolls up — never yanks them back.
   bool _followBottom = true;
+
+  /// True between a finger-driven [ScrollStartNotification] and its
+  /// [ScrollEndNotification]. Auto-follow must not call `jumpTo` in this
+  /// window: `jumpTo` calls `goIdle()`, which cancels the drag activity.
+  bool _userScrolling = false;
+
+  /// Cached rows keyed by message id. A delta only changes one message, so
+  /// handing Flutter the *same* widget instance lets it skip every other
+  /// visible row instead of re-running the source regex and rebuilding its
+  /// Markdown tree on each flush.
+  final Map<String, _RowCacheEntry> _rowCache = {};
+  int _rowEpoch = 0;
 
   /// Expand state for every fold, keyed by message and block. The page owns
   /// it so a row scrolled out of the list keeps the reader's choice.
@@ -97,7 +116,10 @@ class _ChatPageState extends State<ChatPage> {
   bool _foldOpen(String key) => _folds[key] ?? false;
 
   void _toggleFold(String key) {
-    setState(() => _folds[key] = !_foldOpen(key));
+    setState(() {
+      _folds[key] = !_foldOpen(key);
+      _invalidateRows();
+    });
   }
 
   String? _editingId;
@@ -123,6 +145,7 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _copiedTimer?.cancel();
     _resyncTimer?.cancel();
+    _deltaFlushTimer?.cancel();
     _subscription?.cancel();
     _scroll.dispose();
     _input.dispose();
@@ -159,7 +182,7 @@ class _ChatPageState extends State<ChatPage> {
       _resyncTimer = Timer(const Duration(milliseconds: 150), _resync);
       return;
     }
-    _applyState(next);
+    _applyState(next, coalesce: event is ChatDeltaEvent);
   }
 
   Future<void> _resync() async {
@@ -175,16 +198,29 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  void _applyState(ChatState next) {
+  void _applyState(ChatState next, {bool coalesce = false}) {
     if (!mounted) return;
     final notice = next.titleNotice;
-    // Coalesce deltas into at most one rebuild per frame. Parsing a growing
-    // Markdown answer on every stream event was the main source of jank.
+    // The newest folded state wins; whichever flush fires next commits it.
     _pendingChat = next;
-    if (!_flushScheduled) {
-      _flushScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _flushState());
-      WidgetsBinding.instance.scheduleFrame();
+    if (coalesce) {
+      // Streaming text: draw at most every ~32 ms. The timer's flush commits
+      // the newest pending state, so a burst of deltas costs one rebuild and
+      // still cannot lose the tail.
+      _deltaFlushTimer ??= Timer(_deltaFlushInterval, () {
+        _deltaFlushTimer = null;
+        _flushState();
+      });
+    } else {
+      // Running/status/tool/snapshot events are user-visible state changes;
+      // commit them on the next frame instead of waiting out the throttle.
+      _deltaFlushTimer?.cancel();
+      _deltaFlushTimer = null;
+      if (!_flushScheduled) {
+        _flushScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _flushState());
+        WidgetsBinding.instance.scheduleFrame();
+      }
     }
     if (notice != null && notice.isNotEmpty) {
       widget.onToast(notice);
@@ -194,10 +230,13 @@ class _ChatPageState extends State<ChatPage> {
 
   void _flushState() {
     _flushScheduled = false;
+    _deltaFlushTimer?.cancel();
+    _deltaFlushTimer = null;
     final pending = _pendingChat;
     if (!mounted || pending == null) return;
     _pendingChat = null;
     setState(() => _chat = pending);
+    _pruneRowCache(pending.messages);
     // Only the bar-visible fields warrant rebuilding the bar; streaming text
     // changes must not tick it on every frame.
     final signature =
@@ -210,10 +249,28 @@ class _ChatPageState extends State<ChatPage> {
     if (_followBottom && !_searching) _pinToBottom();
   }
 
+  void _pruneRowCache(List<ChatMessage> messages) {
+    if (_rowCache.isEmpty) return;
+    final ids = {for (final message in messages) message.id};
+    _rowCache.removeWhere((id, _) => !ids.contains(id));
+  }
+
+  /// Bumps the row epoch so cached rows re-read page-owned interaction state
+  /// (folds, copy feedback, edit mode). Rare, user-driven changes only.
+  void _invalidateRows() => _rowEpoch++;
+
   void _pinToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      if (!mounted || _searching || !_followBottom || _userScrolling) return;
+      if (!_scroll.hasClients) return;
+      final position = _scroll.position;
+      // `jumpTo` ends the current scroll activity; doing that while a drag or
+      // fling is live would steal the gesture, so wait for it to settle.
+      if (position.isScrollingNotifier.value) return;
+      // `jumpTo` is not free: even a no-op reassigns the activity. Once the
+      // bottom is already under the viewport, leave the position alone.
+      if ((position.pixels - position.maxScrollExtent).abs() <= 0.5) return;
+      _scroll.jumpTo(position.maxScrollExtent);
     });
   }
 
@@ -228,13 +285,22 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   bool _onScrollNotification(ScrollNotification notification) {
-    if (notification is ScrollUpdateNotification &&
+    if (notification is ScrollStartNotification &&
+        notification.dragDetails != null) {
+      // A finger is down. Stop following immediately, before the first drag
+      // update: a post-frame `jumpTo` from a streaming flush would otherwise
+      // call `goIdle()` and end the drag, which is why the page felt locked
+      // while the model was answering.
+      _userScrolling = true;
+      if (_followBottom) setState(() => _followBottom = false);
+    } else if (notification is ScrollUpdateNotification &&
         notification.dragDetails != null) {
       final atBottom = notification.metrics.extentAfter < 2;
       if (atBottom != _followBottom) {
         setState(() => _followBottom = atBottom);
       }
     } else if (notification is ScrollEndNotification) {
+      _userScrolling = false;
       final atBottom = notification.metrics.extentAfter < 2;
       if (atBottom && !_followBottom) setState(() => _followBottom = true);
     }
@@ -251,12 +317,14 @@ class _ChatPageState extends State<ChatPage> {
   /// earlier scroll-up. Treat that boundary as "pinned" again so the next
   /// expansion follows instead of revealing its content off-screen.
   bool _onScrollMetrics(ScrollMetricsNotification notification) {
-    if (_searching || !_scroll.hasClients) return false;
+    if (_searching || _userScrolling || !_scroll.hasClients) return false;
     if (_scroll.position.isScrollingNotifier.value) return false;
     final atBottom = notification.metrics.extentAfter < 2;
     if (!_followBottom && !atBottom) return false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _searching || !_scroll.hasClients) return;
+      if (!mounted || _searching || _userScrolling || !_scroll.hasClients) {
+        return;
+      }
       final position = _scroll.position;
       if (position.isScrollingNotifier.value) return;
       final bottom = position.extentAfter < 2;
@@ -297,6 +365,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         _editingId = null;
         _followBottom = true;
+        _invalidateRows();
       });
       _pinToBottom();
     } catch (error) {
@@ -316,7 +385,10 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _clear() async {
     _input.clear();
     _composerKey.currentState?.clearAttachments();
-    setState(() => _editingId = null);
+    setState(() {
+      _editingId = null;
+      _invalidateRows();
+    });
     try {
       await widget.bridge.clear(widget.sessionId);
     } catch (error) {
@@ -364,7 +436,10 @@ class _ChatPageState extends State<ChatPage> {
     // Attachment tokens belong to the composer's thumbnail row, not its text
     // field; moving them back keeps edit-and-resend lossless.
     final split = splitAttachmentRefs(joined);
-    setState(() => _editingId = message.id);
+    setState(() {
+      _editingId = message.id;
+      _invalidateRows();
+    });
     _input.value = TextEditingValue(
       text: split.text,
       selection: TextSelection.collapsed(offset: split.text.length),
@@ -376,11 +451,17 @@ class _ChatPageState extends State<ChatPage> {
   void _cancelEdit() {
     _input.clear();
     _composerKey.currentState?.clearAttachments();
-    setState(() => _editingId = null);
+    setState(() {
+      _editingId = null;
+      _invalidateRows();
+    });
   }
 
   void _openSearch() {
-    setState(() => _searching = true);
+    setState(() {
+      _searching = true;
+      _invalidateRows();
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_scroll.hasClients) _scroll.jumpTo(0);
@@ -391,7 +472,10 @@ class _ChatPageState extends State<ChatPage> {
   void _closeSearch() {
     _search.clear();
     _searchFocus.unfocus();
-    setState(() => _searching = false);
+    setState(() {
+      _searching = false;
+      _invalidateRows();
+    });
     if (_followBottom) _pinToBottom();
   }
 
@@ -415,10 +499,18 @@ class _ChatPageState extends State<ChatPage> {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     unawaited(HapticFeedback.selectionClick());
-    setState(() => _copiedId = message.id);
+    setState(() {
+      _copiedId = message.id;
+      _invalidateRows();
+    });
     _copiedTimer?.cancel();
     _copiedTimer = Timer(const Duration(milliseconds: 1400), () {
-      if (mounted) setState(() => _copiedId = null);
+      if (mounted) {
+        setState(() {
+          _copiedId = null;
+          _invalidateRows();
+        });
+      }
     });
   }
 
@@ -824,29 +916,65 @@ class _ChatPageState extends State<ChatPage> {
           final message = messages[index];
           final isLastAssistant =
               message.role == Role.assistant && index == messages.length - 1;
-          return RepaintBoundary(
-            key: ValueKey(message.id),
-            child: _MessageView(
-              bridge: widget.bridge,
-              message: message,
-              model: widget.labels.chat,
-              statusLine: _chat.statusLine,
-              running: _chat.running,
-              copied: _copiedId == message.id,
-              foldOpen: _foldOpen,
-              onToggleFold: _toggleFold,
-              onEdit: message.role == Role.user && !_chat.running && !_searching
-                  ? () => _startEditing(message)
-                  : null,
-              onRegenerate: isLastAssistant ? () => _regenerate(message) : null,
-              onFork: () => _fork(message),
-              onCopy: () => _copy(message),
-              onOpenUrl: _openUrl,
-            ),
-          );
+          return _buildMessageRow(message, isLastAssistant);
         },
       ),
     );
+  }
+
+  /// One transcript row, cached while nothing it renders has changed.
+  ///
+  /// Returning the same widget instance makes `Element.updateChild` bail out,
+  /// so a streaming delta only rebuilds (and re-parses Markdown for) the one
+  /// answer that actually grew. Search results are never cached: they depend
+  /// on the query and their row indexes change as matches are filtered.
+  Widget _buildMessageRow(ChatMessage message, bool isLastAssistant) {
+    final model = widget.labels.chat;
+    final running = _chat.running;
+    final streaming = message.streaming;
+    final statusLine = _chat.statusLine;
+    final cached = _searching ? null : _rowCache[message.id];
+    if (cached != null &&
+        identical(cached.message, message) &&
+        cached.isLastAssistant == isLastAssistant &&
+        cached.running == running &&
+        cached.model == model &&
+        cached.epoch == _rowEpoch &&
+        (!streaming || cached.statusLine == statusLine)) {
+      return cached.widget;
+    }
+    final row = RepaintBoundary(
+      key: ValueKey(message.id),
+      child: _MessageView(
+        bridge: widget.bridge,
+        message: message,
+        model: model,
+        statusLine: statusLine,
+        running: running,
+        copied: _copiedId == message.id,
+        foldOpen: _foldOpen,
+        onToggleFold: _toggleFold,
+        onEdit: message.role == Role.user && !running && !_searching
+            ? () => _startEditing(message)
+            : null,
+        onRegenerate: isLastAssistant ? () => _regenerate(message) : null,
+        onFork: () => _fork(message),
+        onCopy: () => _copy(message),
+        onOpenUrl: _openUrl,
+      ),
+    );
+    if (!_searching) {
+      _rowCache[message.id] = _RowCacheEntry(
+        widget: row,
+        message: message,
+        isLastAssistant: isLastAssistant,
+        running: running,
+        model: model,
+        statusLine: streaming ? statusLine : '',
+        epoch: _rowEpoch,
+      );
+    }
+    return row;
   }
 
   Widget _buildComposer(BuildContext context) {
@@ -1194,6 +1322,15 @@ class _NoSearchMatches extends StatelessWidget {
   }
 }
 
+/// `stripTrailingSources` walks the whole answer and its code fences. Earlier
+/// text blocks keep their identity across deltas, so the result is memoised per
+/// block; the block being written gets a fresh entry on every delta and the
+/// old one is dropped with it (Expando holds keys weakly).
+final Expando<String> _visibleTextCache = Expando<String>('visibleText');
+
+String _visibleText(TextBlock block) =>
+    _visibleTextCache[block] ??= WebSources.stripTrailingSources(block.text);
+
 class _AssistantMessage extends StatelessWidget {
   const _AssistantMessage({
     required this.message,
@@ -1235,10 +1372,7 @@ class _AssistantMessage extends StatelessWidget {
     final errorCount = tools.where((tool) => tool.isError).length;
     final visibleTexts = [
       for (final block in blocks)
-        if (block is TextBlock)
-          WebSources.stripTrailingSources(block.text)
-        else
-          null,
+        if (block is TextBlock) _visibleText(block) else null,
     ];
     final hasOutput = visibleTexts.any(
       (text) => text != null && text.trim().isNotEmpty,
@@ -2289,6 +2423,35 @@ String _durationLabel(int? durationMs) {
     return '${m}m ${s}s';
   }
   return '${seconds.toStringAsFixed(1)}s';
+}
+
+/// One cached transcript row. It stores only what decides whether the row
+/// still renders the same thing — never parsed spans or element state, which
+/// belong to the row's own widgets.
+class _RowCacheEntry {
+  const _RowCacheEntry({
+    required this.widget,
+    required this.message,
+    required this.isLastAssistant,
+    required this.running,
+    required this.model,
+    required this.statusLine,
+    required this.epoch,
+  });
+
+  final Widget widget;
+  final ChatMessage message;
+  final bool isLastAssistant;
+  final bool running;
+  final String model;
+
+  /// Only consulted for streaming messages; completed rows show the frozen
+  /// model label instead. Stored as '' for them so status changes never
+  /// invalidate an idle transcript.
+  final String statusLine;
+
+  /// Page-owned interaction state (folds, copy feedback, edit mode, search).
+  final int epoch;
 }
 
 /// A [ChangeNotifier] the bar listens to; the page bumps it whenever the
