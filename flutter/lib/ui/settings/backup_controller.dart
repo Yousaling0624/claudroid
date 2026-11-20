@@ -110,6 +110,25 @@ class BackupController extends ChangeNotifier {
     unawaited(saveConfig(config.copyWith(kind: kind)));
   }
 
+  /// Saving the config is what re-arms the host's background schedule
+  /// (`docs/BACKUP.md` §5.5); there is no separate scheduler method.
+  void setAutoEnabled(bool enabled) {
+    if (config.auto.enabled == enabled) return;
+    unawaited(
+      saveConfig(config.copyWith(auto: config.auto.copyWith(enabled: enabled))),
+    );
+  }
+
+  void setAutoIntervalHours(int hours) {
+    final interval = normalizeAutoIntervalHours(hours);
+    if (config.auto.intervalHours == interval) return;
+    unawaited(
+      saveConfig(
+        config.copyWith(auto: config.auto.copyWith(intervalHours: interval)),
+      ),
+    );
+  }
+
   Future<void> testConnection() async {
     if (testing || active || !cloudReady) return;
     testing = true;

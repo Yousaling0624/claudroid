@@ -141,6 +141,98 @@ void main() {
     });
   });
 
+  group('auto backup config', () {
+    test('defaults to off and daily, including legacy JSON without auto', () {
+      const defaults = BackupConfig();
+      expect(defaults.auto.enabled, isFalse);
+      expect(defaults.auto.intervalHours, 24);
+
+      final legacy = BackupConfig.fromJsonString(jsonEncode({
+        'kind': 'WEBDAV',
+        'webdav': {'url': 'https://dav.example.com/a.zip'},
+      }));
+      expect(legacy.kind, BackupTargetKind.webdav);
+      expect(legacy.auto.enabled, isFalse);
+      expect(legacy.auto.intervalHours, 24);
+    });
+
+    test('reads and round-trips the documented auto block', () {
+      final config = BackupConfig.fromJson({
+        'kind': 'S3',
+        'auto': {'enabled': true, 'intervalHours': 168},
+        's3': {'bucket': 'b'},
+      });
+      expect(config.auto.enabled, isTrue);
+      expect(config.auto.intervalHours, 168);
+      expect(config.auto.toJson(), {'enabled': true, 'intervalHours': 168});
+
+      final decoded = BackupConfig.fromJsonString(config.toJsonString());
+      expect(decoded.auto.enabled, isTrue);
+      expect(decoded.auto.intervalHours, 168);
+      expect(decoded.s3.bucket, 'b');
+    });
+
+    test('copyWith keeps the auto block and other sections', () {
+      final config = _webDav.copyWith(
+        auto: const AutoBackupConfig(enabled: true, intervalHours: 72),
+      );
+      expect(config.auto.enabled, isTrue);
+      expect(config.auto.intervalHours, 72);
+      expect(config.webdav.url, _webDav.webdav.url);
+
+      final switched = config.copyWith(kind: BackupTargetKind.local);
+      expect(switched.auto.intervalHours, 72);
+      expect(switched.webdav.username, 'me');
+    });
+
+    test('malformed auto blocks fall back without throwing', () {
+      expect(
+        BackupConfig.fromJson({'auto': 'nope'}).auto.intervalHours,
+        24,
+      );
+      expect(
+        BackupConfig.fromJson({
+          'auto': {'enabled': 'yes', 'intervalHours': 36},
+        }).auto.enabled,
+        isFalse,
+      );
+      expect(
+        BackupConfig.fromJson({
+          'auto': {'intervalHours': 36},
+        }).auto.intervalHours,
+        24,
+      );
+      expect(
+        BackupConfig.fromJson({
+          'auto': {'intervalHours': '168'},
+        }).auto.intervalHours,
+        168,
+      );
+      expect(
+        BackupConfig.fromJsonString('{"auto": []}').auto.enabled,
+        isFalse,
+      );
+    });
+  });
+
+  group('auto interval', () {
+    test('normalizes to the three accepted values', () {
+      for (final hours in autoBackupIntervalHours) {
+        expect(normalizeAutoIntervalHours(hours), hours);
+      }
+      for (final hours in <int?>[null, 0, 1, 12, 25, 48, 167, 336, -24]) {
+        expect(normalizeAutoIntervalHours(hours), 24);
+      }
+    });
+
+    test('labels the cadence and treats unknown values as daily', () {
+      expect(autoIntervalLabel(24), '每天');
+      expect(autoIntervalLabel(72), '每 3 天');
+      expect(autoIntervalLabel(168), '每周');
+      expect(autoIntervalLabel(48), '每天');
+    });
+  });
+
   group('missing config', () {
     test('local has no missing fields but is not cloud-ready', () {
       expect(const BackupConfig().issues, isEmpty);
@@ -209,6 +301,40 @@ void main() {
         '还缺：存储桶、Access Key、Secret Key。填好后云端操作才会启用。',
       );
       expect(backupRequirementText(_s3), isEmpty);
+    });
+  });
+
+  group('auto backup warning', () {
+    test('stays empty while disabled or once the target is ready', () {
+      expect(autoBackupWarning(const BackupConfig()), isEmpty);
+      expect(autoBackupWarning(_webDav), isEmpty);
+      expect(
+        autoBackupWarning(
+          _webDav.copyWith(auto: const AutoBackupConfig(enabled: true)),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('asks for a cloud target when enabled on local', () {
+      final warning = autoBackupWarning(
+        const BackupConfig(auto: AutoBackupConfig(enabled: true)),
+      );
+      expect(warning, contains('云目标'));
+      expect(warning, contains('WebDAV'));
+      expect(warning, contains('本地导出'));
+    });
+
+    test('names the missing fields when enabled but incomplete', () {
+      final warning = autoBackupWarning(
+        const BackupConfig(
+          kind: BackupTargetKind.s3,
+          auto: AutoBackupConfig(enabled: true),
+        ),
+      );
+      expect(warning, contains('存储桶'));
+      expect(warning, contains('Access Key'));
+      expect(warning, contains('下个周期'));
     });
   });
 
@@ -466,6 +592,109 @@ void main() {
           _webDav,
         ),
         '备份异常，点击查看',
+      );
+    });
+
+    test('auto backup names the cadence for a ready cloud target', () {
+      final auto = _webDav.copyWith(
+        auto: const AutoBackupConfig(enabled: true),
+      );
+      expect(
+        settingsBackupSummary(const BackupStatus(), auto),
+        '自动备份 · 每天',
+      );
+      expect(
+        settingsBackupSummary(
+          const BackupStatus(),
+          auto.copyWith(
+            auto: const AutoBackupConfig(enabled: true, intervalHours: 72),
+          ),
+        ),
+        '自动备份 · 每 3 天',
+      );
+    });
+
+    test('auto backup keeps the last backup time but not other actions', () {
+      final auto = _webDav.copyWith(
+        auto: const AutoBackupConfig(enabled: true),
+      );
+      expect(
+        settingsBackupSummary(
+          BackupStatus(
+            lastAt: at(now.subtract(const Duration(hours: 2))),
+            lastAction: 'backup',
+            lastOk: true,
+          ),
+          auto,
+          now: now,
+        ),
+        '自动备份 · 每天 · 2 小时前',
+      );
+      expect(
+        settingsBackupSummary(
+          BackupStatus(
+            lastAt: at(now.subtract(const Duration(hours: 2))),
+            lastAction: 'restore',
+            lastOk: true,
+          ),
+          auto,
+          now: now,
+        ),
+        '自动备份 · 每天',
+      );
+    });
+
+    test('auto backup stays actionable when failed or incomplete', () {
+      final auto = _webDav.copyWith(
+        auto: const AutoBackupConfig(enabled: true),
+      );
+      expect(
+        settingsBackupSummary(
+          BackupStatus(
+            lastAt: at(now.subtract(const Duration(hours: 1))),
+            lastAction: 'backup',
+            lastOk: false,
+          ),
+          auto,
+          now: now,
+        ),
+        '自动备份异常，点击查看',
+      );
+      expect(
+        settingsBackupSummary(
+          const BackupStatus(),
+          const BackupConfig(
+            kind: BackupTargetKind.s3,
+            auto: AutoBackupConfig(enabled: true),
+          ),
+        ),
+        '自动备份待配置',
+      );
+      expect(
+        settingsBackupSummary(const BackupStatus(error: '连接超时'), auto),
+        '备份异常，点击查看',
+      );
+    });
+
+    test('auto backup on a local target keeps the old summary', () {
+      const localAuto = BackupConfig(
+        auto: AutoBackupConfig(enabled: true),
+      );
+      expect(
+        settingsBackupSummary(const BackupStatus(), localAuto),
+        '未配置',
+      );
+      expect(
+        settingsBackupSummary(
+          BackupStatus(
+            lastAt: at(now.subtract(const Duration(hours: 2))),
+            lastAction: 'backup',
+            lastOk: true,
+          ),
+          localAuto,
+          now: now,
+        ),
+        '上次备份 · 2 小时前',
       );
     });
   });

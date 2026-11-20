@@ -24,6 +24,11 @@ class MainActivity : FlutterActivity() {
         // the super call, and the channels must be registered on it by then.
         BridgePlugin.prewarm(applicationContext)
         super.onCreate(savedInstanceState)
+        // Only a user launch reaches this activity, so syncing here re-registers an
+        // auto-backup job cancelled by force-stop without touching a job the system
+        // is starting for its own JobService (docs/BACKUP.md §5.5).
+        val container = (applicationContext as ClaudroidApp).container
+        container.backupScheduler.sync(container.backup.savedConfig())
         askForNotificationPermission()
     }
 

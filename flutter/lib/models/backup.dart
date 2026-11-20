@@ -174,15 +174,52 @@ class GitHubConfig {
       };
 }
 
+/// Background auto-backup settings (`docs/BACKUP.md` §4/§5.5). The host
+/// schedules the only periodic job; saving the config re-arms it.
+class AutoBackupConfig {
+  const AutoBackupConfig({this.enabled = false, this.intervalHours = 24});
+
+  final bool enabled;
+
+  /// One of [autoBackupIntervalHours]; anything else reads as 24 hours.
+  final int intervalHours;
+
+  factory AutoBackupConfig.fromJson(Map<String, dynamic> json) =>
+      AutoBackupConfig(
+        enabled: _bool(json['enabled'], false),
+        intervalHours: normalizeAutoIntervalHours(_int(json['intervalHours'])),
+      );
+
+  AutoBackupConfig copyWith({bool? enabled, int? intervalHours}) =>
+      AutoBackupConfig(
+        enabled: enabled ?? this.enabled,
+        intervalHours: intervalHours ?? this.intervalHours,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'intervalHours': intervalHours,
+      };
+}
+
+/// The only intervals the host schedules; the page offers exactly these.
+const autoBackupIntervalHours = [24, 72, 168];
+
+/// Missing or out-of-contract intervals fall back to daily, matching the host.
+int normalizeAutoIntervalHours(int? hours) =>
+    hours != null && autoBackupIntervalHours.contains(hours) ? hours : 24;
+
 class BackupConfig {
   const BackupConfig({
     this.kind = BackupTargetKind.local,
+    this.auto = const AutoBackupConfig(),
     this.webdav = const WebDavConfig(),
     this.s3 = const S3Config(),
     this.github = const GitHubConfig(),
   });
 
   final BackupTargetKind kind;
+  final AutoBackupConfig auto;
   final WebDavConfig webdav;
   final S3Config s3;
   final GitHubConfig github;
@@ -193,6 +230,8 @@ class BackupConfig {
     final github = _section(json['github']);
     return BackupConfig(
       kind: BackupTargetKind.fromWire(_string(json['kind'])),
+      // Older target.json files predate `auto`; the defaults keep them usable.
+      auto: AutoBackupConfig.fromJson(_section(json['auto'])),
       webdav: WebDavConfig.fromJson(webdav),
       s3: S3Config.fromJson(s3),
       github: GitHubConfig.fromJson(github),
@@ -213,12 +252,14 @@ class BackupConfig {
 
   BackupConfig copyWith({
     BackupTargetKind? kind,
+    AutoBackupConfig? auto,
     WebDavConfig? webdav,
     S3Config? s3,
     GitHubConfig? github,
   }) =>
       BackupConfig(
         kind: kind ?? this.kind,
+        auto: auto ?? this.auto,
         webdav: webdav ?? this.webdav,
         s3: s3 ?? this.s3,
         github: github ?? this.github,
@@ -226,6 +267,7 @@ class BackupConfig {
 
   Map<String, dynamic> toJson() => {
         'kind': kind.wire,
+        'auto': auto.toJson(),
         'webdav': webdav.toJson(),
         's3': s3.toJson(),
         'github': github.toJson(),
@@ -428,6 +470,29 @@ String backupRequirementText(BackupConfig config) {
   final issues = backupConfigIssues(config);
   if (issues.isEmpty) return '';
   return '还缺：${issues.join('、')}。填好后云端操作才会启用。';
+}
+
+/// The cadence label for the three accepted intervals. Unknown values read as
+/// daily so the label always agrees with [normalizeAutoIntervalHours].
+String autoIntervalLabel(int hours) =>
+    switch (normalizeAutoIntervalHours(hours)) {
+      72 => '每 3 天',
+      168 => '每周',
+      _ => '每天',
+    };
+
+/// Why an enabled auto backup will not run yet, or an empty string once it
+/// can. The switch intentionally stays usable while the target is incomplete:
+/// users may enable first and fill the cloud target afterwards.
+String autoBackupWarning(BackupConfig config) {
+  if (!config.auto.enabled) return '';
+  if (config.kind == BackupTargetKind.local) {
+    return '自动备份需要云目标：把上方「目标」改为 WebDAV、S3 或 GitHub 仓库后才会执行；'
+        '现在可以先用下方的本地导出。';
+  }
+  final issues = backupConfigIssues(config);
+  if (issues.isEmpty) return '';
+  return '自动备份还缺：${issues.join('、')}。补齐后会在下个周期开始上传。';
 }
 
 /// A target line for the status and the root row, e.g. `WebDAV · dav.example.com`.

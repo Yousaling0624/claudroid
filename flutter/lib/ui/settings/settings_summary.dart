@@ -54,6 +54,10 @@ String settingsAdvancedSummary(AppSettings settings) {
 }
 
 /// One-line status for the "备份与恢复" row. [now] is injectable for tests.
+///
+/// Priority: a running task, then a live error, then the auto-backup state
+/// (auto needs a complete cloud target), then the last operation. With auto
+/// off — or left on a local target — the row reads exactly as before.
 String settingsBackupSummary(
   BackupStatus status,
   BackupConfig config, {
@@ -66,6 +70,21 @@ String settingsBackupSummary(
     return '$stage ${(status.fraction * 100).round()}%';
   }
   if ((status.error ?? '').isNotEmpty) return '备份异常，点击查看';
+  final auto = config.auto;
+  if (auto.enabled && config.kind != BackupTargetKind.local) {
+    if (!config.cloudReady) return '自动备份待配置';
+    final interval = autoIntervalLabel(auto.intervalHours);
+    final lastWasBackup =
+        status.lastAction.isEmpty || status.lastAction == 'backup';
+    if (status.lastAt > 0 && lastWasBackup) {
+      if (status.lastOk == false) return '自动备份异常，点击查看';
+      final relative = backupRelativeTime(status.lastAt, now: now);
+      if (relative.isNotEmpty) {
+        return '自动备份 · $interval · $relative';
+      }
+    }
+    return '自动备份 · $interval';
+  }
   if (status.lastAt > 0) {
     final relative = backupRelativeTime(status.lastAt, now: now);
     if (relative.isNotEmpty) {

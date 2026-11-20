@@ -2,6 +2,7 @@ package app.claudroid
 
 import android.app.Application
 import android.content.Context
+import app.claudroid.backup.AutoBackupScheduler
 import app.claudroid.backup.BackupArchive
 import app.claudroid.backup.BackupManager
 import app.claudroid.backup.BackupStore
@@ -25,6 +26,9 @@ class ClaudroidApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // Auto-backup scheduling is synced from MainActivity, not here: a JobService
+        // cold start also runs Application.onCreate, and rescheduling there could
+        // replace the job the system just started.
         // The Flutter UI is the only frontend: prewarm its engine and register the
         // platform channels once, so Activity recreation never rebuilds the bridge.
         BridgePlugin.prewarm(this)
@@ -60,6 +64,17 @@ class AppContainer(app: Application) {
         cacheDir = Paths.backupCache(app),
         scope = scope,
     )
+
+    /** Background schedule (docs/BACKUP.md §5.5); synced on launch and after saveConfig. */
+    val backupScheduler = AutoBackupScheduler(app)
+
+    /**
+     * Terminal state is owned by BridgePlugin, but the auto-backup JobService can run
+     * without a Flutter engine attached. The bridge installs this probe on attach;
+     * null means no terminal can be running, so the job proceeds.
+     */
+    @Volatile
+    var terminalProbe: (() -> Boolean)? = null
 
     private val chats = mutableMapOf<String, ChatController>()
 

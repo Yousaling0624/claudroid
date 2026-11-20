@@ -70,6 +70,7 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
 
 ```json
 {"kind":"WEBDAV",
+ "auto":{"enabled":false,"intervalHours":24},
  "webdav":{"url":"","username":"","password":""},
  "s3":{"endpoint":"","region":"us-east-1","bucket":"","accessKey":"","secretKey":"",
        "prefix":"claudroid","pathStyle":true},
@@ -77,6 +78,10 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
 ```
 
 - `kind`：`LOCAL | WEBDAV | S3 | GITHUB`；`LOCAL` 表示只用本地导出/导入。
+- `auto.enabled`：是否开启后台自动备份，默认 `false`。
+- `auto.intervalHours`：自动备份间隔，只接受 `24` / `72` / `168`（每天 / 每 3 天 /
+  每周）；其他值按 `24` 处理。
+- 旧版本保存的 `target.json` 没有 `auto` 字段时按默认值读取；未知字段忽略。
 - 配置允许保存不完整的内容（用户边填边存）；执行动作时再校验并给出具体缺项。
 - 密钥只写入本文件，不写日志、不进归档、不在错误信息里回显。
 
@@ -131,6 +136,24 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
   `cacheDir/backup/import.zip`（上限 4 GiB），按 §3 恢复。
 - 用户取消返回 `{ok:true, cancelled:true}`，不产生错误提示。
 
+### 5.5 自动备份（后台定时）
+
+- 使用系统 `JobScheduler`（不引入新的运行时依赖）注册唯一任务，约束
+  `NETWORK_TYPE_ANY`，周期取 `auto.intervalHours`，`setPersisted(true)` 以便重启后
+  继续；需要 `RECEIVE_BOOT_COMPLETED` 权限。
+- 调度同步时机：应用启动时、以及 `backup.saveConfig` 保存后。仅当
+  `auto.enabled=true` 且 `kind != LOCAL` 时保留任务，否则取消。间隔或目标未变化时
+  不重排，避免每次改字段都把下一次执行时间往后推。
+- 每次触发时重新读取 `target.json`，上传内容与手动备份完全一致；成功时
+  `lastMessage` 为「已自动备份到 <target>」。
+- 以下情况跳过本轮且不写状态，等下个周期：配置未开启、`kind=LOCAL`、聊天 turn
+  或终端正在运行（读到的文件可能半写）、已有备份任务在进行。
+- 所有失败都写入 `status.json`（`lastOk=false` + `error`），不发系统通知；下个
+  周期继续尝试。
+- 周期任务受系统省电策略影响可能延后；应用被强行停止后不会运行，下次启动时
+  重新注册。单次执行受系统后台任务约 10 分钟限制，超大归档请手动备份或改用
+  支持分片的方式。
+
 ## 6. 桥接契约
 
 新增 EventChannel `app.claudroid/backup`，`onListen` 先推一条当前状态，之后每次状态
@@ -179,6 +202,8 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
 
 - `backup.run` / `backup.restore` 在 `kind=LOCAL` 时返回 `ok:false`，提示改用本地
   导出/导入。
+- `backup.saveConfig` 保存后同步自动备份调度（§5.5），不需要额外方法；`configJson`
+  原样带回 `auto` 字段。
 - 同一时刻只允许一个备份任务；重复调用返回 `ok:false`「已有备份任务在进行」。
 - 所有方法都不打印配置内容；错误信息不得包含密码、Access Key、Token。
 
@@ -193,3 +218,5 @@ sessions/<id>.json            # 会话；<id> 必须匹配 [A-Za-z0-9_-]{1,64}
 - 目标 URL 拼装：WebDAV 父路径 MKCOL 列表、S3 path-style/virtual-host、GitHub 路径编码。
 - GitHub Contents 响应解析（真实响应样例）与 PUT body 构造。
 - manifest 解码：schema 不符、缺字段、超大条目。
+- 自动备份配置：缺少 `auto` 的旧配置取默认值；间隔只接受 24/72/168，其余回落 24；
+  调度判定只在 `enabled=true` 且目标不是 `LOCAL` 时成立。

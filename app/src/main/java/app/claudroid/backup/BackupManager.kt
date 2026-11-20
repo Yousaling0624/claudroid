@@ -120,7 +120,11 @@ class BackupManager(
         message
     }
 
-    suspend fun run(): BackupRunResult = exclusive("backup", "打包中") {
+    /**
+     * [auto] only changes the success wording: the archive, target, status and
+     * single-task slot are identical to a manual run (docs/BACKUP.md §5.5).
+     */
+    suspend fun run(auto: Boolean = false): BackupRunResult = exclusive("backup", "打包中") {
         val config = store.loadConfig().requireUsable()
         val target = label(config)
         val file = File(cacheDir, RUN_ARCHIVE)
@@ -146,7 +150,7 @@ class BackupManager(
                 target = target,
                 createdAt = manifest.createdAt,
             )
-            completeSuccess("backup", bytes, "已备份到 $target")
+            completeSuccess("backup", bytes, if (auto) "已自动备份到 $target" else "已备份到 $target")
             result
         } finally {
             runCatching { file.delete() }

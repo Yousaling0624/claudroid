@@ -43,6 +43,17 @@ data class GithubConfig(
 )
 
 /**
+ * Background schedule (docs/BACKUP.md §4/§5.5). `intervalHours` is kept as saved;
+ * [AutoBackupPolicy] is the one that falls back to 24 for values outside 24/72/168.
+ * The default lets an old `target.json` without an `auto` key decode unchanged.
+ */
+@Serializable
+data class AutoBackupConfig(
+    val enabled: Boolean = false,
+    val intervalHours: Int = 24,
+)
+
+/**
  * Saved verbatim even when incomplete: users fill the form piece by piece and a
  * half-typed endpoint must survive a restart. [requireUsable] is called only when an
  * action actually runs.
@@ -50,6 +61,7 @@ data class GithubConfig(
 @Serializable
 data class BackupConfig(
     val kind: BackupKind = BackupKind.LOCAL,
+    val auto: AutoBackupConfig = AutoBackupConfig(),
     val webdav: WebDavConfig = WebDavConfig(),
     val s3: S3Config = S3Config(),
     val github: GithubConfig = GithubConfig(),

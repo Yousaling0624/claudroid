@@ -248,11 +248,16 @@ class SettingsPickerRow<T> extends StatefulWidget {
     required this.label,
     required this.value,
     required this.options,
+    this.enabled = true,
   });
 
   final String label;
   final String value;
   final List<PopupMenuItem> options;
+
+  /// A disabled picker keeps its value visible but drops the menu affordance,
+  /// which is how a transport in progress locks target edits.
+  final bool enabled;
 
   @override
   State<SettingsPickerRow<T>> createState() => _SettingsPickerRowState<T>();
@@ -263,6 +268,9 @@ class _SettingsPickerRowState<T> extends State<SettingsPickerRow<T>> {
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.enabled) {
+      return SettingsInfoRow(label: widget.label, value: widget.value);
+    }
     return DecorationListItem(
       title: Text(widget.label),
       onPressed: () => _open?.call(),
@@ -390,13 +398,16 @@ class SettingsSwitchRow extends StatelessWidget {
 
   final String label;
   final bool value;
-  final ValueChanged<bool> onChanged;
+
+  /// Null renders the switch disabled while keeping its current value.
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
+    final onChanged = this.onChanged;
     return DecorationListItem(
       title: Text(label),
-      onPressed: () => onChanged(!value),
+      onPressed: onChanged == null ? null : () => onChanged(!value),
       trailing: Switch(
         value: value,
         onChanged: onChanged,

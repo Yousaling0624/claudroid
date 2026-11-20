@@ -129,6 +129,10 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         container = (binding.applicationContext as ClaudroidApp).container
+        // The auto-backup JobService runs without this plugin attached, so it cannot
+        // read terminalJob/terminalSession directly; the probe keeps that state in
+        // the bridge while still letting the job ask "is a terminal busy?".
+        container.terminalProbe = { terminalJob?.isActive == true || terminalSession != null }
         messenger = binding.binaryMessenger
         methodChannel = MethodChannel(messenger, METHOD_CHANNEL, StandardMethodCodec.INSTANCE).also {
             it.setMethodCallHandler(this)
@@ -792,6 +796,9 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         val raw = call.require("configJson")
         val config = BackupWire.decodeConfig(raw)
         container.backup.saveConfig(config)
+        // §5.5: every save re-syncs the schedule. The in-memory signature makes edits
+        // that do not affect the job (URL, credentials) leave the next run untouched.
+        container.backupScheduler.sync(config)
         return mapOf("ok" to true, "configJson" to BackupWire.configJson(config))
     }
 

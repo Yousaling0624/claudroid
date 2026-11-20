@@ -34,6 +34,7 @@ class BackupPage extends StatelessWidget {
       builder: (context) => [
         _statusSection(context),
         _targetSection(context),
+        _autoSection(context),
         _cloudSection(context),
         _localSection(context),
         _notesSection(context),
@@ -362,6 +363,43 @@ class BackupPage extends StatelessWidget {
         ),
       ),
     ];
+  }
+
+  // -- auto backup ----------------------------------------------------------
+
+  Widget _autoSection(BuildContext context) {
+    final config = _backup.config;
+    final auto = config.auto;
+    final warning = autoBackupWarning(config);
+    final active = _backup.active;
+    return generateSection(
+      title: '自动备份',
+      footer: '联网时会在后台自动上传；任务或终端运行时会跳过当轮，'
+          '失败不弹通知，下个周期继续重试。'
+          '系统省电策略可能延后执行；应用被强行停止后，要重新打开应用才会恢复。',
+      items: [
+        SettingsSwitchRow(
+          label: '后台自动备份',
+          value: auto.enabled,
+          onChanged: active ? null : _backup.setAutoEnabled,
+        ),
+        if (auto.enabled)
+          SettingsPickerRow<int>(
+            label: '频率',
+            value: autoIntervalLabel(auto.intervalHours),
+            enabled: !active,
+            options: [
+              for (final hours in autoBackupIntervalHours)
+                PopupMenuItem(
+                  label: autoIntervalLabel(hours),
+                  checked: auto.intervalHours == hours,
+                  onPressed: () => _backup.setAutoIntervalHours(hours),
+                ),
+            ],
+          ),
+        if (warning.isNotEmpty) SettingsNote(text: warning),
+      ],
+    );
   }
 
   // -- cloud actions --------------------------------------------------------

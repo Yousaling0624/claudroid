@@ -2,6 +2,7 @@ package app.claudroid.backup
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Config validation runs only when an action starts (docs/BACKUP.md §4). */
@@ -56,6 +57,34 @@ class BackupConfigTest {
         )
         // A bare host:port is accepted and normalized later by S3Target.
         BackupConfig(kind = BackupKind.S3, s3 = base.copy(endpoint = "127.0.0.1:9000")).requireUsable()
+    }
+
+    @Test
+    fun `an old config without auto decodes to disabled daily`() {
+        val config = BackupWire.decodeConfig(
+            """{"kind":"WEBDAV","webdav":{"url":"https://dav.example.com/f.zip"}}""",
+        )
+        assertEquals(AutoBackupConfig(enabled = false, intervalHours = 24), config.auto)
+    }
+
+    @Test
+    fun `auto fields round trip with the frozen names`() {
+        val config = BackupConfig(
+            kind = BackupKind.GITHUB,
+            auto = AutoBackupConfig(enabled = true, intervalHours = 168),
+            github = GithubConfig(repo = "owner/name", token = "t"),
+        )
+        val json = BackupWire.configJson(config)
+        // Field names are the Dart-facing contract (docs/BACKUP.md §4).
+        assertTrue(json, json.contains("\"auto\":{\"enabled\":true,\"intervalHours\":168}"))
+        assertEquals(config, BackupWire.decodeConfig(json))
+        // An out-of-contract interval is preserved on the wire; AutoBackupPolicy
+        // falls back to 24 when scheduling (see AutoBackupPolicyTest).
+        assertEquals(
+            5,
+            BackupWire.decodeConfig("""{"auto":{"enabled":true,"intervalHours":5}}""")
+                .auto.intervalHours,
+        )
     }
 
     @Test
