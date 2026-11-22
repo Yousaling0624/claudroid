@@ -268,6 +268,7 @@ class RemoteHostManager(
             turnHosts[snapshot.turnId] = hostId
             activeTurnIds[hostId] = snapshot.turnId
             if (health.eventPoll) watchSseProgress(hostId, collector)
+            watchTurnStart(hostId, collector)
             if (isCancelled()) {
                 runCatching { client.cancelTurn(snapshot.turnId) }
                 return@withContext -2
@@ -487,6 +488,28 @@ class RemoteHostManager(
         }
     }
 
+    /**
+     * The daemon publishes `turn started` before answering the POST, so a healthy
+     * transport always reacts quickly. A host still on an old daemon (no polling) over
+     * a Quick Tunnel would otherwise spin for the full 30-minute cap: fail with an
+     * actionable message and stop the orphaned turn on the host.
+     */
+    private fun watchTurnStart(hostId: String, collector: TurnCollector) {
+        scope.launch {
+            delay(NO_EVENT_FAIL_MS)
+            if (!collectors.contains(collector) || collector.sawEvent()) return@launch
+            val turnId = activeTurnIds[hostId]
+            val profile = host(hostId)
+            if (turnId != null && profile != null) {
+                runCatching { clientFor(profile).cancelTurn(turnId) }
+            }
+            collector.fail(
+                "主机没有返回任何事件。请把主机上的 claudroid-bridge 升级到最新版" +
+                    "（Quick Tunnel 需要事件轮询），并检查隧道/网络后重试。",
+            )
+        }
+    }
+
     private fun resetSeq(hostId: String) = synchronized(seqLock) {
         lastSeq.remove(hostId)
     }
@@ -703,6 +726,9 @@ class RemoteHostManager(
         private const val SSE_FIRST_EVENT_GRACE_MS = 3_000L
         private const val SSE_STALL_CHECK_MS = 5_000L
         private const val SSE_STALL_MS = 20_000L
+
+        /** No event at all after this long means the transport is not working at all. */
+        private const val NO_EVENT_FAIL_MS = 25_000L
 
         private const val POLL_IDLE_DELAY_MS = 250L
         private const val POLL_RETRY_MS = 1_000L
