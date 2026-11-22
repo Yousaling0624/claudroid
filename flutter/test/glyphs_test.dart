@@ -24,4 +24,15 @@ void main() {
     expect(apex.dx, closeTo(end.dx, 0.01));
     expect(apex.dy, closeTo(end.dy, 0.01));
   });
+
+  test('share joins its nodes with line-role strokes', () {
+    // The action row is made of icon buttons painting `fill: 1`; a body-role
+    // join would fill into solid wedges instead of strokes.
+    for (final shape in AppGlyphs.share.shapes) {
+      if (shape is GlyphPolyline) {
+        expect(shape.role, GlyphRole.line);
+      }
+    }
+    expect(AppGlyphs.share.shapes.whereType<GlyphCircle>(), hasLength(3));
+  });
 }

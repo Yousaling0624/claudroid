@@ -246,6 +246,8 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "workspace.select" -> workspaceSelect(call)
             "workspace.rename" -> workspaceRename(call)
             "workspace.remove" -> workspaceRemove(call)
+            "share.text" -> shareText(call)
+            "share.image" -> shareImage(call)
             "terminal.info" -> terminalInfo()
             "terminal.start" -> terminalStart(call)
             "terminal.write" -> terminalWrite(call)
@@ -561,6 +563,20 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             }
         }
         val intent = if (share) Intent.createChooser(target, "分享 ${file.name}") else target
+        startExternal(intent) { e ->
+            if (share) "无法分享：${e.message}" else "没有能打开该文件的应用"
+        }
+        return ok()
+    }
+
+    // ---------------------------------------------------------------- sharing
+
+    /**
+     * Starts an Intent from the Activity when one is attached, otherwise from the app
+     * context with `NEW_TASK` (the Flutter page may be recreated while a share is
+     * pending). Launch failures become the caller's Chinese message.
+     */
+    private fun startExternal(intent: Intent, failure: (Exception) -> String) {
         val host = activity
         try {
             if (host != null) {
@@ -569,7 +585,59 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                 container.appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         } catch (e: Exception) {
-            throw IllegalStateException(if (share) "无法分享：${e.message}" else "没有能打开该文件的应用")
+            throw IllegalStateException(failure(e))
+        }
+    }
+
+    /** System share sheet for plain text; the text itself must never be logged. */
+    private fun shareText(call: MethodCall): Map<String, Any?> {
+        val text = call.str("text")?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("没有可分享的文字")
+        if (text.length > ShareFiles.MAX_TEXT_CHARS) {
+            throw IllegalArgumentException("文字太长，请分段分享")
+        }
+        val target = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startExternal(Intent.createChooser(target, "分享文字")) { e ->
+            "无法分享：${e.message ?: "系统未找到可用的分享应用"}"
+        }
+        return ok()
+    }
+
+    /**
+     * Stages Flutter-generated PNG bytes in `cacheDir/share/` and shares them through
+     * the existing FileProvider. Disk work runs on IO because a 24 MiB write would
+     * otherwise block the platform thread. Bytes are never logged.
+     */
+    private suspend fun shareImage(call: MethodCall): Map<String, Any?> {
+        val bytes = (call.arguments as? Map<*, *>)?.get("bytes") as? ByteArray
+        val file = withContext(Dispatchers.IO) {
+            if (bytes == null || bytes.isEmpty()) throw IllegalArgumentException("图片数据为空")
+            if (bytes.size > ShareFiles.MAX_IMAGE_BYTES) {
+                throw IllegalArgumentException("图片太大，无法分享")
+            }
+            val now = System.currentTimeMillis()
+            val dir = File(container.appContext.cacheDir, "share")
+            if (!dir.isDirectory && !dir.mkdirs()) {
+                throw IllegalStateException("无法创建分享缓存目录")
+            }
+            ShareFiles.prune(dir, now)
+            ShareFiles.newImageFile(dir, now).also { it.writeBytes(bytes) }
+        }
+        val uri = FileProvider.getUriForFile(
+            container.appContext,
+            "${container.appContext.packageName}.files",
+            file,
+        )
+        val target = Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startExternal(Intent.createChooser(target, "分享图片")) { e ->
+            "无法分享：${e.message ?: "系统未找到可用的分享应用"}"
         }
         return ok()
     }

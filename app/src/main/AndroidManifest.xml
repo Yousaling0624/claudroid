@@ -62,8 +62,9 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
-        <!-- Lets the workspace preview hand files to other apps without exposing the
-             whole private directory. Paths are limited to files/workspace. -->
+        <!-- Lets the workspace preview and the share bridge hand files to other apps
+             without exposing the whole private directory. Paths are limited to the
+             workspaces and the temporary share cache (res/xml/file_paths.xml). -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

@@ -14,6 +14,7 @@ import 'glyphs.dart';
 import 'layout.dart';
 import 'markdown.dart';
 import 'scaffold_bar.dart';
+import 'selection_menu.dart';
 import 'terminal_page.dart';
 import 'workspace_logic.dart';
 import 'workspace_switcher.dart';
@@ -774,6 +775,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
           padding: EdgeInsets.fromLTRB(18, 2, 18, 28 + context.bottomInset),
           // MarkdownText 只负责排版，选择域由这里统一提供。
           child: SelectionArea(
+            contextMenuBuilder: appSelectionMenu,
             child: MarkdownText(
               text,
               onLinkTap: (url) => unawaited(_openUrl(url)),
@@ -787,6 +789,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
           height: 1.45,
         );
     final selection = SelectionArea(
+      contextMenuBuilder: appSelectionMenu,
       child: Text(text.isEmpty ? '（空文件）' : text, style: style),
     );
     final body = _codeWrap

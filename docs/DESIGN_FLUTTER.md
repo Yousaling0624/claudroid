@@ -211,7 +211,9 @@ FlClash 的观感来自这些统一的行高。
 - 一条回答的全部正文共用一个 `SelectionArea`：`MarkdownText` 内部只用 `Text.rich`
   （表格、代码块也一样，代码块不再自建选择域），长按后的「全选」覆盖整条回复而不是
   单个段落。标题行、思考过程与工具卡留在这个区域外，避免嵌套选择域把全选截断。
-  工作区的 Markdown 预览同样由外层 `SelectionArea` 提供选择。
+  选择菜单由 `selection_menu.dart` 接管：按框架给出的顺序显示「复制 / 分享 / 全选」，
+  点「全选」后菜单会带着整段选区重新弹出，可以继续分享或复制，不会直接消失。
+  工作区的 Markdown 预览与文本预览同样由外层 `SelectionArea` 提供选择，并共用这个菜单。
 - 消息正文必须支持 emoji：`Markdown.inline` 的普通文字按整段缓冲后再建 `TextSpan`，
   不能逐 `codeUnit` 建 span——代理对（😀、👨‍👩‍👧‍👦 等）一旦被拆进两个 span，排版器
   会把两个半个字符都画成 U+FFFD。加行内样式时先 `flushPlain()`，保证标记两侧的
@@ -230,7 +232,13 @@ FlClash 的观感来自这些统一的行高。
   自动跟随与回到底部。顶栏菜单的「复制整段对话」用
   `conversation_export.dart` 导出纯文本（剥掉尾部 `Sources:` 与附件引用，跳过思考/工具）。
 - 每条回答结束后的动作行**只用图标键**，不显示文字：重新回答（仅最后一条）、复制（复制后
-  变勾）、分出新对话（`AppGlyphs.fork`，调 `chat.fork`）。tooltip 负责解释图标。
+  变勾）、分享（`AppGlyphs.share`，见下）、分出新对话（`AppGlyphs.fork`，调 `chat.fork`）。
+  tooltip 负责解释图标。分享键先弹出「分享文字 / 分享图片」：
+  - **分享文字**把可见正文（剥掉尾部 `Sources:` 与附件引用）交给系统分享面板，可存进便签
+    或聊天应用；
+  - **分享图片**把整条回复（标题行、思考/工具折叠与正文，不含动作行）渲染成一张四周留
+    20dp 页面底色背景的 PNG 长图，再交给系统分享面板。设备像素比上限 2x，任一边不超过
+    8192px、总像素不超过 1200 万；过长的回复提示改用分享文字。
 - 附件不出现在输入框文本里：`composer.dart` 与用户消息气泡都用 `attachments.dart` 的
   `AttachmentPreviewStrip` 显示缩略图（图片走 `workspace.preview` 字节，其他文件显示
   文件卡片 + 扩展名，可点 × 移除）；提交时才由 `composeChatPrompt` 把

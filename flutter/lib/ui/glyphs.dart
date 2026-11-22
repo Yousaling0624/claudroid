@@ -122,6 +122,22 @@ abstract final class AppGlyphs {
     ], role: GlyphRole.line),
   ]);
 
+  /// The Android share mark: one node feeding two, three filled rounds joined
+  /// by open lines. Icon buttons fill bodies, so the joins must stay line.
+  static const share = Glyph([
+    GlyphCircle(6, 12, 2),
+    GlyphCircle(18, 5.5, 2),
+    GlyphCircle(18, 18.5, 2),
+    GlyphPolyline([
+      GlyphVertex(9.2, 10.3),
+      GlyphVertex(14.8, 7.2),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(9.2, 13.7),
+      GlyphVertex(14.8, 16.8),
+    ], role: GlyphRole.line),
+  ]);
+
   /// Sliders rather than a gear: it stays legible at 14dp and needs no arcs.
   static const settings = Glyph([
     GlyphPolyline([

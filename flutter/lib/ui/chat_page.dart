@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
@@ -20,7 +21,9 @@ import 'layout.dart';
 import 'markdown.dart';
 import 'model_menu.dart';
 import 'permission_menu.dart';
+import 'reply_share.dart';
 import 'scaffold_bar.dart';
+import 'selection_menu.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_labels.dart';
 import 'sparkle_motion.dart';
@@ -489,12 +492,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _copy(ChatMessage message) async {
-    final text = message.blocks
-        .whereType<TextBlock>()
-        .map((b) => splitAttachmentRefs(WebSources.stripTrailingSources(b.text)).text)
-        .where((text) => text.trim().isNotEmpty)
-        .join('\n\n')
-        .trim();
+    final text = replyPlainText(message);
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
@@ -512,6 +510,24 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
     });
+  }
+
+  Future<void> _shareText(ChatMessage message) async {
+    final text = replyPlainText(message);
+    if (text.isEmpty) return;
+    try {
+      await widget.bridge.shareText(text);
+    } catch (error) {
+      widget.onToast('分享失败（$error）。', isError: true);
+    }
+  }
+
+  Future<void> _shareImage(Uint8List bytes) async {
+    try {
+      await widget.bridge.shareImage(bytes);
+    } catch (error) {
+      widget.onToast('分享失败（$error）。', isError: true);
+    }
   }
 
   Future<void> _openUrl(String url) async {
@@ -960,6 +976,9 @@ class _ChatPageState extends State<ChatPage> {
         onRegenerate: isLastAssistant ? () => _regenerate(message) : null,
         onFork: () => _fork(message),
         onCopy: () => _copy(message),
+        onShareText: () => _shareText(message),
+        onShareImage: _shareImage,
+        onToast: widget.onToast,
         onOpenUrl: _openUrl,
       ),
     );
@@ -1140,6 +1159,9 @@ class _MessageView extends StatelessWidget {
     this.onRegenerate,
     required this.onFork,
     required this.onCopy,
+    required this.onShareText,
+    required this.onShareImage,
+    required this.onToast,
     required this.onOpenUrl,
   });
 
@@ -1155,6 +1177,9 @@ class _MessageView extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final VoidCallback onFork;
   final VoidCallback onCopy;
+  final Future<void> Function() onShareText;
+  final Future<void> Function(Uint8List bytes) onShareImage;
+  final void Function(String text, {bool isError}) onToast;
   final ValueChanged<String> onOpenUrl;
 
   @override
@@ -1178,6 +1203,9 @@ class _MessageView extends StatelessWidget {
       onRegenerate: onRegenerate,
       onFork: onFork,
       onCopy: onCopy,
+      onShareText: onShareText,
+      onShareImage: onShareImage,
+      onToast: onToast,
       onOpenUrl: onOpenUrl,
     );
   }
@@ -1331,7 +1359,7 @@ final Expando<String> _visibleTextCache = Expando<String>('visibleText');
 String _visibleText(TextBlock block) =>
     _visibleTextCache[block] ??= WebSources.stripTrailingSources(block.text);
 
-class _AssistantMessage extends StatelessWidget {
+class _AssistantMessage extends StatefulWidget {
   const _AssistantMessage({
     required this.message,
     required this.model,
@@ -1344,6 +1372,9 @@ class _AssistantMessage extends StatelessWidget {
     this.onRegenerate,
     required this.onFork,
     required this.onCopy,
+    required this.onShareText,
+    required this.onShareImage,
+    required this.onToast,
     required this.onOpenUrl,
   });
 
@@ -1358,11 +1389,63 @@ class _AssistantMessage extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final VoidCallback onFork;
   final VoidCallback onCopy;
+  final Future<void> Function() onShareText;
+  final Future<void> Function(Uint8List bytes) onShareImage;
+  final void Function(String text, {bool isError}) onToast;
   final ValueChanged<String> onOpenUrl;
+
+  @override
+  State<_AssistantMessage> createState() => _AssistantMessageState();
+}
+
+class _AssistantMessageState extends State<_AssistantMessage> {
+  /// The snapshot region for "share as image": the header, folds and body in
+  /// one boundary, while the action row stays outside it.
+  final GlobalKey _captureKey = GlobalKey();
+
+  Future<void> _share() async {
+    final choice = await showReplyShareDialog(context);
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case ReplyShareChoice.text:
+        await widget.onShareText();
+      case ReplyShareChoice.image:
+        await _shareImage();
+    }
+  }
+
+  Future<void> _shareImage() async {
+    final boundary =
+        _captureKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null) {
+      widget.onToast('暂时无法生成图片，请重试。');
+      return;
+    }
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    if (replyImagePixelRatio(boundary.size, devicePixelRatio) == null) {
+      widget.onToast('这条回复太长，长图会超过上限。请改用「分享文字」。', isError: true);
+      return;
+    }
+    widget.onToast('正在生成图片…');
+    try {
+      final bytes = await captureReplyImage(
+        boundary: boundary,
+        devicePixelRatio: devicePixelRatio,
+        background: SurfaceLevel.page.colorOf(context.colorScheme),
+      );
+      if (!mounted) return;
+      await widget.onShareImage(bytes);
+    } catch (error) {
+      if (!mounted) return;
+      widget.onToast('生成图片失败（$error）。改用「分享文字」试试。', isError: true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
+    final message = widget.message;
     final blocks = message.blocks;
     final thinkingSegments = [
       for (final block in blocks)
@@ -1391,8 +1474,8 @@ class _AssistantMessage extends StatelessWidget {
     // settings label; old records have none and keep the previous behavior.
     final storedModel = message.model?.trim() ?? '';
     final signature = message.streaming
-        ? statusLine
-        : (storedModel.isNotEmpty ? storedModel : model);
+        ? widget.statusLine
+        : (storedModel.isNotEmpty ? storedModel : widget.model);
     final meta = [
       if (cost != null && cost > 0) '≈\$${cost.toStringAsFixed(4)}',
       if (duration.isNotEmpty) duration,
@@ -1401,94 +1484,105 @@ class _AssistantMessage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            GlyphIcon(AppGlyphs.sparkle, size: 18, color: scheme.primary),
-            const SizedBox(width: 8),
-            Text(
-              'Claude',
-              style: AppTextStyle.footnote.of(context, emphasized: true),
-            ),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                signature,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyle.footnote
-                    .of(context)
-                    .copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        // Thinking and tool calls stay out of the body until the first real
-        // answer text arrives: a live pill plus one activity line per tool.
-        AnimatedFold(
-          open: !hasOutput && message.streaming,
-          fade: false,
-          animate: message.streaming,
-          child: Padding(
-            padding: EdgeInsets.zero,
-            child: _ThinkingPill(
-              text: thinkingSegments.join('\n'),
-              active: true,
-              placeholder: thinkingSegments.isEmpty,
-              open: foldOpen('pill:${message.id}'),
-              onToggle: () => onToggleFold('pill:${message.id}'),
-            ),
-          ),
-        ),
-        AnimatedFold(
-          open: !hasOutput && message.streaming && tools.isNotEmpty,
-          fade: false,
-          animate: message.streaming,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Column(
-              children: [for (final tool in tools) _ActivityLine(tool)],
-            ),
-          ),
-        ),
-        AnimatedFold(
-          open:
-              (hasOutput || !message.streaming) &&
-              (thinkingSegments.isNotEmpty || tools.isNotEmpty),
-          fade: false,
-          animate: message.streaming,
-          child: _WorkDisclosure(
-            messageId: message.id,
-            blocks: blocks,
-            thinkingCount: thinkingSegments.length,
-            toolCount: tools.length,
-            errorCount: errorCount,
-            open: foldOpen('work:${message.id}'),
-            onToggle: () => onToggleFold('work:${message.id}'),
-            foldOpen: foldOpen,
-            onToggleFold: onToggleFold,
-            onOpenUrl: onOpenUrl,
-          ),
-        ),
-        // 一条回复的全部正文共用一个选择域：长按“全选”才能选中整段回答，
-        // 而不是每个段落各选一段。标题行、思考过程与工具卡留在这个区域外，
-        // 它们内部已有自己的选择域，嵌套进来反而会把全选截断。
-        SelectionArea(
+        RepaintBoundary(
+          key: _captureKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (var index = 0; index < blocks.length; index++)
-                _contentBlock(
-                  context,
-                  blocks[index],
-                  visibleTexts[index],
-                  message.streaming && index == lastTextIndex,
+              Row(
+                children: [
+                  GlyphIcon(AppGlyphs.sparkle, size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Claude',
+                    style: AppTextStyle.footnote.of(context, emphasized: true),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      signature,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyle.footnote
+                          .of(context)
+                          .copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // Thinking and tool calls stay out of the body until the first
+              // real answer text arrives: a live pill plus one activity line
+              // per tool.
+              AnimatedFold(
+                open: !hasOutput && message.streaming,
+                fade: false,
+                animate: message.streaming,
+                child: Padding(
+                  padding: EdgeInsets.zero,
+                  child: _ThinkingPill(
+                    text: thinkingSegments.join('\n'),
+                    active: true,
+                    placeholder: thinkingSegments.isEmpty,
+                    open: widget.foldOpen('pill:${message.id}'),
+                    onToggle: () => widget.onToggleFold('pill:${message.id}'),
+                  ),
                 ),
+              ),
+              AnimatedFold(
+                open: !hasOutput && message.streaming && tools.isNotEmpty,
+                fade: false,
+                animate: message.streaming,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    children: [for (final tool in tools) _ActivityLine(tool)],
+                  ),
+                ),
+              ),
+              AnimatedFold(
+                open:
+                    (hasOutput || !message.streaming) &&
+                    (thinkingSegments.isNotEmpty || tools.isNotEmpty),
+                fade: false,
+                animate: message.streaming,
+                child: _WorkDisclosure(
+                  messageId: message.id,
+                  blocks: blocks,
+                  thinkingCount: thinkingSegments.length,
+                  toolCount: tools.length,
+                  errorCount: errorCount,
+                  open: widget.foldOpen('work:${message.id}'),
+                  onToggle: () => widget.onToggleFold('work:${message.id}'),
+                  foldOpen: widget.foldOpen,
+                  onToggleFold: widget.onToggleFold,
+                  onOpenUrl: widget.onOpenUrl,
+                ),
+              ),
+              // 一条回复的全部正文共用一个选择域：长按“全选”才能选中整段回答，
+              // 而不是每个段落各选一段。标题行、思考过程与工具卡留在这个区域外，
+              // 它们内部已有自己的选择域，嵌套进来反而会把全选截断。
+              SelectionArea(
+                contextMenuBuilder: appSelectionMenu,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var index = 0; index < blocks.length; index++)
+                      _contentBlock(
+                        context,
+                        blocks[index],
+                        visibleTexts[index],
+                        message.streaming && index == lastTextIndex,
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-        if (!message.streaming && (meta.isNotEmpty || showActions))
+        if (!message.streaming && (meta.isNotEmpty || widget.showActions))
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Row(
@@ -1504,24 +1598,32 @@ class _AssistantMessage extends StatelessWidget {
                   )
                 else
                   const Spacer(),
-                if (showActions && !running && onRegenerate != null)
+                if (widget.showActions &&
+                    !widget.running &&
+                    widget.onRegenerate != null)
                   IconButton(
-                    onPressed: onRegenerate,
+                    onPressed: widget.onRegenerate,
                     icon: const GlyphIcon(AppGlyphs.refresh, size: 18),
                     tooltip: '重新回答',
                   ),
-                if (showActions && copyText.isNotEmpty)
+                if (widget.showActions && copyText.isNotEmpty)
                   IconButton(
-                    onPressed: onCopy,
+                    onPressed: widget.onCopy,
                     icon: GlyphIcon(
-                      copied ? Glyphs.check : Glyphs.copy,
+                      widget.copied ? Glyphs.check : Glyphs.copy,
                       size: 18,
                     ),
-                    tooltip: copied ? '已复制' : '复制',
+                    tooltip: widget.copied ? '已复制' : '复制',
                   ),
-                if (showActions)
+                if (widget.showActions && copyText.isNotEmpty)
                   IconButton(
-                    onPressed: onFork,
+                    onPressed: _share,
+                    icon: const GlyphIcon(AppGlyphs.share, size: 18),
+                    tooltip: '分享',
+                  ),
+                if (widget.showActions)
+                  IconButton(
+                    onPressed: widget.onFork,
                     icon: const GlyphIcon(AppGlyphs.fork, size: 18),
                     tooltip: '分出新对话',
                   ),
@@ -1549,7 +1651,7 @@ class _AssistantMessage extends StatelessWidget {
           // 正文用系统无衬线：中文衬线的粗体在 Android 上会回退到黑体，
           // 正文出现「细宋体 + 粗黑体」混排；无衬线能保证中英文与字重一致。
           serif: false,
-          onLinkTap: onOpenUrl,
+          onLinkTap: widget.onOpenUrl,
         ),
       );
     }

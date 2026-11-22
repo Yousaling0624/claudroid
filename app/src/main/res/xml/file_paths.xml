@@ -4,4 +4,6 @@
     <files-path name="workspace" path="workspace/" />
     <!-- Extra switchable workspaces created from the UI. -->
     <files-path name="workspaces" path="workspaces/" />
+    <!-- Temporary PNGs staged by share.image; pruned to the newest 10 files / 24 h. -->
+    <cache-path name="share" path="share/" />
 </paths>

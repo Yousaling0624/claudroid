@@ -271,9 +271,16 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 | `app.info` | — | `{ok, versionName, versionCode}` | `BuildConfig` |
 | `app.release` | — | `{ok, releaseJson}` | `ReleaseCheck.fetch()` + `ReleaseCheck.status`；网络失败 `ok:false` |
 | `app.openUrl` | `url` | `{ok}` | 只接受 http/https，`Intent.ACTION_VIEW` |
+| `share.text` | `text: String` | `{ok}` | `ACTION_SEND` + `text/plain` 系统分享面板；空白或超过 20 万字符返回中文错误 |
+| `share.image` | `bytes: ByteArray` | `{ok}` | 写入 `cacheDir/share/` 后经 FileProvider 以 `image/png` 分享；空或超过 24 MiB 返回中文错误 |
 | `attachments.pick` | — | `{ok, relativePathsJson, cancelled}` | 系统 `OpenDocument` 选择器 + `Attachments.import`，复制进**当前活动工作区**的 `attachments/<name>` |
 | `logs.read` | — | `{ok, linesJson}` | `Logx.lines.value` |
 | `logs.clear` | — | `{ok}` | `Logx.clear()` |
+
+`share.image` 的 PNG 由 Flutter 生成，Kotlin 在 `Dispatchers.IO` 写入
+`cacheDir/share/claudroid-<timestamp>.png`，经现有 `${applicationId}.files` FileProvider 的
+`<cache-path name="share" path="share/" />` 授权读取；每次分享前清理 24 小时前或最近 10 个之外的文件。
+上限为图片 24 MiB、文字 20 万字符，分享内容本身绝不写入日志。
 
 `releaseJson`：
 

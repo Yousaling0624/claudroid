@@ -107,6 +107,13 @@ class Bridge {
 
   Future<void> openUrl(String url) => _call('app.openUrl', {'url': url});
 
+  /// Opens the system share sheet with plain text, e.g. into a note app.
+  Future<void> shareText(String text) => _call('share.text', {'text': text});
+
+  /// Opens the system share sheet with a PNG the UI rendered.
+  Future<void> shareImage(Uint8List bytes) =>
+      _call('share.image', {'bytes': bytes});
+
   Future<({List<ProviderPreset> presets, String? activeId})>
       listProviders() async {
     final map = await _call('providers.list');

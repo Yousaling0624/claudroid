@@ -271,6 +271,7 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 | 安装报「rootfs 下载失败（官方源与镜像均不可达）」 | Docker Hub 与 DaoCloud 镜像都没连上，或返回字节的 sha256 不符。换网络/代理后重试。 |
 | 请求超时 | jail 里 DNS 不通：PRoot 会自动写入当前网络的 DNS；root 模式检查 `/data/adb/claudroid/etc/resolv.conf`，或把 Base URL 换成 IP。 |
 | WebFetch 连接网页失败/超时（VPN 已开） | 按应用分流的 VPN 不覆盖被排除的应用：把本应用加入 VPN 的分流列表，或到 **设置 → Claude Code 引擎 → 网络代理** 填 VPN 的 HTTP 代理（Clash 默认 `http://127.0.0.1:7890`）。顺带点一次「刷新网络配置」。 |
+| 想把回答保存成图片或便签 | 回复下方的分享键可选「分享图片」（生成带留白的长图）或「分享文字」（系统分享面板）；长按选中文字后的菜单里也能直接分享。 |
 | `--dangerously-skip-permissions cannot be used with root/sudo privileges` | 官方在 uid 0 下禁止「完全放行」。App 会自动注入 `IS_SANDBOX=1`；若仍出现，把权限模式改成「默认（只读）」或「只读规划」。 |
 | 一直停在升级进度不动 | 到 registry.npmjs.org 的网络不稳：会自动重试 3 次并续传；仍失败可检查网络或代理。 |
 | OpenAI 兼容端点 400/404 | Base URL 要填到 `/v1`（代理会补 `/chat/completions`）；确认模型名和接口支持 tool_calls。 |
