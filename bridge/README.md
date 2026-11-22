@@ -182,10 +182,11 @@ bash bridge/deploy/install.sh      # 复制单元与脚本、设置 tunnel.mode=
 journalctl --user -u claudroid-bridge -u claudroid-bridge-tunnel -u claudroid-bridge-update -f
 ```
 
-`install.sh` 默认把 `tunnel.mode` 改为 `external` 并备份原配置；想保留手写的 named/quick
-配置时用 `CLAUDROID_DEPLOY_KEEP_TUNNEL=1 bash bridge/deploy/install.sh`。quick tunnel 地址
-在 daemon 升级时保持不变，但连接器或主机重启后会变化，届时用 `claudroid-bridge pair`
-重新出码；需要完全固定的地址请改用 named tunnel。
+`install.sh` 默认把 `off` / `quick` / `external` 配置改为 `external` 并备份原配置；检测到
+`named` 固定隧道时会保留（要强制改回外部隧道用 `CLAUDROID_DEPLOY_FORCE_EXTERNAL=1`，完全不动
+现有隧道配置用 `CLAUDROID_DEPLOY_KEEP_TUNNEL=1`）。quick tunnel 地址在 daemon 升级时保持
+不变，但连接器或主机重启后会变化，届时用 `claudroid-bridge pair` 重新出码；named tunnel
+地址完全固定。
 
 ## 安全模型
 

@@ -63,8 +63,20 @@ if [ ! -f "$config_file" ]; then
 fi
 
 if [ "${CLAUDROID_DEPLOY_KEEP_TUNNEL:-0}" != "1" ]; then
-  cp -a "$config_file" "$config_file.before-deploy"
-  node - "$config_file" "$url_file" <<'NODE'
+  current_tunnel_mode="$(node -e '
+    const fs = require("node:fs");
+    try {
+      const config = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(config.tunnel?.mode ?? "off");
+    } catch {
+      process.stdout.write("off");
+    }
+  ' "$config_file")"
+  if [ "$current_tunnel_mode" = "named" ] && [ "${CLAUDROID_DEPLOY_FORCE_EXTERNAL:-0}" != "1" ]; then
+    log "检测到 named 隧道，保留现有配置（如需改回外部隧道：CLAUDROID_DEPLOY_FORCE_EXTERNAL=1）"
+  else
+    cp -a "$config_file" "$config_file.before-deploy"
+    node - "$config_file" "$url_file" <<'NODE'
 const [file, publicUrlFile] = process.argv.slice(2);
 const fs = require("node:fs");
 const path = require("node:path");
@@ -81,7 +93,8 @@ const tmp = `${file}.tmp`;
 fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 fs.renameSync(tmp, file);
 NODE
-  log "隧道模式已设为 external，公网地址文件：$url_file"
+    log "隧道模式已设为 external，公网地址文件：$url_file"
+  fi
 fi
 
 systemctl --user daemon-reload
