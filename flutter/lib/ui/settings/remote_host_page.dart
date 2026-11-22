@@ -292,7 +292,9 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
     final url = tunnel.url ?? '';
     return generateSection(
       title: '隧道',
-      footer: '临时隧道的公网地址每次重启都会变化；长期使用请在主机上配置固定隧道。',
+      footer: tunnel.mode == 'external'
+          ? '隧道由主机上的部署服务（systemd）维护，升级守护进程不会改变公网地址。'
+          : '临时隧道的公网地址每次重启都会变化；长期使用请在主机上配置固定隧道。',
       items: [
         SettingsInfoRow(label: '状态', value: tunnel.stateLabel),
         SettingsInfoRow(label: '模式', value: tunnel.modeLabel),
@@ -304,45 +306,51 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
           ),
         if ((tunnel.error ?? '').isNotEmpty)
           SettingsNote(text: tunnel.error!, isError: true),
+        if (tunnel.mode == 'external')
+          const SettingsNote(
+            text: '该隧道的启停由主机上的部署服务负责，App 内不提供开关。',
+          ),
         if (url.isNotEmpty)
           SettingsActionRow(
             label: '打开公网地址',
             glyph: AppGlyphs.globe,
             onPressed: () => _openTunnelUrl(host),
           ),
-        if (tunnel.starting)
-          SettingsActionRow(
-            label: '正在启动隧道…',
-            glyph: AppGlyphs.globe,
-            busy: true,
-            onPressed: null,
-          )
-        else if (tunnel.up)
-          SettingsActionRow(
-            label: _busy('tunnel') ? '正在重启…' : '重启隧道',
-            glyph: AppGlyphs.refresh,
-            busy: _busy('tunnel'),
-            onPressed: _busyAction == null
-                ? () => _tunnel(host, 'restart')
-                : null,
-          )
-        else
-          SettingsActionRow(
-            label: _busy('tunnel') ? '正在开启…' : '开启隧道',
-            glyph: AppGlyphs.globe,
-            busy: _busy('tunnel'),
-            onPressed: _busyAction == null
-                ? () => _tunnel(host, 'start')
-                : null,
-          ),
-        if (tunnel.up)
-          SettingsActionRow(
-            label: '停止隧道',
-            glyph: Glyphs.close,
-            onPressed: _busyAction == null
-                ? () => _tunnel(host, 'stop')
-                : null,
-          ),
+        if (tunnel.mode != 'external') ...[
+          if (tunnel.starting)
+            SettingsActionRow(
+              label: '正在启动隧道…',
+              glyph: AppGlyphs.globe,
+              busy: true,
+              onPressed: null,
+            )
+          else if (tunnel.up)
+            SettingsActionRow(
+              label: _busy('tunnel') ? '正在重启…' : '重启隧道',
+              glyph: AppGlyphs.refresh,
+              busy: _busy('tunnel'),
+              onPressed: _busyAction == null
+                  ? () => _tunnel(host, 'restart')
+                  : null,
+            )
+          else
+            SettingsActionRow(
+              label: _busy('tunnel') ? '正在开启…' : '开启隧道',
+              glyph: AppGlyphs.globe,
+              busy: _busy('tunnel'),
+              onPressed: _busyAction == null
+                  ? () => _tunnel(host, 'start')
+                  : null,
+            ),
+          if (tunnel.up)
+            SettingsActionRow(
+              label: '停止隧道',
+              glyph: Glyphs.close,
+              onPressed: _busyAction == null
+                  ? () => _tunnel(host, 'stop')
+                  : null,
+            ),
+        ],
       ],
     );
   }

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { ensureCloudflared } from "./cloudflared.js";
 import type { TunnelConfig } from "./config.js";
 import type { TunnelStatus } from "./types.js";
@@ -29,6 +30,9 @@ function quickTunnelUrl(line: string): string | undefined {
   return line.match(QUICK_TUNNEL_URL)?.[0];
 }
 
+/** How often `external` mode re-reads the URL published by the connector. */
+export const EXTERNAL_URL_POLL_MS = 3_000;
+
 /**
  * Supervises a cloudflared process. The connector must run on the host because it
  * is what exposes the host's loopback bridge; the phone only stores the public URL.
@@ -44,6 +48,7 @@ export class TunnelManager {
   private resolvedBinary: string | null = null;
   private attempt = 0;
   private restartTimer: NodeJS.Timeout | null = null;
+  private externalTimer: NodeJS.Timeout | null = null;
   private lastOutput = "";
   private readonly spawnFn: SpawnFn;
   private readonly ensureBinary: EnsureBinaryFn;
@@ -70,6 +75,14 @@ export class TunnelManager {
       this.set({ state: "off", url: undefined, error: undefined });
       return;
     }
+    if (this.config.mode === "external") {
+      // The connector lives outside this process; only its published URL is
+      // owned here. Polling keeps the advertised address fresh across daemon
+      // upgrades and connector restarts.
+      this.stopped = false;
+      if (!this.externalTimer) this.refreshExternal();
+      return;
+    }
     if (this.config.mode === "named" && (!this.config.token || !this.config.hostname)) {
       this.set({
         state: "error",
@@ -90,6 +103,10 @@ export class TunnelManager {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    if (this.externalTimer) {
+      clearTimeout(this.externalTimer);
+      this.externalTimer = null;
+    }
     if (this.child) {
       try {
         this.child.kill("SIGTERM");
@@ -104,6 +121,42 @@ export class TunnelManager {
   restart(): void {
     this.stop();
     this.start();
+  }
+
+  /** Reads and validates the URL an external connector published. */
+  private refreshExternal(): void {
+    if (this.stopped) return;
+    const file = this.config.publicUrlFile;
+    let url: string | undefined;
+    let error: string | undefined;
+    if (!file) {
+      error = "external 模式需要 tunnel.publicUrlFile，由外部隧道写入公网地址。";
+    } else {
+      try {
+        const candidate = readFileSync(file, "utf8").trim().split(/\s+/)[0] ?? "";
+        const parsed = new URL(candidate);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          error = `公网地址不是 http(s) URL：${candidate.slice(0, 200)}`;
+        } else {
+          url = candidate;
+        }
+      } catch {
+        error = `公网地址尚未就绪：${file}。外部隧道写入后会自动生效。`;
+      }
+    }
+    const state: TunnelStatus["state"] = url ? "up" : "starting";
+    if (
+      this.status.state !== state ||
+      this.status.url !== url ||
+      (this.status.error ?? "") !== (error ?? "")
+    ) {
+      this.set({ state, url, error });
+    }
+    this.externalTimer = setTimeout(() => {
+      this.externalTimer = null;
+      this.refreshExternal();
+    }, EXTERNAL_URL_POLL_MS);
+    this.externalTimer.unref();
   }
 
   private launch(): void {

@@ -38,6 +38,7 @@ interface CliOptions {
   tunnel?: TunnelMode;
   tunnelToken?: string;
   tunnelHostname?: string;
+  tunnelPublicUrlFile?: string;
   allowBypass?: boolean;
   help: boolean;
   version: boolean;
@@ -98,14 +99,24 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
     } else if (arg === "--tunnel") {
       const value = nextValue(arg);
-      if (value !== "off" && value !== "quick" && value !== "named") {
-        throw new Error("--tunnel 只能是 off/quick/named。");
+      if (
+        value !== "off" &&
+        value !== "quick" &&
+        value !== "named" &&
+        value !== "external"
+      ) {
+        throw new Error("--tunnel 只能是 off/quick/named/external。");
       }
       options.tunnel = value;
     } else if (arg.startsWith("--tunnel=")) {
       const value = arg.slice("--tunnel=".length);
-      if (value !== "off" && value !== "quick" && value !== "named") {
-        throw new Error("--tunnel 只能是 off/quick/named。");
+      if (
+        value !== "off" &&
+        value !== "quick" &&
+        value !== "named" &&
+        value !== "external"
+      ) {
+        throw new Error("--tunnel 只能是 off/quick/named/external。");
       }
       options.tunnel = value;
       index += 1;
@@ -118,6 +129,11 @@ function parseArgs(argv: string[]): CliOptions {
       options.tunnelHostname = nextValue(arg);
     } else if (arg.startsWith("--tunnel-hostname=")) {
       options.tunnelHostname = arg.slice("--tunnel-hostname=".length);
+      index += 1;
+    } else if (arg === "--tunnel-public-url-file") {
+      options.tunnelPublicUrlFile = nextValue(arg);
+    } else if (arg.startsWith("--tunnel-public-url-file=")) {
+      options.tunnelPublicUrlFile = arg.slice("--tunnel-public-url-file=".length);
       index += 1;
     } else if (arg === "--allow-bypass") {
       options.allowBypass = true;
@@ -147,6 +163,9 @@ function applyOverrides(base: BridgeConfig, options: CliOptions): BridgeConfig {
   if (options.tunnel) config.tunnel.mode = options.tunnel;
   if (options.tunnelToken) config.tunnel.token = options.tunnelToken;
   if (options.tunnelHostname) config.tunnel.hostname = options.tunnelHostname;
+  if (options.tunnelPublicUrlFile) {
+    config.tunnel.publicUrlFile = resolve(options.tunnelPublicUrlFile);
+  }
   if (options.allowBypass) config.allowBypassPermissions = true;
   return config;
 }
@@ -350,6 +369,25 @@ function printDoctor(options: CliOptions): void {
     console.error("✗ named 隧道需要 tunnel.token 与 tunnel.hostname");
     failed = true;
   }
+  if (config.tunnel.mode === "external") {
+    if (!config.tunnel.publicUrlFile) {
+      console.error("✗ external 隧道需要 tunnel.publicUrlFile（由外部服务写入公网地址）");
+      failed = true;
+    } else {
+      try {
+        const url = readFileSync(config.tunnel.publicUrlFile, "utf8").trim();
+        console.log(
+          url
+            ? `✓ 外部隧道地址: ${url}`
+            : `! 公网地址文件为空：${config.tunnel.publicUrlFile}（隧道就绪后会自动写入）`,
+        );
+      } catch {
+        console.log(
+          `! 公网地址文件尚未生成：${config.tunnel.publicUrlFile}（外部隧道就绪后会写入）`,
+        );
+      }
+    }
+  }
   if (failed) process.exitCode = 1;
 }
 
@@ -412,9 +450,10 @@ start 选项:
   --bind <addr>              监听地址（默认 127.0.0.1）
   --port <n>                 监听端口（默认 8787）
   --root <dir>               工作区根目录，可重复
-  --tunnel off|quick|named   Cloudflare Tunnel 模式
+  --tunnel off|quick|named|external  Cloudflare Tunnel 模式
   --tunnel-token <token>     named 隧道 token
   --tunnel-hostname <host>   named 隧道的公网域名
+  --tunnel-public-url-file <path>  external 模式读取公网地址的文件
   --allow-bypass             允许 App 请求 bypassPermissions（默认关闭）
 
 隧道首次启用时会自动下载并校验 cloudflared；tunnel.cloudflaredPath 可覆盖。

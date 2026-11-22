@@ -20,7 +20,7 @@ class RemoteTunnelStatus {
     this.changedAt = 0,
   });
 
-  /// `off`, `quick` or `named`.
+  /// `off`, `quick`, `named` or `external`.
   final String mode;
 
   /// `off`, `starting`, `up`, `error` or `stopped`.
@@ -35,6 +35,7 @@ class RemoteTunnelStatus {
   String get modeLabel => switch (mode) {
         'quick' => '临时隧道',
         'named' => '固定隧道',
+        'external' => '外部隧道',
         _ => '未开启',
       };
 

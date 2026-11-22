@@ -1,0 +1,16 @@
+[Unit]
+Description=claudroid-bridge Cloudflare Quick Tunnel
+Documentation=https://github.com/Yousaling0624/claudroid/tree/main/bridge
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=/usr/bin/env node %h/.local/lib/claudroid-bridge-deploy/quick-tunnel.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

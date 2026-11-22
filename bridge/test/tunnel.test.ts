@@ -1,7 +1,25 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
-import { TunnelManager, type TunnelChild } from "../src/tunnel.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { EXTERNAL_URL_POLL_MS, TunnelManager, type TunnelChild } from "../src/tunnel.js";
 import type { TunnelStatus } from "../src/types.js";
+
+const tempDirs: string[] = [];
+
+function externalUrlFile(content?: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "claudroid-bridge-test-"));
+  tempDirs.push(dir);
+  const file = join(dir, "public-url");
+  if (content !== undefined) writeFileSync(file, content);
+  return file;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 class FakeChild extends EventEmitter {
   readonly stdout = new EventEmitter();
@@ -18,7 +36,7 @@ class FakeChild extends EventEmitter {
 const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 function setup(
-  mode: "quick" | "named" | "off",
+  mode: "quick" | "named" | "off" | "external",
   extra: Record<string, string> = {},
   ensureBinary: () => Promise<string> = async () => "cloudflared",
 ) {
@@ -136,6 +154,55 @@ describe("TunnelManager", () => {
     const { manager } = setup("off");
     manager.start();
     expect(manager.current().state).toBe("off");
+  });
+
+  it("advertises the URL published by an external connector without spawning", () => {
+    const file = externalUrlFile("https://steady-bridge.trycloudflare.com\n");
+    const harness = setup("external", { publicUrlFile: file });
+    harness.manager.start();
+    expect(harness.manager.current()).toMatchObject({
+      mode: "external",
+      state: "up",
+      url: "https://steady-bridge.trycloudflare.com",
+    });
+    expect(harness.spawned).toBe(0);
+    harness.manager.stop();
+    expect(harness.manager.current().state).toBe("off");
+    expect(harness.manager.current().url).toBeUndefined();
+  });
+
+  it("picks up an external URL written after startup", () => {
+    vi.useFakeTimers();
+    const file = externalUrlFile();
+    const harness = setup("external", { publicUrlFile: file });
+    harness.manager.start();
+    expect(harness.manager.current().state).toBe("starting");
+    expect(harness.manager.current().error).toMatch(/尚未就绪/);
+    writeFileSync(file, "https://late-bridge.trycloudflare.com\n");
+    vi.advanceTimersByTime(EXTERNAL_URL_POLL_MS);
+    expect(harness.manager.current()).toMatchObject({
+      state: "up",
+      url: "https://late-bridge.trycloudflare.com",
+    });
+    expect(harness.manager.current().error).toBeUndefined();
+    harness.manager.stop();
+  });
+
+  it("explains that external mode needs a public URL file", () => {
+    const harness = setup("external");
+    harness.manager.start();
+    expect(harness.manager.current().state).toBe("starting");
+    expect(harness.manager.current().error).toMatch(/publicUrlFile/);
+    harness.manager.stop();
+  });
+
+  it("rejects a non-HTTP external URL", () => {
+    const file = externalUrlFile("file:///etc/passwd\n");
+    const harness = setup("external", { publicUrlFile: file });
+    harness.manager.start();
+    expect(harness.manager.current().state).toBe("starting");
+    expect(harness.manager.current().error).toMatch(/http/);
+    harness.manager.stop();
   });
 
   it("spawns the binary returned by the installer", async () => {

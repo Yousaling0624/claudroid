@@ -87,12 +87,13 @@ claudroid-bridge devices revoke <id>  # 吊销设备令牌
 | `maxUploadBytes` | 单次上传 / 下载与请求体的大小上限 |
 | `allowBypassPermissions` | 默认 `false`；只有信任 App 侧操作时才允许 `bypassPermissions` |
 | `claudeExecutable` | 可选；不填时使用 Agent SDK 随包的 CLI |
-| `tunnel.mode` | `off` / `quick` / `named` |
+| `tunnel.mode` | `off` / `quick` / `named` / `external`。`external` 表示 cloudflared 由 daemon 之外的服务监督，daemon 只播报公网地址 |
 | `tunnel.token` / `hostname` | named 隧道必填 |
+| `tunnel.publicUrlFile` | external 模式必填；外部隧道把公网 URL 写入该文件，daemon 每 3 秒读取一次 |
 | `tunnel.cloudflaredPath` | 可选；强制指定 cloudflared。留空时依次尝试 WSL/Windows 侧连接器 → 托管副本 → `PATH`，都没有才自动下载 |
 
 `start` 的等价参数：`--bind`、`--port`、`--root`（可重复）、`--tunnel`、
-`--tunnel-token`、`--tunnel-hostname`、`--allow-bypass`、`--config`。
+`--tunnel-token`、`--tunnel-hostname`、`--tunnel-public-url-file`、`--allow-bypass`、`--config`。
 
 ## Cloudflare Tunnel
 
@@ -104,6 +105,10 @@ claudroid-bridge start --tunnel quick
 claudroid-bridge start --tunnel named \
   --tunnel-token <token> \
   --tunnel-hostname claude.example.com
+
+# external：cloudflared 由外部服务（如 systemd）监督，daemon 只读取公网地址
+claudroid-bridge start --tunnel external \
+  --tunnel-public-url-file ~/.config/claudroid-bridge/public-url
 ```
 
 **cloudflared 无需手动安装。** daemon 按以下顺序选择连接器：`tunnel.cloudflaredPath` →
@@ -120,6 +125,11 @@ Windows 网络（Windows 与 WSL 默认互通 localhost）。若想强制指定�
 daemon 负责启动与监督 `cloudflared`，异常退出按指数退避重启；隧道状态与公网地址通过
 `/v1/tunnel` 和 SSE 推给 App，也可以在手机的主机详情页开关。quick 地址会变化，长期使用
 请配置 named tunnel。
+
+`external` 模式不启动 cloudflared：外部服务把 `https://…` 写入 `tunnel.publicUrlFile`，
+daemon 轮询并把它并入配对地址与 `/v1/tunnel`。这样升级 daemon（npm 重装 + 重启）不会
+改变公网地址，手机不需要重新配对；外部连接器自身重启时地址仍会变化，需要重新配对或改用
+named tunnel。`bridge/deploy/` 的 `claudroid-bridge-tunnel.service` 就是这样一个外部服务。
 
 Quick Tunnel **不支持 SSE**（Cloudflare 边缘会缓冲 `text/event-stream`）。App 在回合开始后
 收不到事件时会自动改用 `GET /v1/events/batch?since=<seq>&timeout=<ms>` 长轮询同一事件总线；
@@ -147,6 +157,35 @@ WantedBy=default.target
 
 `claudroid-bridge start` 在前台运行并处理 `SIGINT` / `SIGTERM`。配对码写入
 `~/.config/claudroid-bridge/pair.json`（0600），需要时用 `claudroid-bridge pair` 查看。
+
+### 自动部署（CD）
+
+[`deploy/`](deploy/) 提供可重复安装的 systemd **用户**单元：
+
+| 单元 | 作用 |
+| --- | --- |
+| `claudroid-bridge.service` | 前台 daemon，失败自动重启 |
+| `claudroid-bridge-tunnel.service` | 在 daemon 之外运行 quick tunnel，地址写入 `publicUrlFile` |
+| `claudroid-bridge-update.timer` | 每 5 分钟检查 npm `latest`；有新版本就安装并重启 daemon |
+
+```bash
+loginctl enable-linger "$USER"     # 注销后仍保持服务运行（只需一次）
+bash bridge/deploy/install.sh      # 复制单元与脚本、设置 tunnel.mode=external、启动服务
+```
+
+安装脚本会把 `update.sh` / `quick-tunnel.mjs` 放到
+`~/.local/lib/claudroid-bridge-deploy/`；修改 `deploy/` 后重新运行 `install.sh` 即可。
+`npm test` 等工作流不受影响：CI 推到 npm 的版本会在一个轮询周期内自动落到装了这套单元的
+主机上。日志：
+
+```bash
+journalctl --user -u claudroid-bridge -u claudroid-bridge-tunnel -u claudroid-bridge-update -f
+```
+
+`install.sh` 默认把 `tunnel.mode` 改为 `external` 并备份原配置；想保留手写的 named/quick
+配置时用 `CLAUDROID_DEPLOY_KEEP_TUNNEL=1 bash bridge/deploy/install.sh`。quick tunnel 地址
+在 daemon 升级时保持不变，但连接器或主机重启后会变化，届时用 `claudroid-bridge pair`
+重新出码；需要完全固定的地址请改用 named tunnel。
 
 ## 安全模型
 
@@ -185,6 +224,7 @@ src/cloudflared.ts  固定版本下载、sha256 校验与托管路径
 src/config.ts       配置文件读写与归一化
 src/events.ts       SSE 事件总线
 test/               vitest；用假 runner 覆盖协议、权限、重连与路径逃逸
+deploy/             systemd 用户单元、quick tunnel 监督脚本与 npm 自动部署
 ```
 
 ## 发布新版本
@@ -214,6 +254,9 @@ CI 取 npm 上 `latest` 的下一个 patch（如 `0.1.2` → `0.1.3`）；如果
 更高（手动改成 `0.2.0`），就用本地版本。构建时会把同一版本写进 `src/version.ts`，
 因此**不需要手动改版本号，也不要把 CI 的版本改动提交回仓库**。同一提交重复运行工作流时，
 CI 会比对 npm 的 `gitHead` 并跳过，不会重复发布。
+
+用 [`deploy/`](deploy/) 部署的主机会在发布后的一个轮询周期（约 5 分钟）内自动安装新版本并
+重启 daemon，无需在该主机上执行任何命令。
 
 ### 紧急手动发布
 

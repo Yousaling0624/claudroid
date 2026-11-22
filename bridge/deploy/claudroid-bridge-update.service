@@ -1,0 +1,10 @@
+[Unit]
+Description=安装最新 claudroid-bridge 并重启守护进程
+Documentation=https://github.com/Yousaling0624/claudroid/tree/main/bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %h/.local/lib/claudroid-bridge-deploy/update.sh
+TimeoutStartSec=10min

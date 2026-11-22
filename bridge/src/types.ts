@@ -151,7 +151,13 @@ export type PublishableEvent =
   | Omit<HostEvent, "seq">
   | Omit<TunnelEvent, "seq">;
 
-export type TunnelMode = "off" | "quick" | "named";
+/**
+ * `external` means the connector is supervised outside this process (for
+ * example by a systemd unit): the daemon only advertises the URL published in
+ * `tunnel.publicUrlFile`, so upgrades can restart the daemon without rotating
+ * the public address.
+ */
+export type TunnelMode = "off" | "quick" | "named" | "external";
 
 export interface TunnelStatus {
   mode: TunnelMode;

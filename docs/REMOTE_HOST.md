@@ -192,6 +192,16 @@ RestartSec=3
 WantedBy=default.target
 ```
 
+更省事的方式是使用 [`bridge/deploy/`](../bridge/deploy/)：它为当前用户安装
+`claudroid-bridge.service`、独立的外部 quick tunnel 与 npm 自动部署定时器。安装后，
+`bridge/src/**` 合并到 `main` 触发的新 npm 版本会在约 5 分钟内自动装到主机并重启 daemon；
+隧道在 daemon 之外运行，因此升级不会改变手机保存的公网地址。
+
+```bash
+loginctl enable-linger "$USER"
+bash bridge/deploy/install.sh
+```
+
 ## 8. 排障
 
 | 现象 | 处理 |

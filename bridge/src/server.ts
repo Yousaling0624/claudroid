@@ -359,6 +359,17 @@ async function handle(
     if (method === "POST") {
       const body = (await readJson(req, 64 * 1024)) as { action?: unknown } | null;
       const action = body?.action;
+      if (action !== "start" && action !== "stop" && action !== "restart") {
+        throw new HttpError("action 必须是 start/stop/restart。", 400);
+      }
+      if (deps.config.tunnel.mode === "external") {
+        // The connector is supervised outside the daemon; pretending to stop
+        // it here would leave the public endpoint up while reporting it down.
+        throw new HttpError(
+          "隧道由主机上的外部服务管理（tunnel.mode=external），请在主机上操作。",
+          409,
+        );
+      }
       if (action === "start") {
         if (deps.config.tunnel.mode === "off") {
           throw new HttpError("主机配置未启用隧道（tunnel.mode=off）。", 409);
@@ -366,10 +377,8 @@ async function handle(
         deps.tunnel.start();
       } else if (action === "stop") {
         deps.tunnel.stop();
-      } else if (action === "restart") {
-        deps.tunnel.restart();
       } else {
-        throw new HttpError("action 必须是 start/stop/restart。", 400);
+        deps.tunnel.restart();
       }
       sendJson(res, 200, deps.tunnel.current());
       return;

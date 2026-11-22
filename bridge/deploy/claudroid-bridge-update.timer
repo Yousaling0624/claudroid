@@ -1,0 +1,12 @@
+[Unit]
+Description=定期检查 claudroid-bridge 新版本
+Documentation=https://github.com/Yousaling0624/claudroid/tree/main/bridge
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=claudroid-bridge-update.service
+
+[Install]
+WantedBy=timers.target

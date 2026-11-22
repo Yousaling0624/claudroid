@@ -11,6 +11,13 @@ export interface TunnelConfig {
   hostname?: string;
   /** Override the cloudflared executable path. */
   cloudflaredPath?: string;
+  /**
+   * File written by an externally supervised connector (mode `external`) with
+   * the public URL the daemon should advertise. The daemon re-reads it
+   * periodically, so restarts of the connector or the daemon do not need a
+   * re-pair as long as the URL itself is stable.
+   */
+  publicUrlFile?: string;
 }
 
 export interface BridgeConfig {
@@ -74,7 +81,10 @@ function normalizeConfig(raw: unknown, base: BridgeConfig): BridgeConfig {
       ? (input.tunnel as Record<string, unknown>)
       : {};
   const mode =
-    rawTunnel.mode === "quick" || rawTunnel.mode === "named" || rawTunnel.mode === "off"
+    rawTunnel.mode === "quick" ||
+    rawTunnel.mode === "named" ||
+    rawTunnel.mode === "external" ||
+    rawTunnel.mode === "off"
       ? rawTunnel.mode
       : base.tunnel.mode;
   return {
@@ -111,6 +121,10 @@ function normalizeConfig(raw: unknown, base: BridgeConfig): BridgeConfig {
       cloudflaredPath:
         typeof rawTunnel.cloudflaredPath === "string" && rawTunnel.cloudflaredPath
           ? rawTunnel.cloudflaredPath
+          : undefined,
+      publicUrlFile:
+        typeof rawTunnel.publicUrlFile === "string" && rawTunnel.publicUrlFile
+          ? rawTunnel.publicUrlFile
           : undefined,
     },
   };
@@ -153,6 +167,10 @@ export function publicConfig(config: BridgeConfig): Record<string, unknown> {
     permissionTimeoutMs: config.permissionTimeoutMs,
     maxUploadBytes: config.maxUploadBytes,
     allowBypassPermissions: config.allowBypassPermissions,
-    tunnel: { mode: config.tunnel.mode, hostname: config.tunnel.hostname ?? null },
+    tunnel: {
+      mode: config.tunnel.mode,
+      hostname: config.tunnel.hostname ?? null,
+      publicUrlFile: config.tunnel.publicUrlFile ?? null,
+    },
   };
 }
