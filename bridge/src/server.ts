@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { hostname } from "node:os";
 import { AuthError, type AuthService, type DeviceRecord, type PairingInfo } from "./auth.js";
@@ -11,6 +12,8 @@ import type { TurnManager } from "./turns.js";
 import {
   PROTOCOL_VERSION,
   SAFE_PERMISSION_MODES,
+  type AdminPairingRequest,
+  type AdminPairingResponse,
   type BridgeEvent,
   type HostInfo,
   type PairRequest,
@@ -29,6 +32,10 @@ export interface BridgeServerDeps {
   claudeVersion?: string;
   logger?: (message: string) => void;
   onPairingChanged?: (info: PairingInfo) => void;
+  /** Secret for the local admin endpoint; written to `<config dir>/admin-token` (0600). */
+  adminToken: string;
+  /** Addresses the CLI should advertise in a freshly rotated QR. */
+  pairingUrls?: () => string[];
 }
 
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
@@ -104,6 +111,23 @@ function authenticate(req: IncomingMessage, auth: AuthService): DeviceRecord {
   if (!device) throw new HttpError("未授权：请先配对。", 401);
   return device;
 }
+
+/**
+ * The admin endpoint is reachable through the tunnel too, so it cannot rely on the
+ * socket address: cloudflared also connects from loopback. A random token stored in
+ * the 0600 file under the config directory is the actual trust boundary.
+ */
+function authorizedAdmin(req: IncomingMessage, adminToken: string): boolean {
+  const match = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "");
+  const supplied = match?.[1]?.trim() ?? "";
+  if (!supplied || !adminToken) return false;
+  const left = Buffer.from(supplied, "utf8");
+  const right = Buffer.from(adminToken, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/** Refresh a code early enough that a freshly printed QR can still be scanned. */
+const PAIRING_REFRESH_MIN_MS = 60_000;
 
 function writeEvent(res: ServerResponse, event: BridgeEvent): void {
   try {
@@ -218,6 +242,29 @@ async function handle(
     const next = deps.auth.issuePairingCode();
     deps.onPairingChanged?.(next);
     sendJson(res, 200, { token: paired.token, host: hostInfo(deps) });
+    return;
+  }
+
+  if (method === "POST" && path === "/v1/admin/pairing") {
+    // Lets `claudroid-bridge pair` fetch a valid code (rotating an expired one)
+    // without restarting the daemon and dropping active sessions.
+    if (!authorizedAdmin(req, deps.adminToken)) throw new HttpError("未授权。", 401);
+    const body = (await readJson(req, 64 * 1024)) as AdminPairingRequest | null;
+    const now = Date.now();
+    let info = deps.auth.currentPairingInfo(now);
+    let rotated = false;
+    if (!info || body?.force === true || info.expiresAt - now < PAIRING_REFRESH_MIN_MS) {
+      info = deps.auth.issuePairingCode(now);
+      rotated = true;
+      deps.onPairingChanged?.(info);
+    }
+    const response: AdminPairingResponse = {
+      code: info.code,
+      expiresAt: info.expiresAt,
+      rotated,
+      urls: deps.pairingUrls?.() ?? [],
+    };
+    sendJson(res, 200, response);
     return;
   }
 

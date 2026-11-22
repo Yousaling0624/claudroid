@@ -41,6 +41,24 @@ export interface PairResponse {
   host: HostInfo;
 }
 
+/**
+ * Local admin pairing endpoint (`POST /v1/admin/pairing`). It is used only by the
+ * `claudroid-bridge pair` CLI with the 0600 admin token from the config directory;
+ * phones never call it.
+ */
+export interface AdminPairingRequest {
+  /** Rotate even when the current code still has plenty of time left. */
+  force?: boolean;
+}
+
+export interface AdminPairingResponse {
+  code: string;
+  expiresAt: number;
+  /** True when this call replaced the previous code. */
+  rotated: boolean;
+  urls: string[];
+}
+
 export interface TurnStartRequest {
   cwd: string;
   prompt: string;

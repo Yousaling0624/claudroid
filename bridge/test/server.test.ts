@@ -10,12 +10,15 @@ import type { ClaudeRunner } from "../src/runner.js";
 import { createBridgeServer } from "../src/server.js";
 import { TunnelManager } from "../src/tunnel.js";
 import { TurnManager } from "../src/turns.js";
+import type { AdminPairingResponse } from "../src/types.js";
 import { cleanup, FakeRunner, tempDir } from "./helpers.js";
 
 interface Harness {
   baseUrl: string;
   root: string;
   token: string;
+  adminToken: string;
+  auth: AuthService;
   turns: TurnManager;
   bus: EventBus;
   close: () => Promise<void>;
@@ -23,7 +26,10 @@ interface Harness {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-async function startServer(runner: ClaudeRunner): Promise<Harness> {
+async function startServer(
+  runner: ClaudeRunner,
+  options: { pairingTtlMs?: number } = {},
+): Promise<Harness> {
   const root = tempDir();
   const configDir = tempDir();
   const config: BridgeConfig = {
@@ -37,9 +43,12 @@ async function startServer(runner: ClaudeRunner): Promise<Harness> {
   const files = new FileService(config.roots, config.maxUploadBytes);
   await files.init();
   const auth = new AuthService(new DeviceStore(join(configDir, "devices.json")), {
-    pairingTtlMs: 60_000,
+    // Long enough that the code issued below is not considered "about to expire"
+    // by the admin refresh endpoint, unless a test says otherwise.
+    pairingTtlMs: options.pairingTtlMs ?? 10 * 60_000,
   });
   const code = auth.issuePairingCode().code;
+  const adminToken = "test-admin-token";
   const bus = new EventBus();
   const permissions = new PermissionBroker(bus, config.permissionTimeoutMs);
   const turns = new TurnManager({ runner, bus, permissions, files, config });
@@ -52,6 +61,8 @@ async function startServer(runner: ClaudeRunner): Promise<Harness> {
     files,
     tunnel,
     version: "test",
+    adminToken,
+    pairingUrls: () => ["https://bridge.example.test"],
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -76,7 +87,7 @@ async function startServer(runner: ClaudeRunner): Promise<Harness> {
     cleanup(configDir);
   };
   cleanups.push(close);
-  return { baseUrl, root, token: pairBody.token, turns, bus, close };
+  return { baseUrl, root, token: pairBody.token, adminToken, auth, turns, bus, close };
 }
 
 afterEach(async () => {
@@ -149,6 +160,69 @@ describe("Bridge HTTP server", () => {
     expect(health.protocol).toBe(1);
     expect(health.workspaceRoots).toContain(harness.root);
     expect(health.eventPoll).toBe(true);
+  });
+
+  it("refreshes the pairing QR through the local admin endpoint", async () => {
+    const harness = await startServer(new FakeRunner());
+    const denied = await fetch(`${harness.baseUrl}/v1/admin/pairing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ force: true }),
+    });
+    expect(denied.status).toBe(401);
+
+    const before = harness.auth.currentPairingInfo();
+    expect(before).not.toBeNull();
+    const adminHeaders = {
+      authorization: `Bearer ${harness.adminToken}`,
+      "content-type": "application/json",
+    };
+
+    const current = await fetch(`${harness.baseUrl}/v1/admin/pairing`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ force: false }),
+    });
+    expect(current.status).toBe(200);
+    const kept = await json<AdminPairingResponse>(current);
+    expect(kept.rotated).toBe(false);
+    expect(kept.code).toBe(before!.code);
+    expect(kept.urls).toEqual(["https://bridge.example.test"]);
+
+    const rotated = await fetch(`${harness.baseUrl}/v1/admin/pairing`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({ force: true }),
+    });
+    expect(rotated.status).toBe(200);
+    const fresh = await json<AdminPairingResponse>(rotated);
+    expect(fresh.rotated).toBe(true);
+    expect(fresh.code).not.toBe(kept.code);
+    expect(harness.auth.currentPairingInfo()!.code).toBe(fresh.code);
+
+    const paired = await fetch(`${harness.baseUrl}/v1/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: fresh.code, deviceName: "Second Phone" }),
+    });
+    expect(paired.status).toBe(200);
+  });
+
+  it("rotates a code that is too close to expiry to scan", async () => {
+    const harness = await startServer(new FakeRunner(), { pairingTtlMs: 30_000 });
+    const before = harness.auth.currentPairingInfo()!;
+    const response = await fetch(`${harness.baseUrl}/v1/admin/pairing`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${harness.adminToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ force: false }),
+    });
+    expect(response.status).toBe(200);
+    const body = await json<AdminPairingResponse>(response);
+    expect(body.rotated).toBe(true);
+    expect(body.code).not.toBe(before.code);
   });
 
   it("streams CLI events and resolves permission requests", async () => {

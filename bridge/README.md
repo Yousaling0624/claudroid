@@ -43,12 +43,14 @@ claudroid-bridge start     # 启动并打印配对码、二维码与主机地址
 配对码并重新打印。终端还会打印二维码（`claudroid://pair?v=1&url=…&code=…`），手机在
 **设置 → 远程主机 → 添加远程主机 → 扫描二维码** 一扫即完成配对；也可以手动填入地址和
 配对码。二维码只在存在手机可达地址（隧道 URL 或局域网 IP）时打印，等同配对码，请勿截图外传。
-配对码过期后重启 `start` 生成新码。
+配对码过期后不需要重启 daemon：`claudroid-bridge pair` 会通过本机管理通道向运行中的守护进程
+取码，过期（或剩余不足 1 分钟）时自动轮换并打印新二维码；`pair --new` 可强制立即轮换。
 
 常用命令：
 
 ```bash
-claudroid-bridge pair                 # 查看/重新打印当前配对码、二维码与主机地址
+claudroid-bridge pair                 # 显示有效配对码、二维码与主机地址（过期自动刷新）
+claudroid-bridge pair --new           # 强制轮换一个新配对码
 claudroid-bridge devices              # 列出已配对设备
 claudroid-bridge devices revoke <id>  # 吊销设备令牌
 ```
@@ -56,8 +58,8 @@ claudroid-bridge devices revoke <id>  # 吊销设备令牌
 ## 配置
 
 默认 `~/.config/claudroid-bridge/config.json`；`CLAUDROID_BRIDGE_HOME` 改变根目录
-（`config.json` / `devices.json` / `pair.json` 都放这里），`--config <path>` 单独指定文件。
-所有字段都有安全默认值，配置损坏时按默认值启动。
+（`config.json` / `devices.json` / `pair.json` / `admin-token` 都放这里），`--config <path>`
+单独指定文件。所有字段都有安全默认值，配置损坏时按默认值启动。
 
 ```json
 {
@@ -193,6 +195,8 @@ journalctl --user -u claudroid-bridge -u claudroid-bridge-tunnel -u claudroid-br
 - 默认只绑定 `127.0.0.1`；公网暴露必须经 Cloudflare Tunnel 或你自己控制的反代。
 - 配对码一次性、10 分钟有效、限速；设备令牌 32 字节随机，daemon 只保存 SHA-256，
   常量时间比较。
+- `pair` 的本机管理通道使用 daemon 启动时生成的 `admin-token`（0600，与配对码同目录），
+  只允许同一用户调用；即使经隧道访问，也必须有该 token，否则一律 401。
 - 所有文件路径先 `realpath`，必须落在 `roots` 内；拒绝 `..` 与 symlink 逃逸。
 - 权限请求默认拒绝：App 断连或超过 `permissionTimeoutMs` 未响应，工具调用即被拒绝。
 - token、配对码、prompt 与 Access secret 不写日志。设备令牌可用

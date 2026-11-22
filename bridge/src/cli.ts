@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +12,6 @@ import {
   configPath,
   defaultConfig,
   loadConfig,
-  pairingPath,
   publicConfig,
   saveConfig,
   writeFilePrivate,
@@ -25,7 +26,7 @@ import { SdkClaudeRunner } from "./sdk-runner.js";
 import { createBridgeServer } from "./server.js";
 import { TunnelManager } from "./tunnel.js";
 import { TurnManager } from "./turns.js";
-import type { TunnelMode } from "./types.js";
+import type { AdminPairingResponse, TunnelMode } from "./types.js";
 import { DAEMON_VERSION } from "./version.js";
 
 interface CliOptions {
@@ -40,6 +41,8 @@ interface CliOptions {
   tunnelHostname?: string;
   tunnelPublicUrlFile?: string;
   allowBypass?: boolean;
+  /** `pair --new`: rotate even when the current code is still valid. */
+  forcePairing: boolean;
   help: boolean;
   version: boolean;
 }
@@ -49,6 +52,7 @@ function parseArgs(argv: string[]): CliOptions {
     command: "start",
     positional: [],
     roots: [],
+    forcePairing: false,
     help: false,
     version: false,
   };
@@ -137,6 +141,9 @@ function parseArgs(argv: string[]): CliOptions {
       index += 1;
     } else if (arg === "--allow-bypass") {
       options.allowBypass = true;
+      index += 1;
+    } else if (arg === "--new") {
+      options.forcePairing = true;
       index += 1;
     } else if (arg.startsWith("-")) {
       throw new Error(`未知参数：${arg}`);
@@ -238,6 +245,10 @@ async function start(options: CliOptions): Promise<void> {
   const configDir = dirname(configFile);
   const devices = new DeviceStore(join(configDir, "devices.json"));
   const pairFile = join(configDir, "pair.json");
+  // Local-only secret for `claudroid-bridge pair`. It lets the CLI fetch or rotate
+  // a code without restarting the daemon; the 0600 file is the trust boundary.
+  const adminToken = randomBytes(32).toString("base64url");
+  writeFilePrivate(join(configDir, "admin-token"), `${adminToken}\n`);
   const auth = new AuthService(devices);
   const bus = new EventBus();
   const permissions = new PermissionBroker(bus, config.permissionTimeoutMs);
@@ -299,6 +310,8 @@ async function start(options: CliOptions): Promise<void> {
     files,
     tunnel,
     version: DAEMON_VERSION,
+    adminToken,
+    pairingUrls: () => [...state.urls],
     onPairingChanged: (info) => {
       state.pairing = info;
       writePairFile(state);
@@ -391,22 +404,142 @@ function printDoctor(options: CliOptions): void {
   if (failed) process.exitCode = 1;
 }
 
-function printPair(options: CliOptions): void {
-  const file = options.config
-    ? join(dirname(resolve(options.config)), "pair.json")
-    : pairingPath();
-  if (!existsSync(file)) {
-    console.error(`还没有配对信息：${file}。先运行 claudroid-bridge start。`);
+interface StoredPairing {
+  code: string;
+  expiresAt: number;
+  urls: string[];
+}
+
+function readPairFile(file: string): StoredPairing | null {
+  if (!existsSync(file)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<StoredPairing>;
+    if (typeof parsed.code !== "string" || typeof parsed.expiresAt !== "number") return null;
+    return {
+      code: parsed.code,
+      expiresAt: parsed.expiresAt,
+      urls: Array.isArray(parsed.urls)
+        ? parsed.urls.filter((url): url is string => typeof url === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Talks to the daemon's local admin endpoint. Returns null when it is not running
+ * (or predates the endpoint), so `pair` can fall back to the code on disk.
+ */
+async function requestPairingRefresh(
+  config: BridgeConfig,
+  tokenFile: string,
+  force: boolean,
+): Promise<AdminPairingResponse | null> {
+  if (!existsSync(tokenFile)) return null;
+  let adminToken = "";
+  try {
+    adminToken = readFileSync(tokenFile, "utf8").trim();
+  } catch {
+    return null;
+  }
+  if (!adminToken) return null;
+  const wildcard =
+    config.bind === "0.0.0.0" || config.bind === "::" || config.bind === "0:0:0:0:0:0:0:0";
+  const host = wildcard ? "127.0.0.1" : config.bind;
+  const payload = JSON.stringify({ force });
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: AdminPairingResponse | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const req = request(
+      {
+        host,
+        port: config.port,
+        path: "/v1/admin/pairing",
+        method: "POST",
+        timeout: 3_000,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(payload),
+          authorization: `Bearer ${adminToken}`,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          if (res.statusCode !== 200) return finish(null);
+          try {
+            const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as AdminPairingResponse;
+            if (typeof parsed.code !== "string" || typeof parsed.expiresAt !== "number") {
+              return finish(null);
+            }
+            finish({
+              code: parsed.code,
+              expiresAt: parsed.expiresAt,
+              rotated: parsed.rotated === true,
+              urls: Array.isArray(parsed.urls)
+                ? parsed.urls.filter((url): url is string => typeof url === "string")
+                : [],
+            });
+          } catch {
+            finish(null);
+          }
+        });
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      finish(null);
+    });
+    req.on("error", () => finish(null));
+    req.end(payload);
+  });
+}
+
+/** Prints a scannable code, rotating an expired one through the running daemon. */
+async function printPair(options: CliOptions): Promise<void> {
+  const configFile = options.config ? resolve(options.config) : configPath();
+  const config = applyOverrides(loadConfig(configFile), options);
+  const dir = dirname(configFile);
+  const pairFile = join(dir, "pair.json");
+
+  const live = await requestPairingRefresh(
+    config,
+    join(dir, "admin-token"),
+    options.forcePairing,
+  );
+  if (live) {
+    if (live.rotated) console.log("已生成新的配对码。");
+    const urls = live.urls.length > 0 ? live.urls : readPairFile(pairFile)?.urls ?? [];
+    console.log(JSON.stringify({ code: live.code, expiresAt: live.expiresAt, urls }, null, 2));
+    printPairing(live.code, live.expiresAt, urls);
+    return;
+  }
+
+  const stored = readPairFile(pairFile);
+  if (!stored) {
+    console.error(`还没有配对信息：${pairFile}。先运行 claudroid-bridge start。`);
     process.exitCode = 1;
     return;
   }
-  const info = JSON.parse(readFileSync(file, "utf8")) as {
-    code: string;
-    expiresAt: number;
-    urls: string[];
-  };
-  console.log(JSON.stringify(info, null, 2));
-  printPairing(info.code, info.expiresAt, info.urls);
+  if (stored.expiresAt <= Date.now()) {
+    console.error(
+      `配对码已过期（${new Date(stored.expiresAt).toLocaleString()}）。` +
+        "无法连接正在运行的守护进程自动刷新；请先启动 claudroid-bridge 服务再试。",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (existsSync(join(dir, "admin-token"))) {
+    console.error("! 无法连接正在运行的守护进程，下面显示的是 pair.json 中上次保存的码。");
+  }
+  console.log(JSON.stringify(stored, null, 2));
+  printPairing(stored.code, stored.expiresAt, stored.urls);
 }
 
 function deviceCommand(options: CliOptions): void {
@@ -441,7 +574,7 @@ function help(): void {
 用法:
   claudroid-bridge start [选项]      启动守护进程并打印配对码与二维码
   claudroid-bridge init              写入默认配置
-  claudroid-bridge pair              查看当前配对码、二维码与主机地址
+  claudroid-bridge pair [--new]      显示有效配对码与二维码；过期会自动刷新，--new 强制轮换
   claudroid-bridge doctor            检查配置、工作区与 cloudflared
   claudroid-bridge devices [list|revoke <id>]
 
@@ -455,6 +588,9 @@ start 选项:
   --tunnel-hostname <host>   named 隧道的公网域名
   --tunnel-public-url-file <path>  external 模式读取公网地址的文件
   --allow-bypass             允许 App 请求 bypassPermissions（默认关闭）
+
+pair 选项:
+  --new                      强制轮换一个新配对码
 
 隧道首次启用时会自动下载并校验 cloudflared；tunnel.cloudflaredPath 可覆盖。
 
@@ -489,7 +625,7 @@ async function main(): Promise<void> {
       printDoctor(options);
       return;
     case "pair":
-      printPair(options);
+      await printPair(options);
       return;
     case "devices":
       deviceCommand(options);

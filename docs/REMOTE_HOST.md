@@ -103,7 +103,9 @@ claudroid-bridge start
 使用一次即失效；配对成功后 daemon 会立即轮换并打印新码。二维码内容为
 `claudroid://pair?v=1&url=…&code=…&name=…`，只在存在手机可达地址（隧道公网 URL 或
 局域网 IP）时打印；只监听 `127.0.0.1` 时请先开隧道或用 `--bind 0.0.0.0`。
-**二维码等同配对码，不要截图外传。** 用 `claudroid-bridge pair` 可重新打印当前二维码。
+**二维码等同配对码，不要截图外传。** 用 `claudroid-bridge pair` 可随时显示有效二维码：
+它通过本机管理通道向运行中的 daemon 取码，码已过期（或剩余不足 1 分钟）时会自动轮换，
+不需要重启服务；`pair --new` 可强制立即轮换。
 
 手机端：
 
@@ -206,7 +208,7 @@ bash bridge/deploy/install.sh
 
 | 现象 | 处理 |
 | --- | --- |
-| 配对失败 401 | 配对码过期或已用过；重启 `claudroid-bridge start` 生成新码（`pair` 只查看当前码） |
+| 配对失败 401 | 配对码已用过或已过期；运行 `claudroid-bridge pair` 自动刷新（或 `pair --new` 强制轮换）；daemon 未运行时才需要先启动/重启服务 |
 | 设置页一直离线 | 检查地址能否在手机浏览器打开 `/v1/health`；确认 daemon 在跑、端口/隧道正确 |
 | 提示协议版本不兼容 | 升级主机上的 `claudroid-bridge` 到与 App 相同的协议版本（v1） |
 | 隧道启动失败 | `claudroid-bridge doctor` 检查 token/域名；cloudflared 缺失时 daemon 会自动下载，失败原因会显示在 App 与日志中 |
