@@ -22,6 +22,25 @@ String permissionFootnote(String mode) => mode == 'BYPASS'
     ? '完全放行：Agent 的命令会直接执行，请确认任务来源可信。'
     : 'Agent 可能修改系统文件，请确认它执行的命令。';
 
+/// Remote-turn permission modes, in the order the host pickers list them.
+const remotePermissionLabels = {
+  'default': '自动（每次确认）',
+  'acceptEdits': '自动改文件',
+  'plan': '只读规划',
+  'bypassPermissions': '完全放行',
+};
+
+/// The composer note for a remote turn. Kept here so the home and chat
+/// footnotes cannot drift apart; each mode says what actually happens on the
+/// host instead of lumping edit approvals in with forwarded confirmations.
+String remotePermissionFootnote(String mode) => switch (mode) {
+      'bypassPermissions' =>
+        '远程主机执行；完全放行：命令会在主机上直接执行，请确认主机与任务可信。',
+      'acceptEdits' => '远程主机执行；文件修改会自动通过，其他工具调用会转发到手机确认。',
+      'plan' => '远程主机执行；只读规划，不会执行修改。',
+      _ => '远程主机执行；工具调用会转发到手机确认。',
+    };
+
 const effortLabels = {
   'AUTO': '自动',
   'LOW': '低',

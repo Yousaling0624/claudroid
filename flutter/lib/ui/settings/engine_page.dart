@@ -121,6 +121,7 @@ class EnginePage extends StatelessWidget {
     final settings = controller.settings;
     return generateSection(
       title: '运行选项',
+      footer: '远程主机的权限模式在「设置 → 远程主机 → 该主机」里单独选择。',
       items: [
         SettingsPickerRow<String>(
           label: '引擎模式',

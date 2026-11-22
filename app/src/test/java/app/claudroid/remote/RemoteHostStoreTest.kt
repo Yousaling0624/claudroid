@@ -9,12 +9,19 @@ import java.nio.file.Files
 
 class RemoteHostStoreTest {
 
-    private fun profile(id: String, token: String = "sealed-token") = RemoteHostProfile(
+    private fun profile(
+        id: String,
+        token: String = "sealed-token",
+        permissionMode: String = RemotePermissionModes.DEFAULT,
+        allowBypassPermissions: Boolean = false,
+    ) = RemoteHostProfile(
         id = id,
         name = "host-$id",
         baseUrl = "https://host-$id.example.com",
         tokenSealed = token,
         defaultCwd = "/home/me",
+        permissionMode = permissionMode,
+        allowBypassPermissions = allowBypassPermissions,
     )
 
     @Test
@@ -52,6 +59,48 @@ class RemoteHostStoreTest {
             store.remove("a")
             assertEquals(listOf("b"), store.state.value.hosts.map { it.id })
             assertEquals("b", store.state.value.defaultHostId)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `per-host permission mode and bypass capability persist`() = runBlocking {
+        val dir = Files.createTempDirectory("claudroid-hosts").toFile()
+        try {
+            val file = File(dir, "hosts.json")
+            val store = RemoteHostStore(file)
+            store.load()
+            store.upsert(profile("a", permissionMode = "plan", allowBypassPermissions = true))
+
+            val reopened = RemoteHostStore(file)
+            reopened.load()
+            assertEquals("plan", reopened.find("a")?.permissionMode)
+            assertTrue(reopened.find("a")?.allowBypassPermissions == true)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy and unknown permission modes load as default`() = runBlocking {
+        val dir = Files.createTempDirectory("claudroid-hosts").toFile()
+        try {
+            val file = File(dir, "hosts.json")
+            // Written by an older app: no permissionMode / allowBypassPermissions at all.
+            file.writeText(
+                """{"hosts":[
+                    {"id":"old","name":"old","baseUrl":"https://old.example.com","tokenSealed":"sealed"},
+                    {"id":"bad","name":"bad","baseUrl":"https://bad.example.com","tokenSealed":"sealed",
+                     "permissionMode":"auto","allowBypassPermissions":false}
+                ]}""",
+            )
+            val store = RemoteHostStore(file)
+            store.load()
+            assertEquals("default", store.find("old")?.permissionMode)
+            assertEquals(false, store.find("old")?.allowBypassPermissions)
+            // "auto" is a local-engine mode and must not leak into a remote turn.
+            assertEquals("default", store.find("bad")?.permissionMode)
         } finally {
             dir.deleteRecursively()
         }

@@ -14,6 +14,7 @@ import 'settings/appearance_page.dart';
 import 'settings/backup_page.dart';
 import 'settings/engine_page.dart';
 import 'settings/features_page.dart';
+import 'settings/remote_host_page.dart';
 import 'settings/remote_hosts_page.dart';
 import 'settings/service_models_page.dart';
 import 'settings/settings_controller.dart';
@@ -34,6 +35,8 @@ class SettingsPage extends StatefulWidget {
     required this.onUpdateSettings,
     required this.onToast,
     this.destination = SettingsDestination.root,
+    this.remoteHostId,
+    this.pairRemoteHost = false,
   });
 
   final Bridge bridge;
@@ -43,6 +46,14 @@ class SettingsPage extends StatefulWidget {
 
   /// Opens one topic directly instead of the root list.
   final SettingsDestination destination;
+
+  /// With [SettingsDestination.remoteHosts], opens this host's detail page
+  /// instead of the host list.
+  final String? remoteHostId;
+
+  /// With [SettingsDestination.remoteHosts], opens the pairing flow directly;
+  /// its success pop returns the new [RemoteHost] as the route result.
+  final bool pairRemoteHost;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -75,14 +86,24 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsDestination.serviceModels =>
         ServiceModelsPage(controller: _controller),
       SettingsDestination.engine => EnginePage(controller: _controller),
-      SettingsDestination.remoteHosts =>
-        RemoteHostsPage(controller: _controller),
+      SettingsDestination.remoteHosts => _buildRemoteHosts(),
       SettingsDestination.features => FeaturesPage(controller: _controller),
       SettingsDestination.appearance => AppearancePage(controller: _controller),
       SettingsDestination.advanced => AdvancedPage(controller: _controller),
       SettingsDestination.backup => BackupPage(controller: _controller),
       SettingsDestination.about => AboutPage(controller: _controller),
     };
+  }
+
+  Widget _buildRemoteHosts() {
+    if (widget.pairRemoteHost) {
+      return RemoteHostPairPage(controller: _controller);
+    }
+    final hostId = widget.remoteHostId;
+    if (hostId != null && hostId.isNotEmpty) {
+      return RemoteHostDetailPage(controller: _controller, hostId: hostId);
+    }
+    return RemoteHostsPage(controller: _controller);
   }
 
   Widget _buildRoot(BuildContext context) {

@@ -450,6 +450,7 @@ class Bridge {
     String? baseUrl,
     String? accessClientId,
     String? accessSecret,
+    String? permissionMode,
   }) async =>
       RemoteHostsState.fromJsonString(
         (await _call('hosts.update', {
@@ -458,6 +459,7 @@ class Bridge {
           'baseUrl': ?baseUrl,
           'accessClientId': ?accessClientId,
           'accessSecret': ?accessSecret,
+          'permissionMode': ?permissionMode,
         }))['hostsJson'] as String?,
       );
 

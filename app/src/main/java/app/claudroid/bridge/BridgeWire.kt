@@ -26,6 +26,7 @@ import app.claudroid.remote.RemoteFileEntry
 import app.claudroid.remote.RemoteHealth
 import app.claudroid.remote.RemoteHostProfile
 import app.claudroid.remote.RemoteHostsState
+import app.claudroid.remote.RemotePermissionModes
 import app.claudroid.remote.RemotePhase
 import app.claudroid.remote.RemoteRuntime
 import app.claudroid.remote.RemoteTunnelStatus
@@ -302,6 +303,9 @@ object BridgeWire {
         put("phase", (runtime?.phase ?: RemotePhase.OFFLINE).name.lowercase())
         put("error", runtime?.error)
         put("hasAccessToken", host.accessClientId.isNotBlank())
+        put("permissionMode", RemotePermissionModes.normalize(host.permissionMode))
+        // A fresh health wins; the persisted value keeps the page correct while offline.
+        put("allowBypassPermissions", runtime?.health?.allowBypassPermissions ?: host.allowBypassPermissions)
         val tunnel = runtime?.health?.tunnel ?: host.tunnel
         put("tunnel", tunnelJson(tunnel))
     }

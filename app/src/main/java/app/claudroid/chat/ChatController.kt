@@ -8,7 +8,6 @@ import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
 import app.claudroid.data.ApiFlavor
-import app.claudroid.data.PermissionMode
 import app.claudroid.data.Role
 import app.claudroid.engine.CancelReason
 import app.claudroid.engine.ClaudeEngine
@@ -21,6 +20,7 @@ import app.claudroid.engine.TurnRequest
 import app.claudroid.engine.TurnService
 import app.claudroid.data.chatModelLabel
 import app.claudroid.remote.RemoteHostManager
+import app.claudroid.remote.RemotePermissionModes
 import app.claudroid.remote.RemoteTurnBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -442,6 +442,8 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         /** Remote working directory; null for a local turn. */
         val remoteCwd: String?,
         val remoteHostId: String?,
+        /** This host's own permission mode; null uses the local setting. */
+        val remotePermissionMode: String?,
         /** The backend cancellation token registered when this turn was accepted. */
         val cancelToken: Long,
     )
@@ -521,6 +523,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             workspace = workspace,
             remoteCwd = null,
             remoteHostId = null,
+            remotePermissionMode = null,
             cancelToken = backend.beginTurn(),
         )
     }
@@ -553,10 +556,13 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             )
             return null
         }
-        if (settings.permissionMode == PermissionMode.BYPASS && !health.allowBypassPermissions) {
+        // The phone's global mode only governs the local engine; each host keeps its own.
+        val remotePermissionMode = RemotePermissionModes.normalize(host.permissionMode)
+        if (remotePermissionMode == RemotePermissionModes.BYPASS && !health.allowBypassPermissions) {
             appendError(
                 "主机「${host.name}」没有允许「完全放行」模式。" +
-                    "请改用其他权限模式，或在主机配置中开启 allowBypassPermissions。",
+                    "请在设置 → 远程主机 → 这台主机 → 执行里改用其他权限模式，" +
+                    "或在主机配置中开启 allowBypassPermissions。",
             )
             return null
         }
@@ -580,6 +586,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             workspace = null,
             remoteCwd = cwd,
             remoteHostId = hostId,
+            remotePermissionMode = remotePermissionMode,
             cancelToken = backend.beginTurn(),
         )
     }
@@ -656,13 +663,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             val request = TurnRequest(
                 prompt = prompt,
                 resumeSessionId = resumeId,
-                // The daemon has no classifier-backed "auto"; its default mode is the
-                // honest equivalent and still forwards every ask to the phone.
-                permissionMode = if (prepared.remoteHostId != null && settings.permissionMode == PermissionMode.AUTO) {
-                    "default"
-                } else {
-                    settings.permissionMode.cli
-                },
+                permissionMode = prepared.remotePermissionMode ?: settings.permissionMode.cli,
             )
             return prepared.backend.runTurn(request, prepared.cancelToken) { ev ->
                 // 「清空上下文」 during a turn must win over late stdout events.

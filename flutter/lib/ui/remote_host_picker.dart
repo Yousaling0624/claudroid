@@ -7,17 +7,25 @@ import '../models/remote.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
 
-/// Result of the new-chat host picker: `hostId == null` means the local engine.
-typedef RemoteHostChoice = ({String? hostId});
+/// What a settings shortcut in the picker should open on the home page.
+/// A normal selection leaves the intent null.
+enum RemoteHostPickerIntent { configureLocal, configureHost, addHost }
+
+/// Result of the new-chat host picker. `intent == null` is a normal selection,
+/// where `hostId == null` means the local engine; otherwise the intent names
+/// the settings page to open and `hostId` names the host (null for local and
+/// for "add device").
+typedef RemoteHostChoice = ({String? hostId, RemoteHostPickerIntent? intent});
 
 /// Chooses between the local engine and one paired host. A remote selection
-/// only records the host id; the working directory is picked separately.
+/// only records the host id; the working directory is picked separately. The
+/// dialog also carries shortcuts into the matching settings page and the
+/// pairing flow, so an empty host list still needs a visible picker.
 Future<RemoteHostChoice?> showRemoteHostPicker(
   BuildContext context, {
   required RemoteHostsState hosts,
   required String? currentHostId,
 }) {
-  if (hosts.hosts.isEmpty) return Future.value(null);
   return showClaudroidDialog<RemoteHostChoice>(
     context: context,
     child: _HostPickerDialog(hosts: hosts, currentHostId: currentHostId),
@@ -53,7 +61,10 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
           child: const Text('取消'),
         ),
         TextButton(
-          onPressed: () => Navigator.of(context).pop((hostId: _selected)),
+          onPressed: () => Navigator.of(context).pop((
+            hostId: _selected,
+            intent: null,
+          )),
           child: Text(
             selectedHost == null ? '使用本机' : '使用 ${selectedHost.displayName}',
           ),
@@ -78,7 +89,12 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
                   subtitle: '在手机里通过 PRoot 运行',
                   selected: _selected == null,
                   online: true,
+                  settingsKey: const ValueKey('host-picker-settings-local'),
                   onPressed: () => setState(() => _selected = null),
+                  onConfigure: () => Navigator.of(context).pop((
+                    hostId: null,
+                    intent: RemoteHostPickerIntent.configureLocal,
+                  )),
                 ),
               ),
               for (final (index, host) in widget.hosts.hosts.indexed)
@@ -91,9 +107,18 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
                     subtitle: '${host.phaseLabel} · ${host.baseUrl}',
                     selected: _selected == host.id,
                     online: host.online,
+                    settingsKey: ValueKey('host-picker-settings-${host.id}'),
                     onPressed: () => setState(() => _selected = host.id),
+                    onConfigure: () => Navigator.of(context).pop((
+                      hostId: host.id,
+                      intent: RemoteHostPickerIntent.configureHost,
+                    )),
                   ),
                 ),
+              DialogRowReveal(
+                index: widget.hosts.hosts.length + 1,
+                child: _addRow(context),
+              ),
               const SizedBox(height: 8),
               Text(
                 '选择主机后可以再点首页的目录胶囊，指定它在主机上的工作目录。'
@@ -118,30 +143,108 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
     required bool selected,
     required bool online,
     required VoidCallback onPressed,
+    required VoidCallback onConfigure,
+    Key? settingsKey,
   }) {
     final scheme = context.colorScheme;
+    // The settings button sits outside the selectable segment so tapping it
+    // never also changes the selected host.
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                children: [
+                  GlyphIcon(
+                    glyph,
+                    size: 19,
+                    color: selected ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: context.listTitleStyle),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTextStyle.caption2.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: online ? scheme.success : scheme.onSurfaceVariant,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  if (selected) ...[
+                    const SizedBox(width: 8),
+                    GlyphIcon(Glyphs.check, size: 17, color: scheme.primary),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+        IconButton(
+          key: settingsKey,
+          onPressed: onConfigure,
+          tooltip: '设置',
+          padding: const EdgeInsets.all(10),
+          icon: GlyphIcon(
+            AppGlyphs.settings,
+            size: 18,
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// One quiet row under the host list; it exits to the pairing flow instead
+  /// of selecting anything, so it is not styled as a primary button.
+  Widget _addRow(BuildContext context) {
+    final scheme = context.colorScheme;
     return GestureDetector(
+      key: const ValueKey('host-picker-add'),
       behavior: HitTestBehavior.opaque,
-      onTap: onPressed,
+      onTap: () => Navigator.of(context).pop((
+        hostId: null,
+        intent: RemoteHostPickerIntent.addHost,
+      )),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(
           children: [
             GlyphIcon(
-              glyph,
+              AppGlyphs.plus,
               size: 19,
-              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+              color: scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 11),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: context.listTitleStyle),
+                  Text('添加设备', style: context.listTitleStyle),
                   const SizedBox(height: 2),
                   Text(
-                    subtitle,
-                    maxLines: 1,
+                    '扫码或手动填写配对码，接入运行 claudroid-bridge 的主机',
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: AppTextStyle.caption2.of(context).copyWith(
                           color: scheme.onSurfaceVariant,
@@ -151,18 +254,11 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
               ),
             ),
             const SizedBox(width: 8),
-            Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                color: online ? scheme.success : scheme.onSurfaceVariant,
-                shape: BoxShape.circle,
-              ),
+            GlyphIcon(
+              Glyphs.chevronForward,
+              size: 15,
+              color: scheme.onSurfaceVariant,
             ),
-            if (selected) ...[
-              const SizedBox(width: 8),
-              GlyphIcon(Glyphs.check, size: 17, color: scheme.primary),
-            ],
           ],
         ),
       ),

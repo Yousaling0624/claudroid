@@ -14,6 +14,38 @@ void main() {
     expect(footnote, isNot(contains('完全放行')));
   });
 
+  test('remote permission labels stay in picker order', () {
+    expect(remotePermissionLabels.keys.toList(), [
+      'default',
+      'acceptEdits',
+      'plan',
+      'bypassPermissions',
+    ]);
+    expect(remotePermissionLabels['default'], '自动（每次确认）');
+    expect(remotePermissionLabels['acceptEdits'], '自动改文件');
+    expect(remotePermissionLabels['plan'], '只读规划');
+    expect(remotePermissionLabels['bypassPermissions'], '完全放行');
+  });
+
+  test('remote footnote names the host and the run location', () {
+    final bypass = remotePermissionFootnote('bypassPermissions');
+    expect(bypass, contains('远程主机执行'));
+    expect(bypass, contains('命令会在主机上直接执行'));
+
+    final forwarded = remotePermissionFootnote('default');
+    expect(forwarded, contains('远程主机执行'));
+    expect(forwarded, contains('工具调用会转发到手机确认'));
+    expect(forwarded, isNot(contains('直接执行')));
+
+    // acceptEdits auto-approves edits only; the footnote must not imply that
+    // every tool call is forwarded.
+    final edits = remotePermissionFootnote('acceptEdits');
+    expect(edits, contains('文件修改会自动通过'));
+    expect(edits, contains('其他工具调用会转发到手机确认'));
+
+    expect(remotePermissionFootnote('plan'), contains('只读规划'));
+  });
+
   group('networkProxyLabel', () {
     test('empty proxy means automatic', () {
       expect(networkProxyLabel(''), '自动（跟随系统）');

@@ -65,6 +65,18 @@ class RemoteTunnelStatus {
       };
 }
 
+/// The remote turn's permission mode accepted on the wire.
+const remotePermissionModes = {
+  'default',
+  'acceptEdits',
+  'plan',
+  'bypassPermissions',
+};
+
+/// Unknown or missing values fall back to the confirmation-every-time mode.
+String normalizeRemotePermissionMode(Object? value) =>
+    value is String && remotePermissionModes.contains(value) ? value : 'default';
+
 class RemoteHost {
   const RemoteHost({
     required this.id,
@@ -79,6 +91,8 @@ class RemoteHost {
     this.phase = 'offline',
     this.error,
     this.hasAccessToken = false,
+    this.permissionMode = 'default',
+    this.allowBypassPermissions = false,
     this.tunnel = const RemoteTunnelStatus(),
   });
 
@@ -98,6 +112,12 @@ class RemoteHost {
   final String phase;
   final String? error;
   final bool hasAccessToken;
+
+  /// `default`, `acceptEdits`, `plan` or `bypassPermissions`.
+  final String permissionMode;
+
+  /// The host's latest health capability; false until it reports otherwise.
+  final bool allowBypassPermissions;
   final RemoteTunnelStatus tunnel;
 
   bool get online => phase == 'online';
@@ -132,6 +152,10 @@ class RemoteHost {
         phase: json['phase'] as String? ?? 'offline',
         error: json['error'] as String?,
         hasAccessToken: json['hasAccessToken'] as bool? ?? false,
+        permissionMode: normalizeRemotePermissionMode(json['permissionMode']),
+        allowBypassPermissions: json['allowBypassPermissions'] is bool
+            ? json['allowBypassPermissions'] as bool
+            : false,
         tunnel: RemoteTunnelStatus.fromJson(
           (json['tunnel'] as Map<String, dynamic>?) ?? const {},
         ),
@@ -150,6 +174,8 @@ class RemoteHost {
         'phase': phase,
         'error': error,
         'hasAccessToken': hasAccessToken,
+        'permissionMode': permissionMode,
+        'allowBypassPermissions': allowBypassPermissions,
         'tunnel': tunnel.toJson(),
       };
 }

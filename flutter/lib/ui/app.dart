@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
+import '../models/remote.dart';
 import 'chat_page.dart';
 import 'home_page.dart';
 import 'left_side_sheet.dart';
@@ -295,9 +296,11 @@ class _Shell extends StatelessWidget {
   final void Function(String text, {bool isError}) onToast;
 
   void _openSettings(
-    BuildContext context, [
+    BuildContext context, {
     SettingsDestination destination = SettingsDestination.root,
-  ]) {
+    String? remoteHostId,
+    bool pairRemoteHost = false,
+  }) {
     BaseNavigator.push<void>(
       context,
       SettingsPage(
@@ -306,6 +309,8 @@ class _Shell extends StatelessWidget {
         onUpdateSettings: onUpdateSettings,
         onToast: onToast,
         destination: destination,
+        remoteHostId: remoteHostId,
+        pairRemoteHost: pairRemoteHost,
       ),
     );
   }
@@ -336,7 +341,7 @@ class _Shell extends StatelessWidget {
         },
         onSettings: (destination) {
           Navigator.of(sheetContext).pop();
-          _openSettings(context, destination);
+          _openSettings(context, destination: destination);
         },
         onClose: () => Navigator.of(sheetContext).pop(),
       ),
@@ -366,9 +371,23 @@ class _Shell extends StatelessWidget {
         notice: startupError,
         onOpenDrawer: () => _openDrawer(context),
         onOpenSettings: (destination) =>
-            _openSettings(context, destination),
-        onOpenRemoteHosts: () =>
-            _openSettings(context, SettingsDestination.remoteHosts),
+            _openSettings(context, destination: destination),
+        onOpenRemoteHost: (hostId) => _openSettings(
+          context,
+          destination: SettingsDestination.remoteHosts,
+          remoteHostId: hostId,
+        ),
+        onAddRemoteHost: () => BaseNavigator.push<RemoteHost>(
+          context,
+          SettingsPage(
+            bridge: bridge,
+            stateListenable: stateListenable,
+            onUpdateSettings: onUpdateSettings,
+            onToast: onToast,
+            destination: SettingsDestination.remoteHosts,
+            pairRemoteHost: true,
+          ),
+        ),
         onOpenWorkspace: () => _openWorkspace(context),
         onNewChat: onNewSession,
         onSend: onSendFromHome,
@@ -396,7 +415,7 @@ class _Shell extends StatelessWidget {
       labels: state.labels,
       onOpenDrawer: () => _openDrawer(context),
       onOpenSettings: (destination) =>
-          _openSettings(context, destination),
+          _openSettings(context, destination: destination),
       onOpenWorkspace: () => _openWorkspace(context),
       onNewChat: onNewSession,
       onOpenSession: onOpenSession,

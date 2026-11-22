@@ -172,6 +172,21 @@ data class RemoteEventBatch(
     val latestSeq: Long = 0,
 )
 
+/** Per-host permission modes the daemon accepts (docs/BRIDGE_CONTRACT.md §6.9). */
+object RemotePermissionModes {
+    const val DEFAULT = "default"
+    const val BYPASS = "bypassPermissions"
+
+    val ALLOWED = setOf(DEFAULT, "acceptEdits", "plan", BYPASS)
+
+    /**
+     * hosts.json may predate this field or be hand-edited. The daemon rejects
+     * anything outside [ALLOWED], so the UI and chat only ever see a valid value.
+     */
+    fun normalize(raw: String?): String =
+        raw?.trim()?.takeIf { it in ALLOWED } ?: DEFAULT
+}
+
 @Serializable
 data class RemoteHostProfile(
     val id: String,
@@ -189,6 +204,10 @@ data class RemoteHostProfile(
     val defaultCwd: String = "",
     val workspaceRoots: List<String> = emptyList(),
     val tunnel: RemoteTunnelStatus = RemoteTunnelStatus(),
+    /** This host's own mode; the global setting only governs the local engine. */
+    val permissionMode: String = RemotePermissionModes.DEFAULT,
+    /** Last health capability, kept so the detail page stays correct after a restart. */
+    val allowBypassPermissions: Boolean = false,
 )
 
 @Serializable

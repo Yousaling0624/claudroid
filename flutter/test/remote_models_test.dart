@@ -65,6 +65,42 @@ void main() {
     expect(RemoteHostsState.fromJsonString('').defaultHostId, isNull);
   });
 
+  test('hosts decode the permission mode and bypass capability', () {
+    final host = RemoteHost.fromJson({
+      'id': 'h1',
+      'name': '开发机',
+      'baseUrl': 'https://x',
+      'permissionMode': 'bypassPermissions',
+      'allowBypassPermissions': true,
+    });
+    expect(host.permissionMode, 'bypassPermissions');
+    expect(host.allowBypassPermissions, isTrue);
+
+    final roundTrip = RemoteHost.fromJson(host.toJson());
+    expect(roundTrip.permissionMode, 'bypassPermissions');
+    expect(roundTrip.allowBypassPermissions, isTrue);
+    expect(host.toJson()['permissionMode'], 'bypassPermissions');
+    expect(host.toJson()['allowBypassPermissions'], isTrue);
+  });
+
+  test('unknown permission modes and missing fields fall back safely', () {
+    final unknown = RemoteHost.fromJson({
+      'id': 'h1',
+      'baseUrl': 'https://x',
+      'permissionMode': 'somethingElse',
+      'allowBypassPermissions': 'yes',
+    });
+    expect(unknown.permissionMode, 'default');
+    expect(unknown.allowBypassPermissions, isFalse);
+
+    // Hosts paired before these fields existed keep rendering.
+    final legacy = RemoteHost.fromJson({'id': 'h2', 'baseUrl': 'https://x'});
+    expect(legacy.permissionMode, 'default');
+    expect(legacy.allowBypassPermissions, isFalse);
+    expect(legacy.toJson()['permissionMode'], 'default');
+    expect(legacy.toJson()['allowBypassPermissions'], isFalse);
+  });
+
   test('sessions carry the host binding across the wire', () {
     final session = ChatSession.fromJson({
       'id': 's1',

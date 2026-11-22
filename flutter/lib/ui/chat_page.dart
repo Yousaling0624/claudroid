@@ -1131,7 +1131,7 @@ class _ChatPageState extends State<ChatPage> {
           if (_editingId == null) chatDrafts[widget.sessionId] = value;
         },
         footnote: _remote
-            ? '远程主机执行；工具调用会转发到这里确认。'
+            ? remotePermissionFootnote(_remoteHost?.permissionMode ?? 'default')
             : permissionFootnote(
                 widget.settings.str('permissionMode', 'BYPASS'),
               ),

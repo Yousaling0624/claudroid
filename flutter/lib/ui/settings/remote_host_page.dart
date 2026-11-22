@@ -9,6 +9,7 @@ import '../glyphs.dart';
 import 'remote_files_page.dart';
 import 'settings_controller.dart';
 import 'settings_dialogs.dart';
+import 'settings_labels.dart';
 import 'settings_widgets.dart';
 
 /// One paired host: connection health, tunnel controls, credentials and the
@@ -134,6 +135,7 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
           baseUrl: patch['baseUrl'],
           accessClientId: patch['accessClientId'],
           accessSecret: patch['accessSecret'],
+          permissionMode: patch['permissionMode'],
         );
         return '已保存';
       });
@@ -253,11 +255,37 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
   }
 
   Widget _executionSection(BuildContext context, RemoteHost host) {
+    final bypassAllowed = host.allowBypassPermissions;
+    final bypassSelected = host.permissionMode == 'bypassPermissions';
     return generateSection(
       title: '执行',
-      footer: '远程会话固定使用主机自己的 Claude 登录、API Key 和模型配置；'
+      footer: '权限模式只影响这台主机的远程回合，下次回合生效。'
+          '远程会话仍使用主机自己的 Claude 登录、API Key 和模型配置；'
           '手机不发送任何供应商凭据。',
       items: [
+        SettingsPickerRow<String>(
+          label: '权限模式',
+          value: enumLabel(remotePermissionLabels, host.permissionMode),
+          options: [
+            for (final entry in remotePermissionLabels.entries)
+              PopupMenuItem(
+                label: entry.value,
+                subtitle: entry.key == 'bypassPermissions' && !bypassAllowed
+                    ? '需要在主机上开启 allowBypassPermissions'
+                    : null,
+                checked: host.permissionMode == entry.key,
+                onPressed: entry.key == 'bypassPermissions' && !bypassAllowed
+                    ? null
+                    : () => _save(host, {'permissionMode': entry.key}),
+              ),
+          ],
+        ),
+        if (bypassSelected && !bypassAllowed)
+          const SettingsNote(
+            text: '主机未允许完全放行。请改选其他模式，或在主机的 claudroid-bridge '
+                '配置里开启 allowBypassPermissions。',
+            isError: true,
+          ),
         SettingsCopyRow(
           label: '默认工作目录',
           value: host.defaultCwd.isEmpty ? '主机未报告' : host.defaultCwd,

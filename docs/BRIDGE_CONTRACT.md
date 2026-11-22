@@ -440,7 +440,7 @@ Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不�
 | `hosts.list` | — | `{ok, hostsJson}` | 主机列表 + 运行时状态 |
 | `hosts.pair` | `baseUrl`, `code`, `name?` | `{ok, hostsJson, hostJson}` | 用 8 位一次性配对码换 token；同一 `baseUrl` 重配对会更新原条目 |
 | `hosts.scanPairing` | — | `{ok, cancelled, text}` | 打开本地二维码扫描页；取消时 `cancelled:true`、`text` 为空。解码在设备本地完成 |
-| `hosts.update` | `id`, `name?`, `baseUrl?`, `accessClientId?`, `accessSecret?` | `{ok, hostsJson}` | 缺省字段保持不变；`accessSecret=""` 表示清除 Cloudflare Access 凭据 |
+| `hosts.update` | `id`, `name?`, `baseUrl?`, `accessClientId?`, `accessSecret?`, `permissionMode?` | `{ok, hostsJson}` | 缺省字段保持不变；`accessSecret=""` 表示清除 Cloudflare Access 凭据；`permissionMode` 只接受 `default` / `acceptEdits` / `plan` / `bypassPermissions`，其他值返回错误 |
 | `hosts.remove` | `id` | `{ok, hostsJson}` | 同时停止该主机的 SSE；正在跑的 turn 会被取消 |
 | `hosts.test` | `id` | `{ok, healthJson, hostsJson}` | `GET /v1/health`；失败转 `ok:false` |
 | `hosts.setDefault` | `id?` | `{ok, hostsJson}` | 空值取消默认主机 |
@@ -471,10 +471,16 @@ App 取到扫描文本后先在本地校验 scheme、版本、地址与码长，
    "phase":"online",                  // offline | connecting | online | error
    "error":null,                      // phase=error 时的中文原因
    "hasAccessToken":false,            // 是否配置了 Cloudflare Access service token
+   "permissionMode":"default",        // default | acceptEdits | plan | bypassPermissions
+   "allowBypassPermissions":false,    // 最近一次 health 的能力；离线时取持久值
    "tunnel":{"mode":"named","state":"up","url":"https://claude.example.com",
              "error":null,"changedAt":1700000000000}
  }]}
 ```
+
+`permissionMode` 是这台主机自己的权限模式，持久化在 `hosts.json`（旧文件或未知值按
+`default` 处理），远程回合用它而不是手机的全局模式。`allowBypassPermissions` 优先取运行时
+health，没有 health 时回退到上次持久化的值。
 
 `entriesJson` 与 `workspace.list` 类似，但 `path` 是主机绝对路径：
 

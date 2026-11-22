@@ -116,6 +116,9 @@ class RemoteHostManager(
             defaultCwd = response.host.defaultCwd,
             workspaceRoots = response.host.workspaceRoots,
             tunnel = response.host.tunnel,
+            // Re-pairing the same URL must not reset the host's own mode.
+            permissionMode = existing?.permissionMode ?: RemotePermissionModes.DEFAULT,
+            allowBypassPermissions = response.host.allowBypassPermissions,
         )
         store.upsert(profile)
         if (store.state.value.defaultHostId.isBlank()) store.setDefault(profile.id)
@@ -130,9 +133,14 @@ class RemoteHostManager(
         baseUrl: String?,
         accessClientId: String?,
         accessSecret: String?,
+        permissionMode: String? = null,
     ): RemoteHostProfile = withContext(Dispatchers.IO) {
         load()
         val current = store.find(id) ?: throw RemoteException("主机不存在")
+        val cleanMode = permissionMode?.let {
+            it.trim().takeIf { mode -> mode in RemotePermissionModes.ALLOWED }
+                ?: throw RemoteException("不支持的权限模式")
+        }
         val cleanBase = baseUrl?.takeIf { it.isNotBlank() }
             ?.let { RemoteClient.normalizeBaseUrl(it) }
             ?: current.baseUrl
@@ -146,6 +154,7 @@ class RemoteHostManager(
             baseUrl = cleanBase,
             accessClientId = accessClientId?.trim() ?: current.accessClientId,
             accessSecretSealed = sealedSecret,
+            permissionMode = cleanMode ?: current.permissionMode,
         )
         store.upsert(updated)
         updated
@@ -243,8 +252,11 @@ class RemoteHostManager(
         if (health.protocol != 0 && health.protocol != PROTOCOL_VERSION) {
             throw RemoteException("主机协议版本不兼容（主机 v${health.protocol}，App v$PROTOCOL_VERSION）")
         }
-        if (request.permissionMode == "bypassPermissions" && !health.allowBypassPermissions) {
-            throw RemoteException("主机没有允许「完全放行」模式，请改用其他权限模式，或在主机配置中开启。")
+        if (request.permissionMode == RemotePermissionModes.BYPASS && !health.allowBypassPermissions) {
+            throw RemoteException(
+                "主机没有允许「完全放行」模式，请在设置 → 远程主机 → 这台主机 → 执行里改用其他权限模式，" +
+                    "或在主机配置中开启 allowBypassPermissions。",
+            )
         }
         rememberHealth(profile, health)
 
@@ -617,6 +629,7 @@ class RemoteHostManager(
             defaultCwd = health.defaultCwd,
             workspaceRoots = health.workspaceRoots,
             tunnel = health.tunnel,
+            allowBypassPermissions = health.allowBypassPermissions,
             lastSeenAt = System.currentTimeMillis(),
         )
 

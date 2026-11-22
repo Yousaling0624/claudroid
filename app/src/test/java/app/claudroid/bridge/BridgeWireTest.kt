@@ -14,6 +14,10 @@ import app.claudroid.core.WorkspaceInfo
 import app.claudroid.engine.openai.ModelCatalog
 import app.claudroid.chat.ChatEvent
 import app.claudroid.chat.DeltaBlock
+import app.claudroid.remote.RemoteHealth
+import app.claudroid.remote.RemoteHostProfile
+import app.claudroid.remote.RemotePhase
+import app.claudroid.remote.RemoteRuntime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -259,6 +263,38 @@ class BridgeWireTest {
         assertTrue(json.contains("\"kind\":\"MARKDOWN\""))
         assertTrue(json.contains("\"isDirectory\":true"))
         assertTrue(json.contains("\"isDirectory\":false"))
+    }
+
+    @Test
+    fun `host json carries the per-host permission mode and bypass capability`() {
+        val host = RemoteHostProfile(
+            id = "h1",
+            name = "devbox",
+            baseUrl = "https://host.example.com",
+            tokenSealed = "sealed",
+            permissionMode = "plan",
+            allowBypassPermissions = true,
+        )
+        val offline = BridgeWire.hostJson(host, null).toString()
+        assertTrue(offline.contains("\"permissionMode\":\"plan\""))
+        assertTrue(offline.contains("\"allowBypassPermissions\":true"))
+
+        // Runtime health wins over the persisted capability in both directions.
+        val liveTrue = BridgeWire.hostJson(
+            host.copy(allowBypassPermissions = false),
+            RemoteRuntime(RemotePhase.ONLINE, null, RemoteHealth(allowBypassPermissions = true)),
+        ).toString()
+        assertTrue(liveTrue.contains("\"allowBypassPermissions\":true"))
+
+        val liveFalse = BridgeWire.hostJson(
+            host,
+            RemoteRuntime(RemotePhase.ONLINE, null, RemoteHealth(allowBypassPermissions = false)),
+        ).toString()
+        assertTrue(liveFalse.contains("\"allowBypassPermissions\":false"))
+
+        // A stale/invalid value must not reach the frontend or a remote turn.
+        val legacy = BridgeWire.hostJson(host.copy(permissionMode = "auto"), null).toString()
+        assertTrue(legacy.contains("\"permissionMode\":\"default\""))
     }
 
     @Test

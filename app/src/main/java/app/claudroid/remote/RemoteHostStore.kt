@@ -43,6 +43,7 @@ class RemoteHostStore(private val file: File) {
         val hosts = parsed.hosts
             .filter { it.id.isNotBlank() && it.baseUrl.isNotBlank() }
             .distinctBy { it.id }
+            .map { it.copy(permissionMode = RemotePermissionModes.normalize(it.permissionMode)) }
         val defaultId = parsed.defaultHostId.takeIf { id -> hosts.any { it.id == id } } ?: ""
         _state.value = RemoteHostsFile(hosts = hosts, defaultHostId = defaultId)
         loaded = true

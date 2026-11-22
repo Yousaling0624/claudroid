@@ -41,7 +41,8 @@ class HomePage extends StatefulWidget {
     required this.onOpenSession,
     required this.onOpenDrawer,
     required this.onOpenSettings,
-    required this.onOpenRemoteHosts,
+    required this.onOpenRemoteHost,
+    required this.onAddRemoteHost,
     required this.onOpenWorkspace,
     required this.onNewChat,
     required this.onSend,
@@ -65,7 +66,13 @@ class HomePage extends StatefulWidget {
   final ValueChanged<String> onOpenSession;
   final VoidCallback onOpenDrawer;
   final ValueChanged<SettingsDestination> onOpenSettings;
-  final VoidCallback onOpenRemoteHosts;
+
+  /// Opens the settings page for one paired host, without leaving the picker
+  /// flow through the settings root first.
+  final void Function(String hostId) onOpenRemoteHost;
+
+  /// Opens the pairing page; a non-null result becomes the selected host.
+  final Future<RemoteHost?> Function() onAddRemoteHost;
   final VoidCallback onOpenWorkspace;
   final VoidCallback onNewChat;
 
@@ -104,6 +111,11 @@ class _HomePageState extends State<HomePage> {
   /// replace that choice with the default host.
   bool _hostTouched = false;
 
+  /// A host just returned by the pairing flow. The global `hosts` state can
+  /// lag that result by one event; until [widget.hosts] contains it, the
+  /// "selection disappeared" guard must not clear it.
+  String? _pendingHostId;
+
   RemoteHost? get _host => widget.hosts.byId(_hostId);
 
   @override
@@ -121,6 +133,20 @@ class _HomePageState extends State<HomePage> {
       _resetHostSelection();
       _loadSuggestions();
     } else if (oldWidget.hosts != widget.hosts) {
+      final pending = _pendingHostId;
+      if (pending != null) {
+        if (widget.hosts.byId(pending) != null) {
+          _pendingHostId = null;
+        } else if (oldWidget.hosts.byId(pending) == null) {
+          // Still the snapshot from before the pairing result landed; keep
+          // the new selection instead of treating it as deleted.
+          return;
+        } else {
+          // It was visible in the previous snapshot and is now gone: the
+          // normal "selected host disappeared" path below should clear it.
+          _pendingHostId = null;
+        }
+      }
       final selected = _host;
       if (_hostId != null && selected == null) {
         _hostId = null;
@@ -136,6 +162,7 @@ class _HomePageState extends State<HomePage> {
 
   void _resetHostSelection() {
     _hostTouched = false;
+    _pendingHostId = null;
     _hostId = widget.hosts.defaultHostId;
     _remoteCwd = null;
   }
@@ -231,21 +258,36 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _chooseHost() async {
-    if (widget.hosts.isEmpty) {
-      widget.onOpenRemoteHosts();
-      return;
-    }
     final choice = await showRemoteHostPicker(
       context,
       hosts: widget.hosts,
       currentHostId: _hostId,
     );
     if (choice == null || !mounted) return;
-    setState(() {
-      _hostTouched = true;
-      _hostId = choice.hostId;
-      _remoteCwd = null;
-    });
+    switch (choice.intent) {
+      case RemoteHostPickerIntent.configureLocal:
+        widget.onOpenSettings(SettingsDestination.engine);
+      case RemoteHostPickerIntent.configureHost:
+        final hostId = choice.hostId;
+        if (hostId != null) widget.onOpenRemoteHost(hostId);
+      case RemoteHostPickerIntent.addHost:
+        final host = await widget.onAddRemoteHost();
+        if (host == null || !mounted) return;
+        setState(() {
+          _hostTouched = true;
+          _hostId = host.id;
+          _pendingHostId = host.id;
+          _remoteCwd = null;
+        });
+        widget.onToast('已添加「${host.displayName}」');
+      case null:
+        setState(() {
+          _hostTouched = true;
+          _pendingHostId = null;
+          _hostId = choice.hostId;
+          _remoteCwd = null;
+        });
+    }
   }
 
   Future<void> _chooseRemoteCwd() async {
@@ -536,7 +578,7 @@ class _HomePageState extends State<HomePage> {
                   ? permissionFootnote(
                       widget.settings.str('permissionMode', 'BYPASS'),
                     )
-                  : '远程主机执行；工具调用会转发到这里确认。',
+                  : remotePermissionFootnote(_host!.permissionMode),
               bottomInset: context.bottomInset,
             ),
           ),

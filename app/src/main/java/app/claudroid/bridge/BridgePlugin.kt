@@ -1218,6 +1218,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             baseUrl = call.str("baseUrl"),
             accessClientId = call.str("accessClientId"),
             accessSecret = call.str("accessSecret"),
+            permissionMode = call.str("permissionMode"),
         )
         return hostsState()
     }
