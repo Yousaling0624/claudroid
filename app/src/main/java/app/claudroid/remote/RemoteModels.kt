@@ -46,6 +46,8 @@ data class RemoteHealth(
     val defaultModel: String? = null,
     val permissionModes: List<String> = emptyList(),
     val allowBypassPermissions: Boolean = false,
+    /** Daemon exposes `GET /v1/events/batch`; quick tunnels buffer SSE, so the app polls. */
+    val eventPoll: Boolean = false,
     val tunnel: RemoteTunnelStatus = RemoteTunnelStatus(),
 )
 
@@ -72,7 +74,8 @@ data class RemoteFileEntry(
     val path: String,
     val isDir: Boolean = false,
     val size: Long = 0,
-    val mtimeMs: Long = 0,
+    /** Node reports fractional milliseconds; `Long` would reject the real payload. */
+    val mtimeMs: Double = 0.0,
 )
 
 @Serializable
@@ -161,6 +164,13 @@ sealed interface RemoteEvent {
         val host: RemoteHealth = RemoteHealth(),
     ) : RemoteEvent
 }
+
+@Serializable
+data class RemoteEventBatch(
+    val events: List<RemoteEvent> = emptyList(),
+    /** Sequence head of the daemon process; lower than a stored `since` means it restarted. */
+    val latestSeq: Long = 0,
+)
 
 @Serializable
 data class RemoteHostProfile(

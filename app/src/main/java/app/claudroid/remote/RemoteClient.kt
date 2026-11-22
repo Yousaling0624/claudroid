@@ -55,10 +55,19 @@ class RemoteClient(
     }
 
     fun listFiles(path: String): List<RemoteFileEntry> =
-        RemoteJson.json.decodeFromString(RemoteFileList.serializer(), get(fsUrl("list", path))).entries
+        RemoteJson.json
+            .decodeFromString(RemoteFileList.serializer(), getRaw(fsUrl("list", path)))
+            .entries
 
     fun stat(path: String): RemoteFileEntry =
-        RemoteJson.json.decodeFromString(RemoteFileEntry.serializer(), get(fsUrl("stat", path)))
+        RemoteJson.json.decodeFromString(RemoteFileEntry.serializer(), getRaw(fsUrl("stat", path)))
+
+    /**
+     * Bounded JSON alternative to SSE. Cloudflare Quick Tunnels buffer
+     * `text/event-stream`, so the app falls back to this while a turn is running.
+     */
+    fun eventsSince(since: Long, timeoutMs: Int = 15_000): RemoteEventBatch =
+        get("/v1/events/batch?since=${since.coerceAtLeast(0)}&timeout=$timeoutMs")
 
     fun download(path: String, target: File) {
         val conn = open(fsUrl("download", path), "GET")
@@ -142,10 +151,15 @@ class RemoteClient(
             conn.disconnect()
             throw RemoteException(message, code)
         }
-        return EventStream(conn)
+        val latestSeq = conn.getHeaderField("X-Event-Seq")?.toLongOrNull() ?: 0
+        return EventStream(conn, latestSeq)
     }
 
-    inner class EventStream internal constructor(private val conn: HttpURLConnection) : Closeable {
+    inner class EventStream internal constructor(
+        private val conn: HttpURLConnection,
+        /** Sequence head of the daemon when the stream opened; 0 on older daemons. */
+        val latestSeq: Long,
+    ) : Closeable {
         @Volatile private var closed = false
 
         val isClosed: Boolean get() = closed
@@ -178,11 +192,13 @@ class RemoteClient(
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-    private inline fun <reified T> get(path: String): T {
+    private fun getRaw(path: String): String {
         val conn = open(path, "GET")
-        val text = execute(conn, null)
-        return RemoteJson.json.decodeFromString(text)
+        return execute(conn, null)
     }
+
+    private inline fun <reified T> get(path: String): T =
+        RemoteJson.json.decodeFromString(getRaw(path))
 
     private inline fun <reified T> post(path: String, payload: String): T {
         val conn = open(path, "POST")

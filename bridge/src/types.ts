@@ -26,6 +26,8 @@ export interface HostInfo {
   defaultModel?: string;
   permissionModes: PermissionMode[];
   allowBypassPermissions: boolean;
+  /** True when `GET /v1/events/batch` exists; quick tunnels buffer SSE, so the app polls instead. */
+  eventPoll: boolean;
   tunnel: TunnelStatus;
 }
 

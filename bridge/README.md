@@ -121,6 +121,10 @@ daemon 负责启动与监督 `cloudflared`，异常退出按指数退避重启�
 `/v1/tunnel` 和 SSE 推给 App，也可以在手机的主机详情页开关。quick 地址会变化，长期使用
 请配置 named tunnel。
 
+Quick Tunnel **不支持 SSE**（Cloudflare 边缘会缓冲 `text/event-stream`）。App 在回合开始后
+收不到事件时会自动改用 `GET /v1/events/batch?since=<seq>&timeout=<ms>` 长轮询同一事件总线；
+named tunnel 与局域网直连不受影响。
+
 ## 作为系统服务运行
 
 ```ini
@@ -168,7 +172,7 @@ npm run build      # 产出 dist/（CLI 入口 dist/cli.js）
 
 ```
 src/cli.ts          命令解析、启动/配对/doctor/devices
-src/server.ts       HTTP + SSE 路由
+src/server.ts       HTTP + SSE / 事件轮询路由
 src/auth.ts         配对码、设备令牌哈希、设备存储
 src/pairing.ts      QR 配对载荷（claudroid://pair URI）
 src/qr.ts           终端二维码渲染

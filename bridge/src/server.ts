@@ -49,6 +49,7 @@ function hostInfo(deps: BridgeServerDeps): HostInfo {
     defaultModel: process.env.ANTHROPIC_MODEL,
     permissionModes: modes,
     allowBypassPermissions: deps.config.allowBypassPermissions,
+    eventPoll: true,
     tunnel: deps.tunnel.current(),
   };
 }
@@ -131,6 +132,9 @@ function openEventStream(
     "cache-control": "no-store",
     connection: "keep-alive",
     "x-accel-buffering": "no",
+    // Lets the app notice a daemon restart: its stored `since` is ahead of this
+    // process, so the sequence space must be treated as reset.
+    "x-event-seq": String(deps.bus.latestSeq()),
   });
   res.flushHeaders();
   res.write("retry: 3000\n\n");
@@ -155,6 +159,45 @@ function openEventStream(
   };
   req.on("close", cleanup);
   res.on("close", cleanup);
+}
+
+const EVENT_BATCH_MAX = 400;
+const EVENT_BATCH_DEBOUNCE_MS = 120;
+const EVENT_POLL_DEFAULT_MS = 15_000;
+const EVENT_POLL_MAX_MS = 25_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref();
+  });
+}
+
+/**
+ * Resolves once this device can see an event newer than `since`, or after `timeoutMs`
+ * with nothing new. Cloudflare Quick Tunnels buffer `text/event-stream`, so the app
+ * uses this bounded JSON response instead of SSE when it detects no stream progress.
+ */
+function waitForEvent(
+  deps: BridgeServerDeps,
+  deviceId: string,
+  since: number,
+  timeoutMs: number,
+): Promise<void> {
+  if (deps.bus.replaySince(since, deviceId).length > 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: () => void = () => undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref();
+    unsubscribe = deps.bus.subscribe(deviceId, () => finish());
+  });
 }
 
 async function handle(
@@ -187,6 +230,25 @@ async function handle(
 
   if (method === "GET" && path === "/v1/events") {
     openEventStream(req, res, deps, device);
+    return;
+  }
+
+  if (method === "GET" && path === "/v1/events/batch") {
+    const sinceRaw = Number(url.searchParams.get("since") ?? 0);
+    const timeoutRaw = Number(url.searchParams.get("timeout") ?? EVENT_POLL_DEFAULT_MS);
+    const since = Number.isFinite(sinceRaw) && sinceRaw > 0 ? Math.floor(sinceRaw) : 0;
+    const timeout = Number.isFinite(timeoutRaw)
+      ? Math.min(EVENT_POLL_MAX_MS, Math.max(0, Math.floor(timeoutRaw)))
+      : EVENT_POLL_DEFAULT_MS;
+    await waitForEvent(deps, device.id, since, timeout);
+    const pending = deps.bus.replaySince(since, device.id);
+    // A short debounce coalesces the burst the CLI emits per message instead of
+    // answering with one or two token deltas per request.
+    if (pending.length > 0) await sleep(EVENT_BATCH_DEBOUNCE_MS);
+    sendJson(res, 200, {
+      events: deps.bus.replaySince(since, device.id).slice(0, EVENT_BATCH_MAX),
+      latestSeq: deps.bus.latestSeq(),
+    });
     return;
   }
 

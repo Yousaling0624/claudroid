@@ -53,6 +53,11 @@ export class EventBus {
     return this.buffer[0]?.event.seq ?? this.seq;
   }
 
+  /** Newest sequence number issued by this process, even if the event was trimmed. */
+  latestSeq(): number {
+    return this.seq;
+  }
+
   subscribe(deviceId: string, listener: EventListener): () => void {
     let set = this.listeners.get(deviceId);
     if (!set) {

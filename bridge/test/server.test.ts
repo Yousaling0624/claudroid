@@ -17,6 +17,7 @@ interface Harness {
   root: string;
   token: string;
   turns: TurnManager;
+  bus: EventBus;
   close: () => Promise<void>;
 }
 
@@ -75,7 +76,7 @@ async function startServer(runner: ClaudeRunner): Promise<Harness> {
     cleanup(configDir);
   };
   cleanups.push(close);
-  return { baseUrl, root, token: pairBody.token, turns, close };
+  return { baseUrl, root, token: pairBody.token, turns, bus, close };
 }
 
 afterEach(async () => {
@@ -144,9 +145,10 @@ describe("Bridge HTTP server", () => {
       headers: authHeaders(harness.token),
     });
     expect(response.status).toBe(200);
-    const health = await json<{ protocol: number; workspaceRoots: string[] }>(response);
+    const health = await json<{ protocol: number; workspaceRoots: string[]; eventPoll: boolean }>(response);
     expect(health.protocol).toBe(1);
     expect(health.workspaceRoots).toContain(harness.root);
+    expect(health.eventPoll).toBe(true);
   });
 
   it("streams CLI events and resolves permission requests", async () => {
@@ -280,5 +282,55 @@ describe("Bridge HTTP server", () => {
       body: JSON.stringify({ action: "start" }),
     });
     expect(start.status).toBe(409);
+  });
+});
+
+describe("event polling fallback", () => {
+  it("replays buffered events as one bounded JSON batch", async () => {
+    const harness = await startServer(new FakeRunner());
+    const started = await fetch(`${harness.baseUrl}/v1/turns`, {
+      method: "POST",
+      headers: authHeaders(harness.token),
+      body: JSON.stringify({ cwd: harness.root, prompt: "你好" }),
+    });
+    expect(started.status).toBe(202);
+
+    const response = await fetch(`${harness.baseUrl}/v1/events/batch?since=0&timeout=1000`, {
+      headers: authHeaders(harness.token),
+    });
+    expect(response.status).toBe(200);
+    const body = await json<{
+      events: Array<{ kind: string }>;
+      latestSeq: number;
+    }>(response);
+    expect(body.events[0]?.kind).toBe("turn");
+    expect(body.events.some((event) => event.kind === "cli")).toBe(true);
+    expect(body.latestSeq).toBeGreaterThan(0);
+  });
+
+  it("long-polls for a new event and reports the daemon sequence head", async () => {
+    const harness = await startServer(new FakeRunner());
+    const pending = fetch(
+      `${harness.baseUrl}/v1/events/batch?since=${harness.bus.latestSeq()}&timeout=5_000`,
+      { headers: authHeaders(harness.token) },
+    );
+    const published = harness.bus.publish({
+      kind: "tunnel",
+      tunnel: { mode: "off", state: "off", changedAt: 1 },
+    });
+    const body = await json<{
+      events: Array<{ kind: string; seq: number }>;
+      latestSeq: number;
+    }>(await pending);
+    expect(body.events.map((event) => event.seq)).toContain(published.seq);
+    expect(body.latestSeq).toBe(published.seq);
+
+    const ahead = await fetch(`${harness.baseUrl}/v1/events/batch?since=999999&timeout=20`, {
+      headers: authHeaders(harness.token),
+    });
+    const empty = await json<{ events: unknown[]; latestSeq: number }>(ahead);
+    expect(empty.events).toEqual([]);
+    // A seq ahead of the daemon's head means the app survived a daemon restart.
+    expect(empty.latestSeq).toBeLessThan(999_999);
   });
 });

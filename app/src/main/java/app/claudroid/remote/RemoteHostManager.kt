@@ -48,7 +48,12 @@ class RemoteHostManager(
     private val streamLock = Any()
     private val streams = mutableMapOf<String, RemoteClient.EventStream>()
     private val streamJobs = mutableMapOf<String, Job>()
+    private val pollJobs = mutableMapOf<String, Job>()
+
+    /** Hosts where SSE never made progress (quick tunnels buffer it); poll from now on. */
+    private val pollEnabled = ConcurrentHashMap.newKeySet<String>()
     private val lastSeq = ConcurrentHashMap<String, Long>()
+    private val seqLock = Any()
 
     private val collectors = CopyOnWriteArrayList<TurnCollector>()
     private val activeTurnIds = ConcurrentHashMap<String, String>() // hostId -> running turnId
@@ -157,7 +162,10 @@ class RemoteHostManager(
         synchronized(streamLock) {
             streams.remove(id)?.close()
             streamJobs.remove(id)?.cancel()
+            pollJobs.remove(id)?.cancel()
         }
+        pollEnabled.remove(id)
+        synchronized(seqLock) { lastSeq.remove(id) }
         store.remove(id)
         synchronized(lock) {
             runtime.remove(id)
@@ -245,6 +253,7 @@ class RemoteHostManager(
         collectors.add(collector)
         addActive(hostId)
         ensureStream(hostId)
+        if (hostId in pollEnabled) ensurePolling(hostId)
         try {
             val snapshot = client.startTurn(
                 RemoteTurnBody(
@@ -258,6 +267,7 @@ class RemoteHostManager(
             collector.assign(snapshot.turnId)
             turnHosts[snapshot.turnId] = hostId
             activeTurnIds[hostId] = snapshot.turnId
+            if (health.eventPoll) watchSseProgress(hostId, collector)
             if (isCancelled()) {
                 runCatching { client.cancelTurn(snapshot.turnId) }
                 return@withContext -2
@@ -341,7 +351,15 @@ class RemoteHostManager(
                 val client = clientFor(profile)
                 val health = client.health()
                 rememberHealth(profile, health)
-                stream = client.openEvents(lastSeq[hostId] ?: 0)
+                val since = lastSeq[hostId] ?: 0
+                stream = client.openEvents(since)
+                if (stream.latestSeq > 0 && stream.latestSeq < since) {
+                    // The daemon restarted; its sequence numbers began again, so the
+                    // stored high-water mark would filter every future event.
+                    resetSeq(hostId)
+                    stream.close()
+                    continue
+                }
                 synchronized(streamLock) { streams[hostId] = stream }
                 backoff = 1_000L
                 stream.read { event -> dispatch(hostId, event) }
@@ -385,8 +403,108 @@ class RemoteHostManager(
         }
     }
 
+    // ------------------------------------------------------- polling fallback
+
+    /**
+     * Cloudflare Quick Tunnels answer the SSE request with 200 and then buffer the
+     * whole body, so a turn would sit at "准备中…" until the 30-minute cap. Once a
+     * stream shows no progress, this host switches to the bounded JSON batch endpoint,
+     * which traverses the tunnel normally. SSE keeps running; sequence numbers dedupe
+     * the overlap if it ever starts delivering.
+     */
+    private fun activatePolling(hostId: String) {
+        pollEnabled.add(hostId)
+        ensurePolling(hostId)
+    }
+
+    private fun ensurePolling(hostId: String) {
+        synchronized(streamLock) {
+            if (pollJobs[hostId]?.isActive == true) return
+            val job = scope.launch(Dispatchers.IO) { pollLoop(hostId) }
+            pollJobs[hostId] = job
+            job.invokeOnCompletion {
+                synchronized(streamLock) {
+                    if (pollJobs[hostId] === job) pollJobs.remove(hostId)
+                }
+            }
+        }
+    }
+
+    private suspend fun pollLoop(hostId: String) {
+        while (currentCoroutineContext().isActive && hasActive(hostId)) {
+            val profile = host(hostId) ?: break
+            try {
+                val since = lastSeq[hostId] ?: 0
+                val batch = clientFor(profile).eventsSince(since)
+                if (batch.latestSeq > 0 && batch.latestSeq < since) {
+                    // Daemon restarted while the app kept its high-water mark.
+                    resetSeq(hostId)
+                    continue
+                }
+                batch.events.forEach { dispatch(hostId, it) }
+                if (batch.events.isEmpty()) delay(POLL_IDLE_DELAY_MS)
+            } catch (e: RemoteException) {
+                if (e.status == 401) {
+                    setRuntime(hostId, RemoteRuntime(RemotePhase.ERROR, "配对已失效，请重新配对", null))
+                    failCollectors(hostId, "主机配对已失效，请在「设置 → 远程主机」重新配对。")
+                    break
+                }
+                if (e.status == 404) {
+                    // Daemon predates the batch endpoint; stay on SSE only.
+                    pollEnabled.remove(hostId)
+                    break
+                }
+                delay(POLL_RETRY_MS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                delay(POLL_RETRY_MS)
+            }
+        }
+    }
+
+    /**
+     * The daemon publishes `turn started` before answering the POST, so a working SSE
+     * delivers something within a few seconds. A later silence triggers the fallback
+     * too: long tool runs are quiet, but polling then is harmless.
+     */
+    private fun watchSseProgress(hostId: String, collector: TurnCollector) {
+        scope.launch {
+            delay(SSE_FIRST_EVENT_GRACE_MS)
+            if (!collectors.contains(collector)) return@launch
+            if (!collector.sawEvent()) {
+                activatePolling(hostId)
+                return@launch
+            }
+            while (collectors.contains(collector)) {
+                delay(SSE_STALL_CHECK_MS)
+                if (!collectors.contains(collector)) break
+                if (collector.millisSinceLastEvent() > SSE_STALL_MS) {
+                    activatePolling(hostId)
+                    break
+                }
+            }
+        }
+    }
+
+    private fun resetSeq(hostId: String) = synchronized(seqLock) {
+        lastSeq.remove(hostId)
+    }
+
     private fun dispatch(hostId: String, event: RemoteEvent) {
-        if (event.seq > 0) lastSeq.merge(hostId, event.seq) { old, new -> maxOf(old, new) }
+        // SSE and the polling fallback can overlap. Delivering under the sequence lock
+        // keeps order and drops the duplicate the other transport already applied.
+        synchronized(seqLock) {
+            if (event.seq > 0) {
+                val previous = lastSeq[hostId] ?: 0
+                if (event.seq <= previous) return
+                lastSeq[hostId] = event.seq
+            }
+            deliver(hostId, event)
+        }
+    }
+
+    private fun deliver(hostId: String, event: RemoteEvent) {
         when (event) {
             is RemoteEvent.Cli, is RemoteEvent.Turn -> {
                 collectors.forEach { it.accept(event) }
@@ -505,6 +623,21 @@ class RemoteHostManager(
             private set
         private val buffered = ArrayDeque<RemoteEvent>()
         private var finished = false
+        private var firstEventAt = 0L
+        private var lastEventAt = System.currentTimeMillis()
+
+        /** True once any event for this turn arrived, whatever the transport. */
+        @Synchronized
+        fun sawEvent(): Boolean = firstEventAt > 0
+
+        @Synchronized
+        fun millisSinceLastEvent(): Long = System.currentTimeMillis() - lastEventAt
+
+        private fun noteEvent() {
+            val now = System.currentTimeMillis()
+            if (firstEventAt == 0L) firstEventAt = now
+            lastEventAt = now
+        }
 
         @Synchronized
         fun accept(event: RemoteEvent) {
@@ -537,9 +670,16 @@ class RemoteHostManager(
 
         private fun handle(event: RemoteEvent, target: String) {
             when (event) {
-                is RemoteEvent.Cli -> if (event.turnId == target) onEvent(event)
-                is RemoteEvent.Permission -> if (event.turnId == target) onEvent(event)
+                is RemoteEvent.Cli -> if (event.turnId == target) {
+                    noteEvent()
+                    onEvent(event)
+                }
+                is RemoteEvent.Permission -> if (event.turnId == target) {
+                    noteEvent()
+                    onEvent(event)
+                }
                 is RemoteEvent.Turn -> if (event.turnId == target) {
+                    noteEvent()
                     if (event.phase == "done" || event.phase == "error") {
                         onEvent(event)
                         if (!finished) {
@@ -558,5 +698,13 @@ class RemoteHostManager(
 
         /** Last-resort cap; the daemon normally settles long before this. */
         private const val TURN_TIMEOUT_MS = 30 * 60_000L
+
+        /** How long a working SSE may stay silent before polling takes over. */
+        private const val SSE_FIRST_EVENT_GRACE_MS = 3_000L
+        private const val SSE_STALL_CHECK_MS = 5_000L
+        private const val SSE_STALL_MS = 20_000L
+
+        private const val POLL_IDLE_DELAY_MS = 250L
+        private const val POLL_RETRY_MS = 1_000L
     }
 }

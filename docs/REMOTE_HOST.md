@@ -15,7 +15,7 @@
 Flutter UI
   └─ MethodChannel / EventChannel
 Kotlin
-  ├─ ChatController → RemoteTurnBackend → RemoteClient（HTTP + SSE）
+  ├─ ChatController → RemoteTurnBackend → RemoteClient（HTTP + SSE / 长轮询）
   └─ RemoteHostManager / RemoteHostStore / SecretBox
 主机
   ├─ claudroid-bridge
@@ -24,9 +24,16 @@ Kotlin
   └─ cloudflared（可选）
 ```
 
-命令走普通 POST，事件走 `GET /v1/events` 的 SSE 长连接；daemon 把 CLI 的 `stream-json`
+命令走普通 POST，事件优先走 `GET /v1/events` 的 SSE 长连接；daemon 把 CLI 的 `stream-json`
 行原样转发，Kotlin 侧继续用同一套 `StreamParser`，所以本地/远程的文本、思考、工具卡片
 行为一致。
+
+**Cloudflare Quick Tunnel 会缓冲 `text/event-stream`**（官方不支持 SSE），隧道下 SSE 请求
+能拿到 200 但永远收不到 body。App 在回合开始后几秒内收不到任何事件时，会自动切到
+`GET /v1/events/batch?since=<seq>&timeout=<ms>`：这是一个有界的长轮询 JSON 接口
+（`{events, latestSeq}`），能正常穿过隧道。两条通道用事件 `seq` 去重；daemon 重启导致
+序号归零时，`latestSeq`/`X-Event-Seq` 会让 App 重置水位后重放。named tunnel、局域网直连
+仍然走 SSE。
 
 ## 2. 主机准备
 
@@ -121,7 +128,8 @@ daemon 只保存令牌的 SHA-256 哈希，并支持 `claudroid-bridge devices r
   拒绝」，并显示倒计时。手机断连或超时，主机自动拒绝。
 - **文件**：设置 → 远程主机 → 浏览主机文件可查看 roots 下的目录，打开/分享会先下载到本机缓存。
 - **重连**：daemon 保留有界事件缓冲；网络恢复后 App 从最后的 `seq` 重放并收敛回合状态，
-  聊天页顶部显示主机离线/重连提示。
+  重复/交叠的事件按 `seq` 去重。Quick Tunnel 下自动改用长轮询，聊天页顶部仍显示主机离线/
+  重连提示。
 - **隧道**：主机详情页可开启 / 重启 / 停止隧道并复制公网地址。
 
 同一时刻只允许一个 turn（与本地引擎共用全局 busy 锁），避免和备份、终端、工作区切换冲突。
@@ -192,7 +200,8 @@ WantedBy=default.target
 | 设置页一直离线 | 检查地址能否在手机浏览器打开 `/v1/health`；确认 daemon 在跑、端口/隧道正确 |
 | 提示协议版本不兼容 | 升级主机上的 `claudroid-bridge` 到与 App 相同的协议版本（v1） |
 | 隧道启动失败 | `claudroid-bridge doctor` 检查 token/域名；cloudflared 缺失时 daemon 会自动下载，失败原因会显示在 App 与日志中 |
-| 工具确认总是被拒 | 手机不在线或超过 `permissionTimeoutMs`；确认 App 在前台且 SSE 已连接 |
+| 工具确认总是被拒 | 手机不在线或超过 `permissionTimeoutMs`；确认 App 在前台且事件通道（SSE 或轮询）已连接 |
+| 聊天一直停在「准备中…」 | 主机 daemon 过旧（没有 `/v1/events/batch`）；升级主机上的 `claudroid-bridge`。Quick Tunnel 必须靠轮询回退 |
 | 目录选择为空 | `defaultCwd` / `paths` 不在 `roots` 内，或主机的 `roots` 配错 |
 | 远程会话报“主机没有允许完全放行” | 改用其他权限模式，或在主机配置开启 `allowBypassPermissions` |
 

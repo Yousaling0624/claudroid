@@ -24,6 +24,7 @@ export interface PairingInfo {
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 8;
+const LAST_SEEN_WRITE_MS = 60_000;
 
 export class AuthError extends Error {
   constructor(
@@ -116,6 +117,9 @@ export class DeviceStore {
   touch(id: string, now: number): void {
     const device = this.devices.find((d) => d.id === id);
     if (!device) return;
+    // Event polling authenticates several times per second; persisting every request
+    // would rewrite devices.json constantly. Minute granularity is plenty for "最近".
+    if (now - device.lastSeenAt < LAST_SEEN_WRITE_MS) return;
     device.lastSeenAt = now;
     try {
       this.save();
