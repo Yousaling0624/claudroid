@@ -25,6 +25,9 @@ command -v systemctl >/dev/null || die "需要 systemd。"
 command -v flock >/dev/null || die "需要 flock（util-linux）。"
 systemctl --user show-environment >/dev/null 2>&1 || die "systemd 用户实例不可用。"
 
+npm_prefix="$(npm prefix -g 2>/dev/null || true)"
+[ "$npm_prefix" = "$HOME/.local" ] || die "npm 全局前缀必须为 $HOME/.local（当前 ${npm_prefix:-未知}）；先执行 npm config set prefix ~/.local。"
+
 deploy_dir="$HOME/.local/lib/claudroid-bridge-deploy"
 unit_dir="$HOME/.config/systemd/user"
 bridge_home="${CLAUDROID_BRIDGE_HOME:-$HOME/.config/claudroid-bridge}"

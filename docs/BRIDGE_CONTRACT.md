@@ -450,6 +450,10 @@ Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不�
 | `hosts.share` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_SEND` |
 | `hosts.tunnel` | `id`, `action?` | `{ok, tunnelJson, hostsJson}` | `action` 为 `start`/`stop`/`restart`；缺省只查询 |
 
+`tunnel.mode` 除 `off` / `quick` / `named` 外还有 `external`：连接器由主机上的外部服务
+（例如 systemd）监督，daemon 只轮询 `tunnel.publicUrlFile` 并把它作为公网地址播报。该模式
+下 `hosts.tunnel` 的 `start` / `stop` / `restart` 返回 409，App 不显示隧道启停按钮。
+
 配对二维码由 daemon 在终端打印，内容为
 `claudroid://pair?v=1&url=<百分号编码的 baseUrl>&code=<8 位配对码>&name=<主机名>`。
 App 取到扫描文本后先在本地校验 scheme、版本、地址与码长，通过后再走 `hosts.pair`；
