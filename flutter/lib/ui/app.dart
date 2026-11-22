@@ -19,6 +19,20 @@ import 'settings/settings_destination.dart';
 import 'settings_page.dart';
 import 'workspace_page.dart';
 
+/// Folds an `app.init` reply into a state that may already hold events.
+///
+/// The init payload has no hosts: assigning a fresh [AppState] after a
+/// `ready`/`hosts` event has landed would erase the paired-host list until the
+/// manager next changes state (a restart looked like every host had vanished).
+/// Init is only the first-state fallback, so it must fill fields in place.
+AppState mergeInitState(AppState current, InitState init) => current.copyWith(
+      settings: init.settings,
+      labels: init.labels,
+      engine: init.engine,
+      sessions: init.sessions,
+      ready: true,
+    );
+
 /// The shell: owns the app-wide state stream, the active session, and the
 /// destinations. All business state lives in Kotlin; this only folds the
 /// events it sends.
@@ -71,13 +85,7 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
       final init = await widget.bridge.init();
       if (!mounted) return;
       setState(() {
-        _state.value = AppState(
-          settings: init.settings,
-          labels: init.labels,
-          engine: init.engine,
-          sessions: init.sessions,
-          ready: true,
-        );
+        _state.value = mergeInitState(_state.value, init);
       });
     } catch (error) {
       // The host may not be attached yet (tests, a stale engine). The shell
