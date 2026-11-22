@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream, chmodSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  createWriteStream,
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { get as httpsGet } from "node:https";
 import { join } from "node:path";
 import { bridgeHome, type TunnelConfig } from "./config.js";
@@ -52,7 +61,7 @@ export function assetFor(platform: string, arch: string): CloudflaredAsset | nul
   return ASSETS[`${platform}-${arch}`] ?? null;
 }
 
-export function managedCloudflaredPath(home = bridgeHome(), platform = process.platform): string {
+export function managedCloudflaredPath(home = bridgeHome(), platform: string = process.platform): string {
   return join(home, "bin", platform === "win32" ? "cloudflared.exe" : "cloudflared");
 }
 
@@ -83,6 +92,74 @@ function isExecutable(path: string, platform: string): boolean {
 function onPath(): boolean {
   const result = spawnSync("cloudflared", ["--version"], { stdio: "ignore" });
   return !result.error && result.status === 0;
+}
+
+function runs(path: string): boolean {
+  const result = spawnSync(path, ["--version"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+/** True when this process runs inside WSL rather than a native Linux host. */
+export function isWsl(): boolean {
+  if (process.platform !== "linux") return false;
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return /microsoft/i.test(readFileSync("/proc/sys/kernel/osrelease", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+const WINDOWS_CLOUDFLARED_CANDIDATES = [
+  "/mnt/c/Program Files/cloudflared/cloudflared.exe",
+  "/mnt/c/Program Files (x86)/cloudflared/cloudflared.exe",
+];
+
+/**
+ * WSL 内的 DNS 常常指向 Windows 侧代理的 fake-ip，Linux 版 cloudflared 因此连不上
+ * api.trycloudflare.com；Windows 侧连接器可以走 Windows 网络，而 Windows 与 WSL
+ * 默认互通 localhost。返回可用的 Windows 连接器，找不到时返回 null。
+ */
+export function findWindowsCloudflared(): string | null {
+  if (runs("cloudflared.exe")) return "cloudflared.exe";
+  for (const candidate of WINDOWS_CLOUDFLARED_CANDIDATES) {
+    if (runs(candidate)) return candidate;
+  }
+  return null;
+}
+
+export type CloudflaredSource = "config" | "wsl-windows" | "managed" | "path";
+
+export interface CloudflaredLocation {
+  path: string;
+  source: CloudflaredSource;
+}
+
+/**
+ * Locate a local connector without touching the network. On WSL a Windows-side
+ * install wins over a previously downloaded Linux binary, because only the
+ * Windows process can use the Windows network stack.
+ */
+export function locateCloudflared(
+  config: TunnelConfig,
+  platform: string = process.platform,
+  windowsCloudflared?: (() => string | null) | null,
+): CloudflaredLocation | null {
+  if (config.cloudflaredPath) return { path: config.cloudflaredPath, source: "config" };
+  const findWindows =
+    windowsCloudflared === undefined
+      ? platform === "linux" && isWsl()
+        ? findWindowsCloudflared
+        : null
+      : windowsCloudflared;
+  if (findWindows) {
+    const path = findWindows();
+    if (path) return { path, source: "wsl-windows" };
+  }
+  const managed = managedCloudflaredPath(bridgeHome(), platform);
+  if (isExecutable(managed, platform)) return { path: managed, source: "managed" };
+  if (onPath()) return { path: "cloudflared", source: "path" };
+  return null;
 }
 
 function hasCurl(): boolean {
@@ -153,19 +230,23 @@ function extractTgz(archive: string, dest: string): void {
 
 /**
  * Return a usable cloudflared path, downloading the pinned official release on
- * first use. `tunnel.cloudflaredPath` always wins; an existing PATH install is
- * reused before anything is downloaded.
+ * first use. `tunnel.cloudflaredPath` always wins, then a Windows-side install
+ * when running under WSL, then the managed copy, then `PATH`.
  */
 export async function ensureCloudflared(
   config: TunnelConfig,
   log: (message: string) => void = () => undefined,
   platform = process.platform,
   arch = process.arch,
+  windowsCloudflared?: (() => string | null) | null,
 ): Promise<string> {
-  if (config.cloudflaredPath) return config.cloudflaredPath;
-  const managed = managedCloudflaredPath(bridgeHome(), platform);
-  if (isExecutable(managed, platform)) return managed;
-  if (onPath()) return "cloudflared";
+  const located = locateCloudflared(config, platform, windowsCloudflared);
+  if (located) {
+    if (located.source === "wsl-windows") {
+      log(`WSL 环境：使用 Windows 侧 cloudflared（${located.path}）。`);
+    }
+    return located.path;
+  }
 
   const asset = assetFor(platform, arch);
   if (!asset) {
@@ -175,6 +256,7 @@ export async function ensureCloudflared(
   }
 
   const binDir = join(bridgeHome(), "bin");
+  const managed = managedCloudflaredPath(bridgeHome(), platform);
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
   const temp = join(binDir, `.cloudflared-${String(process.pid)}.download`);
   log(`未找到 cloudflared，正在从官方 Release 下载 ${CLOUDFLARED_VERSION}…`);

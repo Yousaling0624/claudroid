@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assetFor,
   ensureCloudflared,
+  locateCloudflared,
   managedCloudflaredPath,
   sha256File,
 } from "../src/cloudflared.js";
@@ -40,7 +41,55 @@ describe("cloudflared assets", () => {
   });
 });
 
+describe("locateCloudflared", () => {
+  it("keeps an explicitly configured binary above the WSL connector", () => {
+    expect(
+      locateCloudflared({ mode: "quick", cloudflaredPath: "/opt/cloudflared" }, "linux", () => "cloudflared.exe"),
+    ).toEqual({ path: "/opt/cloudflared", source: "config" });
+  });
+
+  it("prefers the Windows connector under WSL", () => {
+    expect(locateCloudflared({ mode: "quick" }, "linux", () => "cloudflared.exe")).toEqual({
+      path: "cloudflared.exe",
+      source: "wsl-windows",
+    });
+  });
+
+  it("falls back to the managed binary when no Windows connector is available", () => {
+    const home = mkdtempSync(join(tmpdir(), "cloudflared-locate-"));
+    const previous = process.env.CLAUDROID_BRIDGE_HOME;
+    process.env.CLAUDROID_BRIDGE_HOME = home;
+    const managed = managedCloudflaredPath(home, "linux");
+    mkdirSync(dirname(managed), { recursive: true });
+    writeFileSync(managed, "");
+    chmodSync(managed, 0o755);
+    try {
+      expect(locateCloudflared({ mode: "quick" }, "linux", () => null)).toEqual({
+        path: managed,
+        source: "managed",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDROID_BRIDGE_HOME;
+      else process.env.CLAUDROID_BRIDGE_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("ensureCloudflared", () => {
+  it("uses the Windows connector under WSL and explains the choice", async () => {
+    const logs: string[] = [];
+    const path = await ensureCloudflared(
+      { mode: "quick" },
+      (message) => logs.push(message),
+      "linux",
+      "x64",
+      () => "/mnt/c/Program Files/cloudflared/cloudflared.exe",
+    );
+    expect(path).toBe("/mnt/c/Program Files/cloudflared/cloudflared.exe");
+    expect(logs.join("\n")).toMatch(/Windows 侧 cloudflared/);
+  });
+
   it("keeps an explicitly configured binary", async () => {
     const path = await ensureCloudflared({ mode: "quick", cloudflaredPath: "/opt/cloudflared" });
     expect(path).toBe("/opt/cloudflared");

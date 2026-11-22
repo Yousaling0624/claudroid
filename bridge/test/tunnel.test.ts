@@ -74,6 +74,24 @@ describe("TunnelManager", () => {
     harness.manager.stop();
   });
 
+  it("does not treat the provisioning API URL as a tunnel URL", async () => {
+    const harness = setup("quick");
+    harness.manager.start();
+    await settle();
+    harness.child.stderr.emit(
+      "data",
+      Buffer.from(
+        'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": context deadline exceeded\n',
+      ),
+    );
+    expect(harness.manager.current().state).toBe("starting");
+    expect(harness.manager.current().url).toBeUndefined();
+    harness.child.emit("exit", 1, null);
+    expect(harness.manager.current().state).toBe("error");
+    expect(harness.manager.current().error).toMatch(/api\.trycloudflare\.com/);
+    harness.manager.stop();
+  });
+
   it("reports an error for named tunnels without credentials", () => {
     const { manager } = setup("named");
     manager.start();

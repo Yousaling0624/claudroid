@@ -18,8 +18,15 @@ export type SpawnFn = (
 
 export type EnsureBinaryFn = () => Promise<string>;
 
+/**
+ * A quick tunnel URL is a single-label subdomain. `api.trycloudflare.com` shows
+ * up in cloudflared's own error output when provisioning fails, and must not be
+ * mistaken for a working tunnel.
+ */
+const QUICK_TUNNEL_URL = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/i;
+
 function quickTunnelUrl(line: string): string | undefined {
-  return line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i)?.[0];
+  return line.match(QUICK_TUNNEL_URL)?.[0];
 }
 
 /**
@@ -37,6 +44,7 @@ export class TunnelManager {
   private resolvedBinary: string | null = null;
   private attempt = 0;
   private restartTimer: NodeJS.Timeout | null = null;
+  private lastOutput = "";
   private readonly spawnFn: SpawnFn;
   private readonly ensureBinary: EnsureBinaryFn;
 
@@ -169,11 +177,14 @@ export class TunnelManager {
     child.on("exit", (code, signal) => {
       this.child = null;
       if (this.stopped) return;
-      this.fail(`cloudflared 已退出（code=${String(code)}, signal=${String(signal)}）。`);
+      const detail = this.lastOutput ? `：${this.lastOutput.slice(0, 300)}` : "";
+      this.fail(`cloudflared 已退出（code=${String(code)}, signal=${String(signal)}）${detail}`);
     });
   }
 
   private consume(line: string): void {
+    const trimmed = line.trim();
+    if (trimmed) this.lastOutput = trimmed;
     const quick = quickTunnelUrl(line);
     if (quick) {
       this.attempt = 0;

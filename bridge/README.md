@@ -89,7 +89,7 @@ claudroid-bridge devices revoke <id>  # 吊销设备令牌
 | `claudeExecutable` | 可选；不填时使用 Agent SDK 随包的 CLI |
 | `tunnel.mode` | `off` / `quick` / `named` |
 | `tunnel.token` / `hostname` | named 隧道必填 |
-| `tunnel.cloudflaredPath` | 可选；指定自定义 cloudflared。留空时先复用 `PATH`，缺失则自动下载到 `~/.config/claudroid-bridge/bin/` |
+| `tunnel.cloudflaredPath` | 可选；强制指定 cloudflared。留空时依次尝试 WSL/Windows 侧连接器 → 托管副本 → `PATH`，都没有才自动下载 |
 
 `start` 的等价参数：`--bind`、`--port`、`--root`（可重复）、`--tunnel`、
 `--tunnel-token`、`--tunnel-hostname`、`--allow-bypass`、`--config`。
@@ -106,11 +106,16 @@ claudroid-bridge start --tunnel named \
   --tunnel-hostname claude.example.com
 ```
 
-**cloudflared 无需手动安装。** 首次启用隧道时，daemon 会从 Cloudflare 官方 GitHub
-Release 下载固定版本的连接器，按内置 SHA-256 校验后安装到
-`~/.config/claudroid-bridge/bin/cloudflared`（Windows 为 `cloudflared.exe`），之后复用。
-若 `PATH` 里已有 cloudflared，会优先使用；`tunnel.cloudflaredPath` 可强制指定。
-下载失败或校验不符时隧道进入错误状态并在 App 中显示原因，不会带病启动。
+**cloudflared 无需手动安装。** daemon 按以下顺序选择连接器：`tunnel.cloudflaredPath` →
+WSL 下 Windows 侧安装的 `cloudflared.exe` → 托管副本
+`~/.config/claudroid-bridge/bin/cloudflared`（Windows 为 `cloudflared.exe`）→ `PATH`。
+都没有时从 Cloudflare 官方 GitHub Release 下载固定版本，按内置 SHA-256 校验后安装到
+托管路径，之后复用。下载失败或校验不符时隧道进入错误状态并在 App 中显示原因，不会带病启动。
+
+在 WSL 里，DNS 经常由 Windows 侧代理接管（fake-ip），Linux 版 cloudflared 因此连不上
+`api.trycloudflare.com`；此时 daemon 会优先使用 Windows 侧安装的 cloudflared，让流量走
+Windows 网络（Windows 与 WSL 默认互通 localhost）。若想强制指定，仍可设置
+`tunnel.cloudflaredPath`。
 
 daemon 负责启动与监督 `cloudflared`，异常退出按指数退避重启；隧道状态与公网地址通过
 `/v1/tunnel` 和 SSE 推给 App，也可以在手机的主机详情页开关。quick 地址会变化，长期使用

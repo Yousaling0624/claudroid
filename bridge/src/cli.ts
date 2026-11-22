@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { hostname, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AuthService, DeviceStore, type PairingInfo } from "./auth.js";
-import { managedCloudflaredPath } from "./cloudflared.js";
+import { locateCloudflared, type CloudflaredSource } from "./cloudflared.js";
 import {
   configPath,
   defaultConfig,
@@ -328,8 +328,8 @@ function printDoctor(options: CliOptions): void {
       console.log(`✓ 工作区: ${root}`);
     }
   }
-  const managed = managedCloudflaredPath();
-  const candidate = config.tunnel.cloudflaredPath ?? (existsSync(managed) ? managed : "cloudflared");
+  const located = locateCloudflared(config.tunnel);
+  const candidate = located?.path ?? "cloudflared";
   const cloudflared = spawnSync(candidate, ["--version"], {
     encoding: "utf8",
   });
@@ -337,7 +337,14 @@ function printDoctor(options: CliOptions): void {
     console.log("! 未找到 cloudflared；启用隧道时会自动下载官方版本并校验 sha256");
     console.log("  也可以手动安装，或用 tunnel.cloudflaredPath 指定可执行文件");
   } else {
-    console.log(`✓ cloudflared: ${(cloudflared.stdout || "").trim()}${candidate === managed ? "（托管）" : ""}`);
+    const labels: Record<CloudflaredSource, string> = {
+      config: "自定义",
+      "wsl-windows": "WSL/Windows 侧",
+      managed: "托管",
+      path: "PATH",
+    };
+    const label = located ? labels[located.source] : "PATH";
+    console.log(`✓ cloudflared: ${(cloudflared.stdout || "").trim()}（${label}）`);
   }
   if (config.tunnel.mode === "named" && (!config.tunnel.token || !config.tunnel.hostname)) {
     console.error("✗ named 隧道需要 tunnel.token 与 tunnel.hostname");
