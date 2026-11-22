@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import '../models/backup.dart';
 import '../models/model_info.dart';
 import '../models/models.dart';
+import '../models/remote.dart';
 
 const MethodChannel _channel = MethodChannel('app.claudroid/bridge');
 
@@ -286,8 +287,16 @@ class Bridge {
           .map(ChatSession.fromJson)
           .toList(growable: false);
 
-  Future<ChatSession> newSession({String? model}) async {
-    final map = await _call('sessions.new', {'model': model});
+  Future<ChatSession> newSession({
+    String? model,
+    String? hostId,
+    String? remoteCwd,
+  }) async {
+    final map = await _call('sessions.new', {
+      'model': model,
+      'hostId': hostId,
+      'remoteCwd': remoteCwd,
+    });
     return ChatSession.fromJson(_decodeMap(map['sessionJson'] as String?));
   }
 
@@ -401,6 +410,110 @@ class Bridge {
 
   Future<void> cancelBackup() => _call('backup.cancel');
 
+  // -- remote hosts --------------------------------------------------------
+
+  Future<RemoteHostsState> listHosts() async =>
+      RemoteHostsState.fromJsonString(
+        (await _call('hosts.list'))['hostsJson'] as String?,
+      );
+
+  Future<({RemoteHostsState hosts, RemoteHost host})> pairHost({
+    required String baseUrl,
+    required String code,
+    String? name,
+  }) async {
+    final map = await _call('hosts.pair', {
+      'baseUrl': baseUrl,
+      'code': code,
+      if (name != null && name.isNotEmpty) 'name': name,
+    });
+    return (
+      hosts: RemoteHostsState.fromJsonString(map['hostsJson'] as String?),
+      host: RemoteHost.fromJson(_decodeMap(map['hostJson'] as String?)),
+    );
+  }
+
+  /// Null fields stay unchanged; pass `accessSecret: ''` to clear the stored
+  /// Cloudflare Access secret.
+  Future<RemoteHostsState> updateHost(
+    String id, {
+    String? name,
+    String? baseUrl,
+    String? accessClientId,
+    String? accessSecret,
+  }) async =>
+      RemoteHostsState.fromJsonString(
+        (await _call('hosts.update', {
+          'id': id,
+          'name': ?name,
+          'baseUrl': ?baseUrl,
+          'accessClientId': ?accessClientId,
+          'accessSecret': ?accessSecret,
+        }))['hostsJson'] as String?,
+      );
+
+  Future<RemoteHostsState> removeHost(String id) async =>
+      RemoteHostsState.fromJsonString(
+        (await _call('hosts.remove', {'id': id}))['hostsJson'] as String?,
+      );
+
+  Future<({RemoteHealth health, RemoteHostsState hosts})> testHost(
+    String id,
+  ) async {
+    final map = await _call('hosts.test', {'id': id});
+    return (
+      health: RemoteHealth.fromJson(
+        _decodeMap(map['healthJson'] as String?),
+      ),
+      hosts: RemoteHostsState.fromJsonString(map['hostsJson'] as String?),
+    );
+  }
+
+  Future<RemoteHostsState> setDefaultHost(String? id) async =>
+      RemoteHostsState.fromJsonString(
+        (await _call('hosts.setDefault', {
+          if (id != null && id.isNotEmpty) 'id': id,
+        }))['hostsJson'] as String?,
+      );
+
+  Future<RemoteFileListing> browseHost(
+    String id, {
+    String? path,
+  }) async {
+    final map = await _call('hosts.browse', {
+      'id': id,
+      if (path != null && path.isNotEmpty) 'path': path,
+    });
+    return RemoteFileListing(
+      path: map['path'] as String? ?? path ?? '',
+      entries: decodeJsonList(map['entriesJson'] as String?)
+          .map(RemoteFileEntry.fromJson)
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> openRemoteFile(String id, String path) =>
+      _call('hosts.open', {'id': id, 'path': path});
+
+  Future<void> shareRemoteFile(String id, String path) =>
+      _call('hosts.share', {'id': id, 'path': path});
+
+  Future<({RemoteTunnelStatus tunnel, RemoteHostsState hosts})> tunnelHost(
+    String id, {
+    String? action,
+  }) async {
+    final map = await _call('hosts.tunnel', {
+      'id': id,
+      if (action != null && action.isNotEmpty) 'action': action,
+    });
+    return (
+      tunnel: RemoteTunnelStatus.fromJson(
+        _decodeMap(map['tunnelJson'] as String?),
+      ),
+      hosts: RemoteHostsState.fromJsonString(map['hostsJson'] as String?),
+    );
+  }
+
   // -- chat ----------------------------------------------------------------
 
   Future<ChatState> attach(String sessionId) async {
@@ -437,6 +550,21 @@ class Bridge {
   }
 
   Future<void> stop(String sessionId) => _call('chat.stop', {'sessionId': sessionId});
+
+  /// Answers a forwarded remote tool confirmation. The host ignores a request
+  /// that already expired or ended with the turn.
+  Future<void> respondPermission(
+    String sessionId,
+    String requestId, {
+    required bool allow,
+    bool always = false,
+  }) =>
+      _call('chat.permission', {
+        'sessionId': sessionId,
+        'requestId': requestId,
+        'allow': allow,
+        'always': always,
+      });
 
   Future<void> clear(String sessionId) =>
       _call('chat.clear', {'sessionId': sessionId});

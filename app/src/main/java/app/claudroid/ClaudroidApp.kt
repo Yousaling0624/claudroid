@@ -13,10 +13,13 @@ import app.claudroid.data.SettingsRepository
 import app.claudroid.data.SessionStore
 import app.claudroid.engine.EngineManager
 import app.claudroid.chat.ChatController
+import app.claudroid.remote.RemoteHostManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ClaudroidApp : Application() {
 
@@ -47,6 +50,18 @@ class AppContainer(app: Application) {
     val sessions = SessionStore(app)
     val workspaces = WorkspaceStore(app)
     val engine = EngineManager(app, settings, workspaces)
+    val remote = RemoteHostManager(
+        stateFile = File(Paths.hosts(app), "hosts.json"),
+        cacheDir = app.cacheDir,
+        scope = scope,
+    )
+
+    /**
+     * A remote turn does not touch [engine], but it still owns the app-wide single-turn
+     * slot: backup, workspace switching and terminal guards must see it.
+     */
+    val turnRunning = AtomicBoolean(false)
+    val busy: Boolean get() = engine.busy || turnRunning.get()
 
     /** Packing/merging is plain file I/O; the manager owns the single-task slot. */
     val backup = BackupManager(

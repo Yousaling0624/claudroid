@@ -485,24 +485,69 @@ Claude Code 只会说 Anthropic Messages 协议，所以"支持 OpenAI 接口"�
 
 真实 key 只存在代理内存里，CLI 拿到 `claudroid-local-proxy` 这个占位 token。
 
+## 10.1 远程主机：bridge 守护进程
+
+本地引擎之外，还可以把执行端放到另一台主机：主机安装 `bridge/` 里的
+`claudroid-bridge`（Node 20+），手机通过 REST + SSE 驱动。UI、会话与消息持久化完全共用，
+只把 `TurnBackend` 换掉：
+
+```
+ChatController → TurnBackend
+                  ├─ LocalTurnBackend  → ClaudeEngine（PRoot / chroot）
+                  └─ RemoteTurnBackend → RemoteHostManager → RemoteClient
+                                          └─ POST /v1/turns + SSE /v1/events
+主机：claudroid-bridge → @anthropic-ai/claude-agent-sdk → 主机自己的 Claude Code
+                        └─ cloudflared（可选）
+```
+
+- **为什么是 REST + SSE**：Android 没有可用的 `java.net.http`，WebSocket 要么引入
+  OkHttp 要么手写握手；SSE 用 `HttpURLConnection` 长读即可，Cloudflare Tunnel 原生透传。
+  运行时依赖仍为 0。
+- **复用 stream-json 解析**：daemon 把 Agent SDK 的 `system/init`、`stream_event`、
+  `assistant`、`user`、`result` 原样放进 SSE 的 `cli` 帧，Kotlin 侧继续用同一个
+  `StreamParser`，本地/远程的文本、思考与工具卡片行为一致。权限请求、turn 状态和
+  隧道状态是 daemon 自己的事件类型。
+- **重连**：daemon 为每个 turn 保留有界环形缓冲与单调 `seq`；SSE 断开后 App 带
+  `since` 重放，序号缺口或 daemon 重启时用 `GET /v1/turns/{id}` 收敛为完成/失败，
+  避免 UI 永久卡在 streaming。
+- **供应商隔离**：远程 turn 的请求体不含任何手机侧 Key、Base URL、`extraEnv` 或代理；
+  主机使用自己的 `claude login` / 环境变量 / 模型配置，手机端远程会话不提供模型切换。
+- **权限**：`canUseTool` 生成 `permission` 帧，`EngineEvent.PermissionRequest` →
+  `ChatEvent.Permission` → 聊天页确认卡片；超时、断连一律 deny。主机默认禁止
+  `bypassPermissions`，需要显式配置。
+- **凭据**：设备令牌由主机生成，daemon 只存 SHA-256；手机用 Android Keystore
+  AES-GCM（`SecretBox`）加密后写入 `filesDir/hosts/hosts.json`，不进入 `hostsJson`、
+  日志或备份。
+- **隧道**：cloudflared 只能跑在主机侧（手机里的二进制无法反向连接别人的主机），
+  daemon 负责启动与监督，App 只展示状态和公网地址；APK 不含 cloudflared。
+- **并发**：v1 仍只有一个全局 turn 锁（`TurnRegistry`），远程与本地、备份、终端互斥。
+
+协议、部署与安全模型见 [`REMOTE_HOST.md`](REMOTE_HOST.md) 与
+[`BRIDGE_CONTRACT.md`](BRIDGE_CONTRACT.md) §6.9。
+
 ## 11. 还没做的
 
-- 逐条工具批准卡片（可用 `--permission-prompt-tool` + MCP 回调补上）
+- 本地会话的逐条工具批准卡片（远程会话已支持；本地可用 `--permission-prompt-tool` +
+  MCP 回调补上）
 - 多助手 persona（"助手" = 一组 API / 模型 / 权限配置）
 - 图片直接粘贴预览（目前只做文件引用）
 - 真机覆盖：目前主要在 MuMu（x86_64）上验证，arm64 真机与不同 root 环境仍靠用户反馈
 - PRoot 下的性能优化（大量小文件 I/O 目前受 ptrace 影响）
+- 远程主机的单文件二进制分发与多主机并发 turn（当前推荐 npm 安装、单 turn）
 
 ## 12. CI/CD
 
 ```
 PR:        ci.yml      → testDebugUnitTest + assembleDebug + debug APK artifact
+                        → bridge: npm ci + npm test + npm run build
 push main: release.yml → 版本 0.1.<run_number> + versionCode 1000+run
                         → testDebugUnitTest + assembleRelease
                         → claudroid-<ver>.apk + .sha256
                         → release-notes.sh 生成 notes
                         → gh release create/edit --target $GITHUB_SHA --latest
 ```
+
+- `bridge/` 不参与 Android 构建、也不在 App 的发版路径里；daemon 的 npm 依赖只存在于主机侧。
 
 - 工作流保留 `cancel-in-progress: false`（每次 push 都要发版，不能互相取消）。
 - `versionCode` 用 `1000 + run_number`，保证覆盖安装时单调递增，也避开本地调试版本。

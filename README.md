@@ -5,6 +5,11 @@
 **没有 root 也能用**（内置 Termux PRoot 跑 rootfs），有 root 时自动切换到 chroot，
 Agent 就能真正操作这台设备（刷 Magisk 模块、改系统文件、执行 su 命令）。
 
+执行端也可以搬到**另一台机器**：主机安装 `claudroid-bridge` 守护进程（Node 20+），
+手机通过 REST + SSE 驱动它，Claude Code 用**主机自己的**登录 / API Key / 模型配置运行，
+工具调用仍逐条在手机上批准，主机文件可浏览、可上传。见
+[`docs/REMOTE_HOST.md`](docs/REMOTE_HOST.md)。
+
 ```
 ┌──────────── Android App（Kotlin 引擎 + Flutter 前端）────────────┐
 │  会话列表 / 对话流 / 设置（Flutter，唯一前端）                    │
@@ -140,7 +145,8 @@ cd flutter && flutter analyze && flutter test
 
 ### CI / 发版
 
-- `.github/workflows/ci.yml`：PR 跑单测 + `assembleDebug`，上传 debug APK。
+- `.github/workflows/ci.yml`：PR 跑单测 + `assembleDebug`，上传 debug APK；
+  另跑 `bridge/` 的 `npm test` + `npm run build`。
 - `.github/workflows/release.yml`：push `main` 自动生成 `v0.1.<run_number>`，
   跑测试、`assembleRelease`、生成 release notes 并创建 GitHub Release。
 - 版本号/`versionCode` 由 CI 注入，**不要手改**。
@@ -188,6 +194,29 @@ cd flutter && flutter analyze && flutter test
 
 没有任何硬编码版本号，上游发版即生效。
 
+## 远程主机（可选）
+
+除了手机本地，也可以让 Claude Code 在另一台主机上执行，手机继续做界面：
+
+```bash
+# 主机侧（Node 20+）
+npm install -g claudroid-bridge   # 发布后；或 cd bridge && npm ci && npm run build && npm link
+claudroid-bridge init             # 写入 ~/.config/claudroid-bridge/config.json
+claudroid-bridge start            # 打印 8 位一次性配对码与主机地址
+```
+
+手机：**设置 → 远程主机 → 添加远程主机**，填地址和配对码。之后首页输入框上方可以选
+「本机 / 主机名」并挑远端工作目录；聊天页会显示主机状态与工具确认卡片（允许一次 /
+本会话总是允许 / 拒绝），设置页还能浏览主机文件、开关 Cloudflare Tunnel。
+
+- 远程会话只使用主机自己的 Claude 登录 / API Key / Base URL / 模型配置，手机不发送
+  任何本机凭据或代理设置。
+- 公网访问由主机托管的 cloudflared 提供（`--tunnel quick|named`），APK 不含该二进制。
+- 设备令牌用 Android Keystore 加密，只存在本机，不进备份。
+
+协议、部署、systemd 与排障见 [`docs/REMOTE_HOST.md`](docs/REMOTE_HOST.md)；
+守护进程自身的说明见 [`bridge/README.md`](bridge/README.md)。
+
 ## 安全边界（重要）
 
 - 默认 `AUTO`：没有 root 授权时走 PRoot，能力被 Android 沙箱限制，不会误改系统。
@@ -201,6 +230,8 @@ cd flutter && flutter analyze && flutter test
   否则 CLI 会拒绝 `bypassPermissions`。
 - API Key 只保存在本机 DataStore；OpenAI 兼容模式下真实 Key 只交给本地代理，
   CLI 拿到的是占位 token。仓库、日志、Release 里不出现任何 Key。
+- 远程主机的配对码一次性、10 分钟有效；设备令牌在手机上 Keystore 加密、在主机上只存
+  哈希；远程会话不转发手机侧任何供应商凭据。
 
 ## 目录
 
@@ -218,6 +249,9 @@ claudroid/
 │   ├── lib/bridge/             MethodChannel / EventChannel 封装与事件折叠
 │   ├── lib/models/             Dart 侧数据结构
 │   └── lib/ui/                 页面、设置二级页与 prism_ui 组件
+├── bridge/                     主机侧守护进程（Node 20+，远程主机；不参与 Android 构建）
+│   ├── src/                    配对 / turn / SSE / 权限 / 文件 RPC / 隧道
+│   └── test/                   vitest：协议、权限、重连、路径逃逸
 ├── prototype/index.html        Compose 时期的高保真原型（历史参考）
 ├── docs/
 │   ├── ARCHITECTURE.md         引擎架构、执行路径与 Auto 模型
@@ -225,6 +259,7 @@ claudroid/
 │   ├── DESIGN_FLUTTER.md       Flutter 前端的视觉规范
 │   ├── FLUTTER.md              Flutter 模块结构、构建配方与 flag 的由来
 │   ├── BRIDGE_CONTRACT.md      Kotlin ↔ Dart 桥接契约（冻结）
+│   ├── REMOTE_HOST.md          远程主机：守护进程、配对、隧道、安全模型
 │   ├── AGENT_WORKFLOW.md       subagent 分工与成本分层
 │   └── screenshots/            发布前端截图
 ├── tools/
@@ -281,7 +316,9 @@ Claude Code CLI --(Anthropic /v1/messages)--> 127.0.0.1:<随机端口>  内置�
 - 仅 arm64-v8a / x86_64（上游只发布这两个）；32 位设备不支持。
 - PRoot 有 ptrace 开销，重度 I/O（解压大包）比原生慢；root + chroot 更快。
 - PRoot 模式受 Android 沙箱限制，不能改 `/system` 或其他应用数据；需要这些能力请用 root 模式。
-- 没有「逐条批准工具调用」的图形界面；headless 下由 CLI 的权限模式决定。
+- 没有「逐条批准工具调用」的图形界面（headless 下由 CLI 的权限模式决定）；远程会话
+  支持逐条允许 / 拒绝。
+- 远程功能同一时刻只跑一个 turn，暂不支持多主机并发；隧道 binary 需装在主机侧。
 - 一个 turn 一个进程（+ `--resume`），换来稳定；代价是每轮约 100 ms 启动开销。
 - 截图为 Flutter 前端的真实截图。
 

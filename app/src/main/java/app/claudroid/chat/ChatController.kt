@@ -8,17 +8,25 @@ import app.claudroid.data.Block
 import app.claudroid.data.ChatMessage
 import app.claudroid.data.ChatSession
 import app.claudroid.data.ApiFlavor
+import app.claudroid.data.PermissionMode
 import app.claudroid.data.Role
 import app.claudroid.engine.CancelReason
 import app.claudroid.engine.ClaudeEngine
 import app.claudroid.engine.EngineEvent
+import app.claudroid.engine.LocalTurnBackend
+import app.claudroid.engine.PermissionDecision
 import app.claudroid.engine.TitleGenerator
+import app.claudroid.engine.TurnBackend
+import app.claudroid.engine.TurnRequest
 import app.claudroid.engine.TurnService
 import app.claudroid.data.chatModelLabel
+import app.claudroid.remote.RemoteHostManager
+import app.claudroid.remote.RemoteTurnBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -31,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.File
 import java.util.UUID
 
 /**
@@ -65,6 +74,11 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     private val _status = MutableStateFlow("")
     val status: StateFlow<String> = _status.asStateFlow()
+
+    /** Tool calls a remote host is currently waiting on; never persisted. */
+    private val _permissions = MutableStateFlow<List<PendingPermission>>(emptyList())
+    val pendingPermissions: StateFlow<List<PendingPermission>> = _permissions.asStateFlow()
+    private val permissionJobs = mutableMapOf<String, Job>()
 
     /**
      * Incremental mirror of the flows above, for consumers that cannot cheaply
@@ -150,6 +164,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     private var job: Job? = null
     private var loaded = false
+
+    /** The executor of the in-flight turn; null while idle or preparing. */
+    @Volatile private var activeBackend: TurnBackend? = null
+
+    /** A Stop pressed while `prepareTurn` was still resolving the backend. */
+    @Volatile private var stopRequested = false
 
     /** Bumped by [clear] so events from a cancelled turn cannot repopulate the chat. */
     @Volatile private var generation = 0
@@ -291,8 +311,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     fun stop() {
         if (!_running.value) return
+        stopRequested = true
         setStatus("正在停止…")
-        container.engine.cancel(CancelReason.USER)
+        activeBackend?.cancel(CancelReason.USER) ?: container.engine.cancel(CancelReason.USER)
     }
 
     /**
@@ -303,8 +324,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         dismissed = true
         // The engine is app-wide: deleting an idle conversation must not cancel a turn
         // that belongs to another controller.
-        if (_running.value) container.engine.cancel(CancelReason.USER)
+        if (_running.value) {
+            stopRequested = true
+            activeBackend?.cancel(CancelReason.USER) ?: container.engine.cancel(CancelReason.USER)
+        }
         job?.cancel()
+        clearPermissions()
         loaded = true
         container.forgetChat(sessionId)
     }
@@ -397,9 +422,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     suspend fun forkAt(messageId: String): ChatSession? {
         val history = Fork.history(_messages.value, messageId) ?: return null
         if (history.isEmpty()) return null
+        val base = _session.value
         val session = ChatSession(
             title = Fork.title(_title.value),
-            model = _session.value?.model,
+            model = base?.model,
+            hostId = base?.hostId,
+            remoteCwd = base?.remoteCwd,
             messages = history,
         )
         container.sessions.upsert(session)
@@ -408,10 +436,13 @@ class ChatController(private val container: AppContainer, val sessionId: String)
 
     private data class PreparedTurn(
         val settings: AppSettings,
-        val plan: ClaudeEngine.LaunchPlan,
-        /** Active workspace at the moment this turn was accepted; bound to `/work`. */
-        val workspace: java.io.File,
-        /** The engine cancellation token registered when this turn was accepted. */
+        val backend: TurnBackend,
+        /** Active local workspace; null for a remote turn. */
+        val workspace: File?,
+        /** Remote working directory; null for a local turn. */
+        val remoteCwd: String?,
+        val remoteHostId: String?,
+        /** The backend cancellation token registered when this turn was accepted. */
         val cancelToken: Long,
     )
 
@@ -423,17 +454,21 @@ class ChatController(private val container: AppContainer, val sessionId: String)
     private fun launchTurn(block: suspend (PreparedTurn) -> Unit): Boolean {
         if (!_running.compareAndSet(false, true)) return false
         setRunning(true)
-        // Every turn gets its own token: a stop aimed at the previous turn (or at an
-        // engine install) can no longer leak into this one.
-        val cancelToken = container.engine.beginTurn()
+        container.turnRunning.set(true)
+        stopRequested = false
         job = scope.launch {
             try {
-                val prepared = prepareTurn(cancelToken) ?: return@launch
+                val prepared = prepareTurn() ?: return@launch
+                activeBackend = prepared.backend
+                if (stopRequested) prepared.backend.cancel(CancelReason.USER)
                 block(prepared)
             } finally {
                 withContext(NonCancellable) {
+                    activeBackend = null
+                    clearPermissions()
                     setRunning(false)
                     setStatus("")
+                    container.turnRunning.set(false)
                     TurnService.stop(container.appContext)
                     runCatching { persist() }
                 }
@@ -442,8 +477,12 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         return true
     }
 
-    private suspend fun prepareTurn(cancelToken: Long): PreparedTurn? {
+    private suspend fun prepareTurn(): PreparedTurn? {
         val settings = container.settings.flow.first()
+        val session = _session.value ?: container.sessions.find(sessionId)
+        val hostId = session?.hostId
+        if (hostId != null) return prepareRemoteTurn(settings, hostId, session.remoteCwd)
+
         if (!settings.isConfigured) {
             appendError("还没有配置 API Key：请到「设置 → 接口」填写 Base URL 与 Key（本地地址可留空）")
             return null
@@ -468,7 +507,81 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             appendError("OpenAI 兼容代理启动失败，请检查端口占用后重试。")
             return null
         }
-        return PreparedTurn(settings, plan, container.workspaces.activeDir(), cancelToken)
+        val workspace = container.workspaces.activeDir()
+        val backend = LocalTurnBackend(
+            engine = container.engine.engine,
+            settings = settings,
+            plan = plan,
+            workspace = workspace,
+            modelLabel = chatModelLabel(settings),
+        )
+        return PreparedTurn(
+            settings = settings,
+            backend = backend,
+            workspace = workspace,
+            remoteCwd = null,
+            remoteHostId = null,
+            cancelToken = backend.beginTurn(),
+        )
+    }
+
+    /**
+     * Remote preparation deliberately skips every local provider/engine check: the
+     * host owns its Claude login and model configuration, and the phone must not send
+     * its API key, Base URL or proxy settings.
+     */
+    private suspend fun prepareRemoteTurn(
+        settings: AppSettings,
+        hostId: String,
+        storedCwd: String?,
+    ): PreparedTurn? {
+        val host = container.remote.host(hostId)
+        if (host == null) {
+            appendError("这条会话绑定的远程主机已被移除。请到「设置 → 远程主机」重新添加，或新建一个本机会话。")
+            return null
+        }
+        val health = try {
+            container.remote.test(hostId)
+        } catch (t: Throwable) {
+            appendError("无法连接「${host.name}」：${t.message ?: "未知错误"}")
+            return null
+        }
+        if (health.protocol != 0 && health.protocol != RemoteHostManager.PROTOCOL_VERSION) {
+            appendError(
+                "主机协议版本不兼容（主机 v${health.protocol}，App v${RemoteHostManager.PROTOCOL_VERSION}）。" +
+                    "请升级主机上的 claudroid-bridge。",
+            )
+            return null
+        }
+        if (settings.permissionMode == PermissionMode.BYPASS && !health.allowBypassPermissions) {
+            appendError(
+                "主机「${host.name}」没有允许「完全放行」模式。" +
+                    "请改用其他权限模式，或在主机配置中开启 allowBypassPermissions。",
+            )
+            return null
+        }
+        val cwd = storedCwd?.takeIf { it.isNotBlank() }
+            ?: health.defaultCwd.ifBlank { host.defaultCwd }
+        if (cwd.isBlank()) {
+            appendError("主机没有配置可用的工作目录，请先在主机配置里设置 defaultCwd。")
+            return null
+        }
+        val modelLabel = health.defaultModel?.takeIf { it.isNotBlank() } ?: "主机默认模型"
+        val backend = RemoteTurnBackend(
+            manager = container.remote,
+            hostId = hostId,
+            cwd = cwd,
+            label = host.name,
+            modelLabel = modelLabel,
+        )
+        return PreparedTurn(
+            settings = settings,
+            backend = backend,
+            workspace = null,
+            remoteCwd = cwd,
+            remoteHostId = hostId,
+            cancelToken = backend.beginTurn(),
+        )
     }
 
     private suspend fun executeTurn(
@@ -480,10 +593,9 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         userMessageId: String?,
     ) {
         val settings = prepared.settings
-        val plan = prepared.plan
         // Resolve the signature once: a later settings change must not retitle
         // answers that this turn already produced.
-        val turnModel = chatModelLabel(settings)
+        val turnModel = prepared.backend.modelLabel ?: chatModelLabel(settings)
         if (resetCliSession) claudeSessionId = null
 
         setStatus("准备中…")
@@ -495,7 +607,11 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             setTitle(session.title)
             titleIsTemporary = true
         }
-        session = session.copy(model = settings.model)
+        session = session.copy(
+            model = if (prepared.remoteHostId != null) turnModel else settings.model,
+            hostId = prepared.remoteHostId ?: session.hostId,
+            remoteCwd = prepared.remoteCwd ?: session.remoteCwd,
+        )
         _session.value = session
 
         // Reusing the edited message's id keeps the composer's editing target valid
@@ -514,6 +630,22 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         emitMessages()
         persist()
 
+        // The prompt already references `@attachments/<name>`. For a remote session
+        // those files must exist under the host's working directory; the relative
+        // path stays identical, so the model sees the same convention as locally.
+        if (prepared.remoteHostId != null && prepared.remoteCwd != null) {
+            try {
+                uploadRemoteAttachments(prepared.remoteHostId, prepared.remoteCwd, prompt)
+            } catch (t: Throwable) {
+                Logx.e("远程附件上传失败: ${t.message}", container.appContext)
+                val text = "附件上传失败：${t.message ?: "未知错误"}"
+                mutateAssistant(assistant.id) { appendError(it, text).copy(streaming = false) }
+                emitEvent(ChatEvent.ErrorBlock(assistant.id, text))
+                emitMessages()
+                return
+            }
+        }
+
         var finalText: String? = null
         var cost: Double? = null
         var duration: Long? = null
@@ -521,93 +653,101 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         val turnGeneration = generation
 
         suspend fun attempt(resumeId: String?): Int {
-            var code = 0
-            withContext(Dispatchers.IO) {
-                code = container.engine.engine.runTurn(
-                    prompt = prompt,
-                    resumeSessionId = resumeId,
-                    settings = settings,
-                    plan = plan,
-                    workspace = prepared.workspace,
-                    cancelToken = prepared.cancelToken,
-                ) { ev ->
-                    // 「清空上下文」 during a turn must win over late stdout events.
-                    if (turnGeneration != generation) return@runTurn
-                    when (ev) {
-                        is EngineEvent.SessionInit -> {
-                            if (ev.sessionId.isNotBlank()) claudeSessionId = ev.sessionId
-                            setStatus("已连接 ${ev.model ?: settings.model}")
-                        }
-                        is EngineEvent.TextDelta -> {
-                            setStatus("正在回复…")
-                            streamChunk(assistant.id, DeltaBlock.TEXT, ev.text)
-                        }
-                        is EngineEvent.ThinkingDelta -> {
-                            setStatus("正在思考…")
-                            streamChunk(assistant.id, DeltaBlock.THINKING, ev.text)
-                        }
-                        is EngineEvent.ToolUse -> {
-                            // Human verb only: commands, paths and JSON stay out of the
-                            // live status line and are revealed in the collapsed cards.
-                            setStatus(ToolPresentation.verb(ev.name) + "…")
-                            // `addTool` ignores a duplicate id; emitting then would make the
-                            // Dart mirror append a second card for the same call.
-                            val isNew = toolBlockExists(assistant.id, ev.id).not()
-                            mutateAssistant(assistant.id) { addTool(it, ev) }
-                            if (isNew) {
-                                emitEvent(
-                                    ChatEvent.ToolUse(assistant.id, ev.id, ev.name, ev.inputJson),
-                                )
-                            }
-                        }
-                        is EngineEvent.ToolResult -> {
-                            // Same rule: a result for a card the receiver never saw would
-                            // force it to re-sync for nothing.
-                            val known = toolBlockExists(assistant.id, ev.id)
-                            mutateAssistant(assistant.id) { resolveTool(it, ev) }
-                            if (known) {
-                                emitEvent(
-                                    ChatEvent.ToolResult(assistant.id, ev.id, ev.output, ev.isError),
-                                )
-                            }
-                        }
-                        is EngineEvent.TurnDone -> {
-                            finalText = ev.resultText
-                            cost = ev.costUsd
-                            duration = ev.durationMs
-                            if (ev.sessionId != null) claudeSessionId = ev.sessionId
-                            if (ev.isError) {
-                                // max_turns ends with exit code 1 and no `result` text; a raw
-                                // "CLI 退出码 1" would hide the real cause.
-                                val note = when (ev.subtype) {
-                                    "error_max_turns" ->
-                                        "已达到本轮最大轮数（--max-turns）。可以调大设置里的上限，或发送「继续」。"
-                                    else -> ev.resultText.takeIf { it.isNotBlank() }
-                                }
-                                if (note != null) {
-                                    mutateAssistant(assistant.id) { appendError(it, note) }
-                                    emitEvent(ChatEvent.ErrorBlock(assistant.id, note))
-                                }
-                            }
-                        }
-                        is EngineEvent.Log -> {
-                            Logx.i("cli: ${ev.line}")
-                            if (ev.isError) {
-                                setStatus(ev.line.take(120))
-                                if (stderrTail.size >= 8) stderrTail.removeFirst()
-                                stderrTail.addLast(ev.line)
-                            }
-                        }
-                        is EngineEvent.Failed -> {
-                            Logx.e("引擎错误: ${ev.message}")
-                            mutateAssistant(assistant.id) { appendError(it, ev.message) }
-                            emitEvent(ChatEvent.ErrorBlock(assistant.id, ev.message))
-                        }
-                        is EngineEvent.Exited -> Unit
+            val request = TurnRequest(
+                prompt = prompt,
+                resumeSessionId = resumeId,
+                // The daemon has no classifier-backed "auto"; its default mode is the
+                // honest equivalent and still forwards every ask to the phone.
+                permissionMode = if (prepared.remoteHostId != null && settings.permissionMode == PermissionMode.AUTO) {
+                    "default"
+                } else {
+                    settings.permissionMode.cli
+                },
+            )
+            return prepared.backend.runTurn(request, prepared.cancelToken) { ev ->
+                // 「清空上下文」 during a turn must win over late stdout events.
+                if (turnGeneration != generation) return@runTurn
+                when (ev) {
+                    is EngineEvent.SessionInit -> {
+                        if (ev.sessionId.isNotBlank()) claudeSessionId = ev.sessionId
+                        val model = ev.model ?: turnModel
+                        setStatus(
+                            if (prepared.remoteHostId != null) {
+                                "已连接 ${prepared.backend.label} · $model"
+                            } else {
+                                "已连接 $model"
+                            },
+                        )
                     }
+                    is EngineEvent.TextDelta -> {
+                        setStatus("正在回复…")
+                        streamChunk(assistant.id, DeltaBlock.TEXT, ev.text)
+                    }
+                    is EngineEvent.ThinkingDelta -> {
+                        setStatus("正在思考…")
+                        streamChunk(assistant.id, DeltaBlock.THINKING, ev.text)
+                    }
+                    is EngineEvent.ToolUse -> {
+                        // Human verb only: commands, paths and JSON stay out of the
+                        // live status line and are revealed in the collapsed cards.
+                        setStatus(ToolPresentation.verb(ev.name) + "…")
+                        // `addTool` ignores a duplicate id; emitting then would make the
+                        // Dart mirror append a second card for the same call.
+                        val isNew = toolBlockExists(assistant.id, ev.id).not()
+                        mutateAssistant(assistant.id) { addTool(it, ev) }
+                        if (isNew) {
+                            emitEvent(
+                                ChatEvent.ToolUse(assistant.id, ev.id, ev.name, ev.inputJson),
+                            )
+                        }
+                    }
+                    is EngineEvent.ToolResult -> {
+                        // Same rule: a result for a card the receiver never saw would
+                        // force it to re-sync for nothing.
+                        val known = toolBlockExists(assistant.id, ev.id)
+                        mutateAssistant(assistant.id) { resolveTool(it, ev) }
+                        if (known) {
+                            emitEvent(
+                                ChatEvent.ToolResult(assistant.id, ev.id, ev.output, ev.isError),
+                            )
+                        }
+                    }
+                    is EngineEvent.PermissionRequest -> addPermission(ev)
+                    is EngineEvent.TurnDone -> {
+                        finalText = ev.resultText
+                        cost = ev.costUsd
+                        duration = ev.durationMs
+                        if (ev.sessionId != null) claudeSessionId = ev.sessionId
+                        if (ev.isError) {
+                            // max_turns ends with exit code 1 and no `result` text; a raw
+                            // "CLI 退出码 1" would hide the real cause.
+                            val note = when (ev.subtype) {
+                                "error_max_turns" ->
+                                    "已达到本轮最大轮数（--max-turns）。可以调大设置里的上限，或发送「继续」。"
+                                else -> ev.resultText.takeIf { it.isNotBlank() }
+                            }
+                            if (note != null) {
+                                mutateAssistant(assistant.id) { appendError(it, note) }
+                                emitEvent(ChatEvent.ErrorBlock(assistant.id, note))
+                            }
+                        }
+                    }
+                    is EngineEvent.Log -> {
+                        Logx.i("cli: ${ev.line}")
+                        if (ev.isError) {
+                            setStatus(ev.line.take(120))
+                            if (stderrTail.size >= 8) stderrTail.removeFirst()
+                            stderrTail.addLast(ev.line)
+                        }
+                    }
+                    is EngineEvent.Failed -> {
+                        Logx.e("引擎错误: ${ev.message}")
+                        mutateAssistant(assistant.id) { appendError(it, ev.message) }
+                        emitEvent(ChatEvent.ErrorBlock(assistant.id, ev.message))
+                    }
+                    is EngineEvent.Exited -> Unit
                 }
             }
-            return code
         }
 
         var exitCode: Int
@@ -664,7 +804,7 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 (it is Block.Text && it.text.isNotBlank()) || it is Block.Tool || it is Block.Error
             } == true
             if (!producedSomething) {
-                val text = when (container.engine.cancelReason()) {
+                val text = when (prepared.backend.cancelReason()) {
                     CancelReason.ENGINE_INSTALL ->
                         "引擎正在更新，本轮被中断。等更新完成后重新发送。"
                     CancelReason.ENGINE_UNINSTALL ->
@@ -731,11 +871,129 @@ class ChatController(private val container: AppContainer, val sessionId: String)
         persist()
     }
 
+    /**
+     * Copies every `@attachments/<name>` the prompt references into the host working
+     * directory. The local copy was made by `attachments.pick`; a missing local file is
+     * skipped (it may come from replaying history whose attachment is already remote).
+     */
+    private suspend fun uploadRemoteAttachments(hostId: String, remoteCwd: String, prompt: String) {
+        val names = ATTACHMENT_REF.findAll(prompt).map { it.groupValues[1] }.toSet()
+        if (names.isEmpty()) return
+        val localDir = File(container.workspaces.activeDir(), "attachments")
+        val remoteDir = remoteCwd.trimEnd('/')
+        for (name in names) {
+            val local = File(localDir, name)
+            if (!local.isFile) continue
+            setStatus("正在上传附件…")
+            container.remote.upload(hostId, "$remoteDir/attachments/$name", local)
+        }
+    }
+
+    // ------------------------------------------------------------- permissions
+
+    private fun addPermission(ev: EngineEvent.PermissionRequest) {
+        val pending = PendingPermission(
+            requestId = ev.requestId,
+            toolName = ev.toolName,
+            inputJson = ev.inputJson,
+            title = ev.title,
+            description = ev.description,
+            expiresAt = ev.expiresAt,
+        )
+        _permissions.update { list ->
+            list.filterNot { it.requestId == pending.requestId } + pending
+        }
+        emitEvent(
+            ChatEvent.Permission(
+                requestId = pending.requestId,
+                toolName = pending.toolName,
+                inputJson = pending.inputJson,
+                title = pending.title,
+                description = pending.description,
+                expiresAt = pending.expiresAt,
+            )
+        )
+        setStatus("等待确认：${pending.toolName}")
+        val job = scope.launch {
+            delay(permissionWaitMs(pending.expiresAt))
+            expirePermission(pending.requestId)
+        }
+        synchronized(permissionJobs) {
+            permissionJobs.remove(pending.requestId)?.cancel()
+            permissionJobs[pending.requestId] = job
+        }
+    }
+
+    /** Allows or denies one forwarded tool call; safe to call after the card expired. */
+    fun respondPermission(requestId: String, allow: Boolean, always: Boolean = false) {
+        if (_permissions.value.none { it.requestId == requestId }) return
+        val backend = activeBackend ?: return
+        removePermission(requestId, allow)
+        scope.launch {
+            runCatching {
+                backend.respondPermission(
+                    requestId,
+                    PermissionDecision(allow = allow, always = allow && always),
+                )
+            }.onFailure {
+                notifyError("确认发送失败：${it.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    private fun expirePermission(requestId: String) {
+        if (_permissions.value.none { it.requestId == requestId }) return
+        removePermission(requestId, null)
+        if (_permissions.value.isEmpty() && _running.value) {
+            setStatus("确认已超时，主机将拒绝该操作")
+        }
+    }
+
+    private fun removePermission(requestId: String, allowed: Boolean?) {
+        if (_permissions.value.none { it.requestId == requestId }) return
+        _permissions.update { list -> list.filterNot { it.requestId == requestId } }
+        synchronized(permissionJobs) { permissionJobs.remove(requestId)?.cancel() }
+        emitEvent(ChatEvent.PermissionResolved(requestId, allowed))
+        if (_permissions.value.isNotEmpty()) {
+            setStatus("等待确认：${_permissions.value.first().toolName}")
+        } else if (_running.value) {
+            setStatus(
+                when (allowed) {
+                    true -> "已允许，继续…"
+                    false -> "已拒绝，继续…"
+                    null -> "等待主机…"
+                }
+            )
+        }
+    }
+
+    private fun clearPermissions() {
+        val pending = _permissions.value
+        if (pending.isEmpty()) return
+        _permissions.value = emptyList()
+        synchronized(permissionJobs) {
+            permissionJobs.values.forEach { it.cancel() }
+            permissionJobs.clear()
+        }
+        pending.forEach { emitEvent(ChatEvent.PermissionResolved(it.requestId, null)) }
+    }
+
+    /**
+     * Host `expiresAt` is wall-clock and may be skewed; clamp to a window the daemon
+     * actually uses (default 120 s) instead of trusting the difference verbatim.
+     */
+    private fun permissionWaitMs(expiresAt: Long): Long {
+        if (expiresAt <= 0) return 120_000
+        return (expiresAt - System.currentTimeMillis()).coerceIn(5_000, 130_000)
+    }
+
     fun clear() {
         if (_running.value) {
-            container.engine.cancel(CancelReason.OTHER)
+            stopRequested = true
+            activeBackend?.cancel(CancelReason.OTHER) ?: container.engine.cancel(CancelReason.OTHER)
             job?.cancel()
         }
+        clearPermissions()
         generation += 1
         _messages.value = emptyList()
         emitMessages()
@@ -823,5 +1081,10 @@ class ChatController(private val container: AppContainer, val sessionId: String)
                 ?.jsonPrimitive?.content
         }
         return if (detail.isNullOrBlank()) name else "$name · ${detail.take(60)}"
+    }
+
+    private companion object {
+        /** Same sanitised filenames `Attachments.import` produces (no spaces or slash). */
+        val ATTACHMENT_REF = Regex("""@attachments/([A-Za-z0-9._\-一-龥]+)""")
     }
 }

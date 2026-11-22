@@ -62,6 +62,10 @@ data class ChatSession(
     /** session_id reported by the CLI; used for `--resume`. */
     val claudeSessionId: String? = null,
     val model: String? = null,
+    /** Remote host bound at creation; null means the local PRoot engine. */
+    val hostId: String? = null,
+    /** Working directory on [hostId]; null means the host's configured default. */
+    val remoteCwd: String? = null,
     val messages: List<ChatMessage> = emptyList(),
 ) {
     /** True once anything worth showing was recorded; empty aborted sessions are litter. */

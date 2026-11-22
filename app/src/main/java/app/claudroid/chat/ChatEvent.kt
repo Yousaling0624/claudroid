@@ -57,7 +57,33 @@ sealed interface ChatEvent {
 
     /** One-shot user-facing notice; the receiver clears it with `chat.consumeTitleNotice`. */
     data class TitleNotice(val notice: String?) : ChatEvent
+
+    /** A remote host is waiting for the user to allow or deny a tool call. */
+    data class Permission(
+        val requestId: String,
+        val toolName: String,
+        val inputJson: String,
+        val title: String?,
+        val description: String?,
+        val expiresAt: Long,
+    ) : ChatEvent
+
+    /**
+     * A pending permission left the queue. [allowed] is null when it was cleared by the
+     * end of the turn, a disconnect, or the host-side timeout rather than a user answer.
+     */
+    data class PermissionResolved(val requestId: String, val allowed: Boolean?) : ChatEvent
 }
+
+/** Snapshot shape of a pending permission; also serialised into `chatJson` (§6.3). */
+data class PendingPermission(
+    val requestId: String,
+    val toolName: String,
+    val inputJson: String,
+    val title: String? = null,
+    val description: String? = null,
+    val expiresAt: Long = 0,
+)
 
 /** Which text block a [ChatEvent.Delta] appends to. [wire] is the §5 channel value. */
 enum class DeltaBlock(val wire: String) {

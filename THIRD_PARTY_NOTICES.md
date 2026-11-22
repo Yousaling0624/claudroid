@@ -29,6 +29,17 @@ popup motion and the settings-page structure. The `key`, `cpu`, `paintbrush` and
 - Copyright (C) chen08209
 - Licensed under the GNU General Public License, version 3
 
+## Host-side bridge (not part of the APK)
+
+The optional remote-host daemon in `bridge/` is installed separately on the user's own
+host and is not bundled in the Android app. Its npm dependencies keep their own terms:
+
+- **@anthropic-ai/claude-agent-sdk** — © Anthropic PBC, all rights reserved; use is
+  subject to Anthropic's legal agreements (<https://code.claude.com/docs/en/legal-and-compliance>).
+  The daemon uses it to run the host's own Claude Code installation.
+- **TypeScript** (Apache License 2.0), **vitest**, **tsx**, **@types/node**
+  (MIT) — build and test tooling only.
+
 ## Other dependencies
 
 AndroidX Core / DataStore (Apache License 2.0), NanoHTTPD (BSD 3-Clause), Kotlinx

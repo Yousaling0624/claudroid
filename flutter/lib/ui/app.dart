@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../bridge/events.dart';
+import '../models/models.dart';
 import 'chat_page.dart';
 import 'home_page.dart';
 import 'left_side_sheet.dart';
@@ -36,6 +37,11 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   final ValueNotifier<AppState> _state =
       ValueNotifier<AppState>(const AppState());
   String? _sessionId;
+
+  /// The freshly created session before the next `sessions` event lands. It
+  /// carries the host binding, so the chat page can label a remote turn from
+  /// the first frame instead of briefly looking local.
+  ChatSession? _sessionHint;
   String? _startupError;
 
   /// Incremented on every "new chat"; the home page drops its draft and asks
@@ -99,20 +105,45 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
   void _newSession() {
     setState(() {
       _sessionId = null;
+      _sessionHint = null;
       _homeEpoch++;
     });
   }
 
-  Future<bool> _sendFromHome(String text) async {
+  void _openSession(String id) {
+    ChatSession? hint;
+    for (final session in _state.value.sessions) {
+      if (session.id == id) {
+        hint = session;
+        break;
+      }
+    }
+    setState(() {
+      _sessionId = id;
+      _sessionHint = hint;
+    });
+  }
+
+  Future<bool> _sendFromHome(
+    String text, {
+    String? hostId,
+    String? remoteCwd,
+  }) async {
     try {
-      final session = await widget.bridge.newSession();
+      final session = await widget.bridge.newSession(
+        hostId: hostId,
+        remoteCwd: remoteCwd,
+      );
       final accepted = await widget.bridge.send(session.id, text);
       if (!mounted) return false;
       if (!accepted) {
         _toast('这一轮还没结束。先点停止，再发送。', isError: true);
         return false;
       }
-      setState(() => _sessionId = session.id);
+      setState(() {
+        _sessionId = session.id;
+        _sessionHint = session;
+      });
       return true;
     } catch (error) {
       _toast('没能开始对话（$error）。再试一次。', isError: true);
@@ -132,7 +163,12 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
     try {
       await widget.bridge.deleteSession(id);
       if (!mounted) return;
-      if (_sessionId == id) setState(() => _sessionId = null);
+      if (_sessionId == id) {
+        setState(() {
+          _sessionId = null;
+          _sessionHint = null;
+        });
+      }
     } catch (error) {
       _toast('$error', isError: true);
     }
@@ -203,12 +239,13 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
             state: state,
             stateListenable: _state,
             sessionId: _sessionId,
+            activeSession: _sessionHint,
             homeEpoch: _homeEpoch,
             startupError: _startupError,
             bridge: widget.bridge,
             onNewSession: _newSession,
             onSendFromHome: _sendFromHome,
-            onOpenSession: (id) => setState(() => _sessionId = id),
+            onOpenSession: _openSession,
             onRenameSession: _renameSession,
             onDeleteSession: _deleteSession,
             onUpdateSettings: _updateSettings,
@@ -225,6 +262,7 @@ class _Shell extends StatelessWidget {
     required this.state,
     required this.stateListenable,
     required this.sessionId,
+    required this.activeSession,
     required this.homeEpoch,
     required this.startupError,
     required this.bridge,
@@ -240,11 +278,16 @@ class _Shell extends StatelessWidget {
   final AppState state;
   final ValueListenable<AppState> stateListenable;
   final String? sessionId;
+  final ChatSession? activeSession;
   final int homeEpoch;
   final String? startupError;
   final Bridge bridge;
   final VoidCallback onNewSession;
-  final Future<bool> Function(String text) onSendFromHome;
+  final Future<bool> Function(
+    String text, {
+    String? hostId,
+    String? remoteCwd,
+  }) onSendFromHome;
   final ValueChanged<String> onOpenSession;
   final void Function(String id, String title) onRenameSession;
   final ValueChanged<String> onDeleteSession;
@@ -316,6 +359,7 @@ class _Shell extends StatelessWidget {
         settings: state.settings,
         labels: state.labels,
         engine: state.engine,
+        hosts: state.hosts,
         homeEpoch: homeEpoch,
         sessions: state.sessions,
         onOpenSession: onOpenSession,
@@ -323,6 +367,8 @@ class _Shell extends StatelessWidget {
         onOpenDrawer: () => _openDrawer(context),
         onOpenSettings: (destination) =>
             _openSettings(context, destination),
+        onOpenRemoteHosts: () =>
+            _openSettings(context, SettingsDestination.remoteHosts),
         onOpenWorkspace: () => _openWorkspace(context),
         onNewChat: onNewSession,
         onSend: onSendFromHome,
@@ -330,10 +376,22 @@ class _Shell extends StatelessWidget {
         onToast: onToast,
       );
     }
+    ChatSession? session;
+    for (final candidate in state.sessions) {
+      if (candidate.id == id) {
+        session = candidate;
+        break;
+      }
+    }
+    if (session == null && activeSession?.id == id) {
+      session = activeSession;
+    }
     return ChatPage(
       key: ValueKey(id),
       bridge: bridge,
       sessionId: id,
+      session: session,
+      hosts: state.hosts,
       settings: state.settings,
       labels: state.labels,
       onOpenDrawer: () => _openDrawer(context),

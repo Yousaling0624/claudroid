@@ -25,6 +25,13 @@ class SessionStore(private val context: Context) {
     private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
     val sessions: StateFlow<List<ChatSession>> = _sessions.asStateFlow()
 
+    /**
+     * Sessions created from the UI but not written yet. They carry the chosen remote
+     * host (`hostId`/`remoteCwd`) until the first turn persists them, without showing
+     * empty conversations in the drawer.
+     */
+    private val drafts = mutableMapOf<String, ChatSession>()
+
     private val dir: File get() = Paths.sessions(context)
 
     suspend fun load() = withContext(Dispatchers.IO) {
@@ -35,9 +42,11 @@ class SessionStore(private val context: Context) {
         _sessions.value = list
     }
 
-    fun find(id: String): ChatSession? = _sessions.value.firstOrNull { it.id == id }
+    fun find(id: String): ChatSession? =
+        synchronized(drafts) { drafts[id] } ?: _sessions.value.firstOrNull { it.id == id }
 
     suspend fun upsert(session: ChatSession) = withContext(Dispatchers.IO) {
+        synchronized(drafts) { drafts.remove(session.id) }
         val stamped = session.copy(updatedAt = System.currentTimeMillis())
         val rest = _sessions.value.filterNot { it.id == stamped.id }
         _sessions.value = (listOf(stamped) + rest).sortedByDescending { it.updatedAt }
@@ -51,6 +60,7 @@ class SessionStore(private val context: Context) {
     }
 
     suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+        synchronized(drafts) { drafts.remove(id) }
         _sessions.value = _sessions.value.filterNot { it.id == id }
         File(dir, "$id.json").delete()
     }
@@ -59,5 +69,13 @@ class SessionStore(private val context: Context) {
         find(id)?.let { upsert(it.copy(title = title)) }
     }
 
-    fun newSession(model: String?): ChatSession = ChatSession(model = model)
+    /**
+     * Empty sessions are not written to disk; [drafts] keeps their host binding until
+     * `ChatController.persist()` runs on the first turn.
+     */
+    fun newSession(model: String?, hostId: String? = null, remoteCwd: String? = null): ChatSession {
+        val session = ChatSession(model = model, hostId = hostId, remoteCwd = remoteCwd)
+        synchronized(drafts) { drafts[session.id] = session }
+        return session
+    }
 }

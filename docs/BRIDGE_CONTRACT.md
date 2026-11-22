@@ -98,7 +98,8 @@ val json = Json {
 | `settings` | `settingsJson`, `labelsJson` | 设置变化（DataStore 流） |
 | `engine` | `engineJson` | `EngineManager.state` 变化 |
 | `sessions` | `sessionsJson` | 会话列表变化（增删改序） |
-| `ready` | `settingsJson`, `labelsJson`, `engineJson`, `sessionsJson` | `onListen` 时立即发一次，让 Dart 无需额外请求 |
+| `hosts` | `hostsJson` | 远程主机列表或连接状态变化（`RemoteHostManager.state`） |
+| `ready` | `settingsJson`, `labelsJson`, `engineJson`, `sessionsJson`, `hostsJson` | `onListen` 时立即发一次，让 Dart 无需额外请求 |
 
 `labelsJson` 是**派生展示文案**，由 Kotlin 用 `data/ModelLabels.kt` 算好后附上。
 模型档位（`ModelTier`）的解析规则（`usesAutoModel` / `resolvedActiveTier` / `tierModel`）留在
@@ -143,9 +144,13 @@ Kotlin，Dart 不复制：
 ```json
 [{"id":"uuid","title":"...","createdAt":0,"updatedAt":0,
   "claudeSessionId":"..."|null,"model":"..."|null,
+  "hostId":"..."|null,"remoteCwd":"/home/me/project"|null,
   "hasContent":true,"preview":"最后一条消息的摘要",
   "searchText":"标题之外的可搜索文本（截断）"}]
 ```
+
+`hostId` 非空表示该会话由远程主机执行，`remoteCwd` 是主机上的工作目录；
+两者缺省为 `null`，即现有本地引擎。旧会话文件没有这两个字段，解码为 `null`，无需迁移。
 
 `hasContent` 与 `preview` 由 Kotlin 的 `ChatSession.hasContent/preview` 计算；`searchText`
 是全部消息文本块/工具输出的截断拼接（每会话最多 2000 字符），供抽屉做内容搜索。Dart 不读
@@ -168,6 +173,8 @@ Kotlin，Dart 不复制：
 | `title` | `title` | 标题变化 |
 | `titleBusy` | `busy` | 标题摘要进行中 |
 | `titleNotice` | `notice`(`String?`) | 一次性提示；Dart 显示后调 `chat.consumeTitleNotice` |
+| `permission` | `requestId`, `toolName`, `inputJson`, `title`?, `description`?, `expiresAt` | 远程主机请求确认一次工具调用；`expiresAt` 是主机墙钟毫秒，Dart 只用于倒计时展示 |
+| `permissionResolved` | `requestId`, `allowed`(`bool?`) | 待确认项离队：用户允许/拒绝时 `allowed` 为真/假；回合结束、断连或主机超时时为 `null` |
 
 ### 为什么需要 `delta` 而不是全量 `messages`
 
@@ -206,7 +213,7 @@ Kotlin，Dart 不复制：
 | `app.init` | — | `{ok, settingsJson, labelsJson, engineJson, sessionsJson}` | 读当前三份状态 + 派生标签 |
 | `settings.update` | `settingsJson` | `{ok, settingsJson, labelsJson}` | `settings.edit { decoded }` |
 | `sessions.list` | — | `{ok, sessionsJson}` | `sessions.sessions.value` |
-| `sessions.new` | `model: String?` | `{ok, sessionJson}` | `sessions.newSession(model)` |
+| `sessions.new` | `model: String?`, `hostId: String?`, `remoteCwd: String?` | `{ok, sessionJson}` | `sessions.newSession(...)`；空会话不落盘，主机绑定保存在内存草稿中，首次发送才持久化 |
 | `sessions.delete` | `id` | `{ok}` | `sessions.delete(id)` + `AppContainer.closeChat(id)` |
 | `sessions.rename` | `id`, `title` | `{ok}` | `sessions.rename(id, title)` |
 
@@ -245,14 +252,23 @@ Kotlin，Dart 不复制：
 | `chat.regenerateTitle` | `sessionId` | `{ok}` | |
 | `chat.forget` | `sessionId` | `{ok}` | `AppContainer.forgetChat(id)`：移除控制器，**turn 继续跑** |
 | `chat.close` | `sessionId` | `{ok}` | `AppContainer.closeChat(id)`：`dismiss()` 停 turn + 移除 |
+| `chat.permission` | `sessionId`, `requestId`, `allow: bool`, `always: bool?` | `{ok}` | 把对远程工具确认的答复发给主机；请求已过期时静默忽略 |
 
 `chatJson` 结构：
 
 ```json
 {"messages": [ ...ChatMessage... ],
  "title": "...", "titleBusy": false, "titleNotice": null,
- "running": false, "status": "", "statusLine": "claude-sonnet-5-5"}
+ "running": false, "status": "", "statusLine": "claude-sonnet-5-5",
+ "permissions": [
+   {"requestId":"tool-1","toolName":"Bash","inputJson":"{\"command\":\"ls\"}",
+    "title":null,"description":null,"expiresAt":1700000000000}
+ ]}
 ```
+
+`permissions` 只存在于内存，不随会话落盘：进程重启、回合结束或断连后待确认项清空。
+`chat.status` 在等待确认时会变为 `等待确认：<工具名>`；Dart 仍以 `permission` 事件驱动卡片，
+不要把状态行当作权限状态的唯一来源。
 
 `status` 保留原文是为了排查；界面一律用 `statusLine`。`chatStatusLine` 目前是
 `app.claudroid.chat` 里的 `internal fun`，同属 `:app` 模块，桥接层可直接调用，**不要**在
@@ -412,6 +428,58 @@ Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `pa
 - 支持 `WEBDAV` / `S3`（含兼容服务）/ `GITHUB` 仓库三种云端目标，以及 SAF 本地导入导出。
 - 进度通过 `app.claudroid/backup` 推送；同一时刻只允许一个任务，任务或终端运行时拒绝执行。
 
+### 6.9 远程主机
+
+远程会话把执行端放在安装了 `claudroid-bridge` 的主机上（见 [`REMOTE_HOST.md`](REMOTE_HOST.md)）。
+主机列表与连接状态由 `RemoteHostManager` 持有，通过全局 `hosts` 事件推送；主机 token 经
+Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不进入** `hostsJson`、
+日志或备份归档。
+
+| 方法 | 参数 | 返回 | 说明 |
+| --- | --- | --- | --- |
+| `hosts.list` | — | `{ok, hostsJson}` | 主机列表 + 运行时状态 |
+| `hosts.pair` | `baseUrl`, `code`, `name?` | `{ok, hostsJson, hostJson}` | 用 8 位一次性配对码换 token；同一 `baseUrl` 重配对会更新原条目 |
+| `hosts.update` | `id`, `name?`, `baseUrl?`, `accessClientId?`, `accessSecret?` | `{ok, hostsJson}` | 缺省字段保持不变；`accessSecret=""` 表示清除 Cloudflare Access 凭据 |
+| `hosts.remove` | `id` | `{ok, hostsJson}` | 同时停止该主机的 SSE；正在跑的 turn 会被取消 |
+| `hosts.test` | `id` | `{ok, healthJson, hostsJson}` | `GET /v1/health`；失败转 `ok:false` |
+| `hosts.setDefault` | `id?` | `{ok, hostsJson}` | 空值取消默认主机 |
+| `hosts.browse` | `id`, `path?` | `{ok, path, entriesJson}` | `path` 缺省为主机 `defaultCwd`；路径必须落在主机 roots 内 |
+| `hosts.download` | `id`, `path` | `{ok, localPath, name, mime, size, modifiedAt}` | 下载到 `cacheDir/share/`，仅供调试/后续预览 |
+| `hosts.open` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_VIEW` |
+| `hosts.share` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_SEND` |
+| `hosts.tunnel` | `id`, `action?` | `{ok, tunnelJson, hostsJson}` | `action` 为 `start`/`stop`/`restart`；缺省只查询 |
+
+`hostsJson`：
+
+```json
+{"defaultHostId":"uuid"|null,
+ "hosts":[{
+   "id":"uuid","name":"我的主机","baseUrl":"https://claude.example.com",
+   "hostName":"devbox","platform":"linux","protocol":1,
+   "defaultCwd":"/home/me","workspaceRoots":["/home/me"],
+   "lastSeenAt":1700000000000,
+   "phase":"online",                  // offline | connecting | online | error
+   "error":null,                      // phase=error 时的中文原因
+   "hasAccessToken":false,            // 是否配置了 Cloudflare Access service token
+   "tunnel":{"mode":"named","state":"up","url":"https://claude.example.com",
+             "error":null,"changedAt":1700000000000}
+ }]}
+```
+
+`entriesJson` 与 `workspace.list` 类似，但 `path` 是主机绝对路径：
+
+```json
+[{"name":"src","path":"/home/me/src","isDir":true,"size":4096,"mtimeMs":1700000000000}]
+```
+
+远程会话的创建：`sessions.new(model, hostId, remoteCwd)`。`hostId` 在会话首次发送时随
+`ChatSession` 落盘，之后**不可**中途切换；`remoteCwd` 缺省取主机 `defaultCwd`。
+`chat.send` 在远程会话中不读取手机的任何供应商配置（Key / Base URL / extraEnv / 代理），
+只把 prompt、`resumeSessionId`、权限模式发给主机；主机使用自己的登录态与模型配置。
+远程附件的约定与本地一致：发送前 Kotlin 把 `@attachments/<name>` 引用的本地文件上传到
+`<remoteCwd>/attachments/<name>`，prompt 不改写。远程权限默认拒绝：SSE 断连或主机超时
+（默认 120 秒）都会让主机拒绝该工具调用。
+
 ## 7. 线程与错误
 
 - MethodChannel handler 在主线程回调。凡是 `suspend` 的 Kotlin 方法一律
@@ -421,8 +489,8 @@ Kotlin 负责路径校验、读取与系统 Intent；Dart 只渲染。所有 `pa
 - 任何异常：`result.error("bridge", message, null)` 之外，优先用 `result.success(mapOf("ok" to false, "error" to ...))`，
   便于 Dart 侧统一处理。
 - 日志：桥接层只记 `Logx.i("bridge: <method>")` 级别，**绝不**打印 `apiKey`、`extraEnv`、
-  `networkProxy`（可能含代理账号密码）、完整 prompt。`settingsJson` 在日志里必须先抹掉
-  `apiKey`。
+  `networkProxy`（可能含代理账号密码）、远程主机 token / Access secret、完整 prompt。
+  `settingsJson` 在日志里必须先抹掉 `apiKey`。
 
 ## 8. Dart 侧对应要求
 

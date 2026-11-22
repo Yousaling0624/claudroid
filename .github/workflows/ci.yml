@@ -6,6 +6,7 @@ on:
     paths:
       - 'app/**'
       - 'flutter/**'
+      - 'bridge/**'
       - 'tools/**'
       - 'gradle/**'
       - 'gradlew'
@@ -117,3 +118,31 @@ jobs:
           name: claudroid-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
+
+  # The host-side daemon for remote sessions. It never enters the APK or the
+  # release pipeline; it ships separately (npm), so it gets its own checks.
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

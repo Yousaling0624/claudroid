@@ -9,6 +9,9 @@
 - `flutter/`：add-to-app 模块，**应用唯一的前端**（`release.yml` 与本地构建都会包含它）。
   业务逻辑仍全在 Kotlin，Dart 只做界面。
 - `tools/`：构建期工具，尤其是 `fetch-proot.py`（把 Termux PRoot 打成 `lib*.so`）。
+- `bridge/`：主机侧守护进程 `claudroid-bridge`（TypeScript / Node 20+），供「远程主机」
+  功能使用；不参与 Android 构建，单独构建、测试与分发。协议与部署见
+  `docs/REMOTE_HOST.md`、`docs/BRIDGE_CONTRACT.md` §6.9。
 - `.github/`：PR 检查与 push main 自动发版。
 - `prototype/`：Compose 时期的高保真原型，作为历史交互参考；当前视觉以
   `docs/DESIGN_FLUTTER.md` 与 `docs/screenshots/` 为准。
@@ -37,6 +40,12 @@
    所有 Gradle 构建都包含 Flutter 模块，需要 `flutter.sdk`（见 `docs/FLUTTER.md`）。
    `-Pandroid.newDsl=false` 只能在命令行传，原因见 `docs/FLUTTER.md`。
 
+   改了 `bridge/` 时再跑：
+
+   ```bash
+   cd bridge && npm ci && npm test && npm run build
+   ```
+
    改了发版脚本时再跑：
 
    ```bash
@@ -52,7 +61,8 @@
 
 - **不要自动启动 subagent**：只有用户在当次需求里明确要求分派（如「派给子代理」「用 subagent」）时才启动，否则主会话直接实现。
 - 用户要求分派时，主会话只负责需求拆解、模块路由、并行调度、结果汇总、验证与提交，不直接写实现。
-- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`chat/`、`app/src/main/java/app/claudroid/bridge/`、
+- 按改动范围路由：`engine/`（非 `openai/`）→ `engine-dev`；`remote/`、`bridge/` →
+  `engine-dev`（远程协议/daemon）；`chat/`、`app/src/main/java/app/claudroid/bridge/`、
   `flutter/lib/`、`flutter/test/` → `compose-ui`（设计）或 `ui-impl`（按 spec 实现）；
   `engine/openai/` → `proxy-dev`；Gradle、CI、`tools/` → `build-release`；例行构建/测试 → `qa-build`；高风险深度审查 → `qa-reviewer`。
 - 跨领域任务并行分派互不重叠的部分，由主会话汇总；subagent 不自行 commit/push，也不能再 spawn 子 agent。
@@ -84,7 +94,8 @@
   2. 装 Flutter 3.47.9、`flutter pub get`，以 `-Pandroid.newDsl=false` 跑单元测试、`assembleRelease`；
   3. 上传 `claudroid-<version>.apk` + `.sha256`；
   4. 用 commit 生成 release notes，并创建/更新 GitHub Release。
-- 纯文档改动不命中路径，不会发版；不要为了发版去改无关文件。
+- 纯文档改动不命中路径，不会发版；不要为了发版去改无关文件。`bridge/` 单独测试与分发，
+  不进入 App 的发版路径。
 - 签名密钥只放在 GitHub Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、
   `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。没有密钥时 CI 用 debug key 签名，仍可侧载。
   仓库里绝不能出现 keystore / 密码。
@@ -173,11 +184,17 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 - 下载的 npm / Debian rootfs（OCI layer sha256）/ Termux 产物必须做完整性校验
   （sha512 / sha256 摘要）。
 - 外部响应视为不可信输入；解析前判空、限长。
+- 远程主机：设备令牌用 Android Keystore 加密后存 `filesDir/hosts/hosts.json`，不进
+  `hostsJson`、日志、备份归档或系统备份；远程会话**只使用主机自己的** Claude 登录 /
+  API Key / Base URL / 模型配置，手机不得发送本机 Key、`extraEnv` 或代理设置。
+- daemon 默认只绑定 `127.0.0.1`；文件 RPC 的每条路径都必须 `realpath` 后复查在
+  `roots` 内；权限默认拒绝、超时/断连即拒绝；token、配对码、prompt 不写日志。
 
 ## 9. 测试
 
 - 新增/修改纯逻辑必须补单测：Kotlin 放 `app/src/test/**`，Flutter 纯函数放 `flutter/test/**`，
-  并保证对应的 `testDebugUnitTest` / `flutter test` 全量通过。
+  daemon 放 `bridge/test/**`（vitest），并保证对应的 `testDebugUnitTest` /
+  `flutter test` / `npm test` 全量通过。
 - 不 mock 网络「凑覆盖率」；把真实响应样例喂给纯解析函数。
 - 不删除、不跳过已有测试。
 - 真机验证项（PRoot 启动、chroot、DNS）无法在 CI 覆盖，改到相关路径时要在设置页
@@ -187,6 +204,8 @@ Release notes 直接从 commit 生成，所以 commit 就是发布说明：
 
 - [ ] 只改了必要文件；没有提交 `jniLibs/`、APK、keystore
 - [ ] `./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false` 通过
+- [ ] 改了 `flutter/` / `bridge/` 时 `flutter analyze`、`flutter test`、`npm test`、
+      `npm run build` 通过
 - [ ] 新纯逻辑有测试；没有删/跳过测试
 - [ ] 没有手改版本号、tag、Release
 - [ ] commit 标题/正文可直接作为 Release notes

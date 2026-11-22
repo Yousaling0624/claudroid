@@ -14,6 +14,7 @@ import 'settings/appearance_page.dart';
 import 'settings/backup_page.dart';
 import 'settings/engine_page.dart';
 import 'settings/features_page.dart';
+import 'settings/remote_hosts_page.dart';
 import 'settings/service_models_page.dart';
 import 'settings/settings_controller.dart';
 import 'settings/settings_destination.dart';
@@ -74,6 +75,8 @@ class _SettingsPageState extends State<SettingsPage> {
       SettingsDestination.serviceModels =>
         ServiceModelsPage(controller: _controller),
       SettingsDestination.engine => EnginePage(controller: _controller),
+      SettingsDestination.remoteHosts =>
+        RemoteHostsPage(controller: _controller),
       SettingsDestination.features => FeaturesPage(controller: _controller),
       SettingsDestination.appearance => AppearancePage(controller: _controller),
       SettingsDestination.advanced => AdvancedPage(controller: _controller),
@@ -106,6 +109,14 @@ class _SettingsPageState extends State<SettingsPage> {
               value: _controller.engineSummary,
               tone: SettingsTone.clay,
               pageBuilder: (_) => EnginePage(controller: _controller),
+            ),
+            SettingsEntryRow(
+              key: const ValueKey('settings-remote-hosts'),
+              glyph: AppGlyphs.plug,
+              title: '远程主机',
+              value: _controller.hostsSummary,
+              tone: SettingsTone.clay,
+              pageBuilder: (_) => RemoteHostsPage(controller: _controller),
             ),
             SettingsEntryRow(
               key: const ValueKey('settings-features'),

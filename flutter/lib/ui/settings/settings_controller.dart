@@ -6,6 +6,7 @@ import '../../bridge/api.dart';
 import '../../bridge/events.dart';
 import '../../models/model_info.dart';
 import '../../models/models.dart';
+import '../../models/remote.dart';
 import 'backup_controller.dart';
 import 'settings_labels.dart';
 import 'settings_summary.dart';
@@ -24,6 +25,7 @@ class SettingsController extends ChangeNotifier {
     settings = state.settings;
     labels = state.labels;
     engine = state.engine;
+    hosts = state.hosts;
     stateListenable.addListener(_sync);
     backup.addListener(_onBackupChanged);
   }
@@ -43,6 +45,7 @@ class SettingsController extends ChangeNotifier {
   late AppSettings settings;
   late ModelLabels labels;
   late EngineState engine;
+  late RemoteHostsState hosts;
 
   bool busy = false;
   String storage = '';
@@ -88,6 +91,7 @@ class SettingsController extends ChangeNotifier {
   String get advancedSummary => settingsAdvancedSummary(settings);
   String get backupSummary =>
       settingsBackupSummary(backup.status, backup.config);
+  String get hostsSummary => settingsRemoteSummary(hosts);
   String get aboutSummary => settingsAboutSummary(appVersion, release);
 
   /// Loads the pieces the root page shows as subtitles. Failures are silent:
@@ -407,11 +411,26 @@ class SettingsController extends ChangeNotifier {
     settings = state.settings;
     labels = state.labels;
     engine = state.engine;
+    hosts = state.hosts;
     notifyListeners();
   }
 
   void _onBackupChanged() {
     if (!_disposed) notifyListeners();
+  }
+
+  /// Re-reads the host list after the page mutates it. The global `hosts` event
+  /// also arrives, but awaiting this gives the page a fresh snapshot even when
+  /// the event is delayed behind a reconnect.
+  Future<void> refreshHosts() async {
+    try {
+      final next = await bridge.listHosts();
+      if (_disposed) return;
+      hosts = next;
+      notifyListeners();
+    } catch (_) {
+      // The event channel will catch up; the page keeps its current list.
+    }
   }
 
   @override

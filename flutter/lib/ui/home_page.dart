@@ -7,6 +7,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import '../models/remote.dart';
 import 'attachments.dart';
 import 'claude_dir_dialog.dart';
 import 'composer.dart';
@@ -16,6 +17,7 @@ import 'layout.dart';
 import 'model_menu.dart';
 import 'organic_halo.dart';
 import 'permission_menu.dart';
+import 'remote_host_picker.dart';
 import 'scaffold_bar.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_labels.dart';
@@ -33,11 +35,13 @@ class HomePage extends StatefulWidget {
     required this.settings,
     required this.labels,
     required this.engine,
+    required this.hosts,
     required this.homeEpoch,
     required this.sessions,
     required this.onOpenSession,
     required this.onOpenDrawer,
     required this.onOpenSettings,
+    required this.onOpenRemoteHosts,
     required this.onOpenWorkspace,
     required this.onNewChat,
     required this.onSend,
@@ -50,6 +54,7 @@ class HomePage extends StatefulWidget {
   final AppSettings settings;
   final ModelLabels labels;
   final EngineState engine;
+  final RemoteHostsState hosts;
 
   /// Bumped whenever "new chat" is pressed; suggestions are regenerated and the
   /// draft is dropped, the same reset the Compose `resetKey` performs.
@@ -60,12 +65,18 @@ class HomePage extends StatefulWidget {
   final ValueChanged<String> onOpenSession;
   final VoidCallback onOpenDrawer;
   final ValueChanged<SettingsDestination> onOpenSettings;
+  final VoidCallback onOpenRemoteHosts;
   final VoidCallback onOpenWorkspace;
   final VoidCallback onNewChat;
 
   /// Creates the session, sends [text], and switches to it. `true` means the
-  /// host accepted the turn and the draft can be cleared.
-  final Future<bool> Function(String text) onSend;
+  /// host accepted the turn and the draft can be cleared. [hostId] binds the
+  /// new conversation to a remote daemon; `null` runs locally.
+  final Future<bool> Function(
+    String text, {
+    String? hostId,
+    String? remoteCwd,
+  }) onSend;
   final Future<void> Function(Map<String, dynamic> patch) onUpdateSettings;
   final void Function(String text, {bool isError}) onToast;
   final String? notice;
@@ -84,6 +95,51 @@ class _HomePageState extends State<HomePage> {
   bool _sending = false;
   int _suggestionGeneration = 0;
 
+  /// Null means the local engine. A remote choice also carries an optional
+  /// host-side working directory; null there falls back to the host default.
+  String? _hostId;
+  String? _remoteCwd;
+
+  /// Once the user picks a host explicitly, a late `hosts` event must not
+  /// replace that choice with the default host.
+  bool _hostTouched = false;
+
+  RemoteHost? get _host => widget.hosts.byId(_hostId);
+
+  @override
+  void initState() {
+    super.initState();
+    _resetHostSelection();
+    _loadSuggestions();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.homeEpoch != widget.homeEpoch) {
+      _input.clear();
+      _resetHostSelection();
+      _loadSuggestions();
+    } else if (oldWidget.hosts != widget.hosts) {
+      final selected = _host;
+      if (_hostId != null && selected == null) {
+        _hostId = null;
+        _remoteCwd = null;
+      } else if (_hostId == null &&
+          !_hostTouched &&
+          widget.hosts.defaultHostId != null &&
+          oldWidget.hosts.defaultHostId == null) {
+        _hostId = widget.hosts.defaultHostId;
+      }
+    }
+  }
+
+  void _resetHostSelection() {
+    _hostTouched = false;
+    _hostId = widget.hosts.defaultHostId;
+    _remoteCwd = null;
+  }
+
   ChatSession? get _recentSession {
     ChatSession? latest;
     for (final session in widget.sessions) {
@@ -93,21 +149,6 @@ class _HomePageState extends State<HomePage> {
       }
     }
     return latest;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSuggestions();
-  }
-
-  @override
-  void didUpdateWidget(covariant HomePage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.homeEpoch != widget.homeEpoch) {
-      _input.clear();
-      _loadSuggestions();
-    }
   }
 
   @override
@@ -145,7 +186,11 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     setState(() => _sending = true);
-    final accepted = await widget.onSend(composeChatPrompt(text, paths));
+    final accepted = await widget.onSend(
+      composeChatPrompt(text, paths),
+      hostId: _host?.id,
+      remoteCwd: _host == null ? null : _remoteCwd,
+    );
     if (!mounted) return;
     setState(() => _sending = false);
     if (accepted) {
@@ -161,6 +206,10 @@ class _HomePageState extends State<HomePage> {
   /// Picks the directory Claude Code runs in; applied by the host on the next
   /// turn, so no new conversation or engine restart is needed.
   Future<void> _chooseClaudeDir() async {
+    if (_host != null) {
+      await _chooseRemoteCwd();
+      return;
+    }
     final current = widget.settings.str('claudeWorkDir');
     final chosen = await showClaudeDirDialog(
       context,
@@ -179,6 +228,51 @@ class _HomePageState extends State<HomePage> {
           ? 'Claude 工作目录已重置为 /work（工作区根目录）'
           : 'Claude 工作目录已切换到 ${claudeDirLabel(chosen)}',
     );
+  }
+
+  Future<void> _chooseHost() async {
+    if (widget.hosts.isEmpty) {
+      widget.onOpenRemoteHosts();
+      return;
+    }
+    final choice = await showRemoteHostPicker(
+      context,
+      hosts: widget.hosts,
+      currentHostId: _hostId,
+    );
+    if (choice == null || !mounted) return;
+    setState(() {
+      _hostTouched = true;
+      _hostId = choice.hostId;
+      _remoteCwd = null;
+    });
+  }
+
+  Future<void> _chooseRemoteCwd() async {
+    final host = _host;
+    if (host == null) return;
+    final chosen = await showRemoteDirectoryPicker(
+      context,
+      bridge: widget.bridge,
+      host: host,
+      initialPath: _remoteCwd ?? host.defaultCwd,
+      onToast: widget.onToast,
+    );
+    if (chosen == null || !mounted) return;
+    setState(() => _remoteCwd = chosen);
+    widget.onToast('远程工作目录：$chosen');
+  }
+
+  String get _remoteCwdLabel {
+    final host = _host;
+    if (host == null) return '';
+    final path = _remoteCwd ?? host.defaultCwd;
+    if (path.isEmpty) return '主机默认目录';
+    final trimmed = path.endsWith('/')
+        ? path.substring(0, path.length - 1)
+        : path;
+    final name = trimmed.substring(trimmed.lastIndexOf('/') + 1);
+    return name.isEmpty ? path : name;
   }
 
   List<SlashAction> _slashActions() => [
@@ -246,6 +340,12 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         SlashAction(
+          command: 'host',
+          label: '选择执行主机',
+          glyph: AppGlyphs.plug,
+          onPressed: _chooseHost,
+        ),
+        SlashAction(
           command: 'cwd',
           label: 'Claude 工作目录',
           glyph: AppGlyphs.folder,
@@ -279,13 +379,16 @@ class _HomePageState extends State<HomePage> {
         ),
         title: (context) => const Text('Claudroid'),
         actions: [
-          (context) => ModelTierButton(
-            labels: widget.labels,
-            settings: widget.settings,
-            onPatch: _patch,
-            onOpenSettings: () =>
-                widget.onOpenSettings(SettingsDestination.serviceModels),
-          ),
+          if (_host == null)
+            (context) => ModelTierButton(
+              labels: widget.labels,
+              settings: widget.settings,
+              onPatch: _patch,
+              onOpenSettings: () =>
+                  widget.onOpenSettings(SettingsDestination.serviceModels),
+            )
+          else
+            (context) => _RemoteBarBadge(host: _host!),
           (context) => IconButton(
             onPressed: widget.onNewChat,
             icon: const GlyphIcon(AppGlyphs.plus),
@@ -347,7 +450,9 @@ class _HomePageState extends State<HomePage> {
                           ),
                           SizedBox(height: tight ? 6 : 8),
                           Text(
-                            '今天想让 Claude 在这台手机上做什么？',
+                            _host == null
+                                ? '今天想让 Claude 在这台手机上做什么？'
+                                : '今天想让 Claude 在「${_host!.displayName}」上做什么？',
                             textAlign: TextAlign.center,
                             style: context.listSubtitleStyle,
                           ),
@@ -405,6 +510,17 @@ class _HomePageState extends State<HomePage> {
             maxWidth: kHomeContentWidth,
             heightFactor: 1,
             alignment: Alignment.center,
+            child: _HostSelectionBar(
+              host: _host,
+              cwdLabel: _remoteCwdLabel,
+              onChooseHost: _chooseHost,
+              onChooseCwd: _chooseRemoteCwd,
+            ),
+          ),
+          ContentWidth(
+            maxWidth: kHomeContentWidth,
+            heightFactor: 1,
+            alignment: Alignment.center,
             child: ChatComposer(
               key: _composerKey,
               bridge: widget.bridge,
@@ -416,9 +532,11 @@ class _HomePageState extends State<HomePage> {
               onToast: widget.onToast,
               hintText: '有什么可以帮你的？',
               actions: _slashActions(),
-              footnote: permissionFootnote(
-                widget.settings.str('permissionMode', 'BYPASS'),
-              ),
+              footnote: _host == null
+                  ? permissionFootnote(
+                      widget.settings.str('permissionMode', 'BYPASS'),
+                    )
+                  : '远程主机执行；工具调用会转发到这里确认。',
               bottomInset: context.bottomInset,
             ),
           ),
@@ -701,6 +819,160 @@ String greetingForHour(int hour) => switch (hour) {
       >= 18 && <= 22 => '晚上好',
       _ => '夜深了',
     };
+
+/// The execution target under the greeting. The host pill opens the picker;
+/// the directory pill is only present for a remote host and browses its roots.
+class _HostSelectionBar extends StatelessWidget {
+  const _HostSelectionBar({
+    required this.host,
+    required this.cwdLabel,
+    required this.onChooseHost,
+    required this.onChooseCwd,
+  });
+
+  final RemoteHost? host;
+  final String cwdLabel;
+  final VoidCallback onChooseHost;
+  final VoidCallback onChooseCwd;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    final remote = host;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          _TargetPill(
+            key: const ValueKey('home-host-pill'),
+            glyph: remote == null ? AppGlyphs.cpu : AppGlyphs.plug,
+            label: remote == null ? '本机' : remote.displayName,
+            dotColor: remote == null
+                ? scheme.success
+                : switch (remote.phase) {
+                    'online' => scheme.success,
+                    'connecting' => scheme.primary,
+                    'error' => scheme.error,
+                    _ => scheme.onSurfaceVariant,
+                  },
+            onPressed: onChooseHost,
+          ),
+          if (remote != null)
+            _TargetPill(
+              key: const ValueKey('home-remote-cwd-pill'),
+              glyph: AppGlyphs.folder,
+              label: cwdLabel,
+              onPressed: onChooseCwd,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TargetPill extends StatelessWidget {
+  const _TargetPill({
+    super.key,
+    required this.glyph,
+    required this.label,
+    required this.onPressed,
+    this.dotColor,
+  });
+
+  final Glyph glyph;
+  final String label;
+  final VoidCallback onPressed;
+  final Color? dotColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    return PressSurface(
+      fill: scheme.surfaceContainerLow,
+      shape: AppShape.full,
+      onPressed: onPressed,
+      padding: EdgeInsets.zero,
+      child: Container(
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.full,
+          border: Border.all(
+            color: scheme.outlineVariant.withValues(alpha: 0.8),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GlyphIcon(glyph, size: 15, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 170),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyle.caption1
+                    .of(context)
+                    .copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
+            if (dotColor != null) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+            const SizedBox(width: 3),
+            GlyphIcon(
+              Glyphs.chevronDown,
+              size: 13,
+              color: scheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RemoteBarBadge extends StatelessWidget {
+  const _RemoteBarBadge({required this.host});
+
+  final RemoteHost host;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GlyphIcon(AppGlyphs.plug, size: 14, color: scheme.primary),
+        const SizedBox(width: 5),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 96),
+          child: Text(
+            host.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTextStyle.caption1.of(context).copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 final Listenable _neverBar = _NeverNotifier();
 final ValueListenable<bool> _neverLoading = _NeverValueListenable();

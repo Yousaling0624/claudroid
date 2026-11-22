@@ -476,6 +476,17 @@ class _SessionRowState extends State<_SessionRow> {
               ),
             ),
             const SizedBox(width: 8),
+            if (session.isRemote) ...[
+              Tooltip(
+                message: '远程主机会话',
+                child: GlyphIcon(
+                  AppGlyphs.plug,
+                  size: 14,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 7),
+            ],
             Text(
               sessionTimeLabel(session.updatedAt),
               style: AppTextStyle.caption2

@@ -15,13 +15,22 @@ import app.claudroid.engine.EngineManager
 import app.claudroid.engine.openai.ModelCatalog
 import java.io.File
 import app.claudroid.chat.ChatEvent
+import app.claudroid.chat.PendingPermission
 import app.claudroid.chat.chatStatusLine
 import app.claudroid.data.activeTierSummary
 import app.claudroid.data.chatModelLabel
 import app.claudroid.data.composerModelLabel
 import app.claudroid.data.shortModelLabel
 import app.claudroid.data.tierMappingLabel
+import app.claudroid.remote.RemoteFileEntry
+import app.claudroid.remote.RemoteHealth
+import app.claudroid.remote.RemoteHostProfile
+import app.claudroid.remote.RemoteHostsState
+import app.claudroid.remote.RemotePhase
+import app.claudroid.remote.RemoteRuntime
+import app.claudroid.remote.RemoteTunnelStatus
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -57,6 +66,7 @@ object BridgeWire {
         running: Boolean,
         status: String,
         statusLine: String,
+        permissions: List<PendingPermission> = emptyList(),
     ): String = buildJsonObject {
         put("messages", BridgeJson.json.parseToJsonElement(messagesJson(messages)))
         put("title", title)
@@ -65,6 +75,7 @@ object BridgeWire {
         put("running", running)
         put("status", status)
         put("statusLine", statusLine)
+        put("permissions", buildJsonArray { permissions.forEach { add(permissionJson(it)) } })
     }.toString()
 
     /** §4 `sessionsJson`: summaries only — the drawer never needs the transcripts. */
@@ -78,6 +89,8 @@ object BridgeWire {
         put("updatedAt", session.updatedAt)
         put("claudeSessionId", session.claudeSessionId)
         put("model", session.model)
+        put("hostId", session.hostId)
+        put("remoteCwd", session.remoteCwd)
         put("hasContent", session.hasContent)
         put("preview", session.preview)
         put("searchText", searchText(session))
@@ -250,5 +263,90 @@ object BridgeWire {
         is ChatEvent.Title -> mapOf("type" to "title", "title" to event.title)
         is ChatEvent.TitleBusy -> mapOf("type" to "titleBusy", "busy" to event.busy)
         is ChatEvent.TitleNotice -> mapOf("type" to "titleNotice", "notice" to event.notice)
+        is ChatEvent.Permission -> mapOf(
+            "type" to "permission",
+            "requestId" to event.requestId,
+            "toolName" to event.toolName,
+            "inputJson" to event.inputJson,
+            "title" to event.title,
+            "description" to event.description,
+            "expiresAt" to event.expiresAt,
+        )
+        is ChatEvent.PermissionResolved -> mapOf(
+            "type" to "permissionResolved",
+            "requestId" to event.requestId,
+            "allowed" to event.allowed,
+        )
+    }
+
+    // ------------------------------------------------------------ remote hosts
+
+    /** §4/§6.9 `hostsJson`: paired hosts plus runtime state; never includes a token. */
+    fun hostsJson(state: RemoteHostsState): String = buildJsonObject {
+        put("defaultHostId", state.defaultHostId)
+        put("hosts", buildJsonArray {
+            state.hosts.forEach { host -> add(hostJson(host, state.runtime[host.id])) }
+        })
+    }.toString()
+
+    fun hostJson(host: RemoteHostProfile, runtime: RemoteRuntime?): JsonElement = buildJsonObject {
+        put("id", host.id)
+        put("name", host.name)
+        put("baseUrl", host.baseUrl)
+        put("hostName", host.hostName)
+        put("platform", host.platform)
+        put("protocol", host.protocol)
+        put("defaultCwd", host.defaultCwd)
+        put("workspaceRoots", stringArray(host.workspaceRoots))
+        put("lastSeenAt", host.lastSeenAt)
+        put("phase", (runtime?.phase ?: RemotePhase.OFFLINE).name.lowercase())
+        put("error", runtime?.error)
+        put("hasAccessToken", host.accessClientId.isNotBlank())
+        val tunnel = runtime?.health?.tunnel ?: host.tunnel
+        put("tunnel", tunnelJson(tunnel))
+    }
+
+    fun tunnelJson(status: RemoteTunnelStatus): JsonElement = buildJsonObject {
+        put("mode", status.mode)
+        put("state", status.state)
+        put("url", status.url)
+        put("error", status.error)
+        put("changedAt", status.changedAt)
+    }
+
+    /** §6.9 `healthJson` for the host detail page and connection diagnostics. */
+    fun healthJson(health: RemoteHealth): String = buildJsonObject {
+        put("protocol", health.protocol)
+        put("daemonVersion", health.daemonVersion)
+        put("claudeVersion", health.claudeVersion)
+        put("hostName", health.hostName)
+        put("platform", health.platform)
+        put("arch", health.arch)
+        put("workspaceRoots", stringArray(health.workspaceRoots))
+        put("defaultCwd", health.defaultCwd)
+        put("defaultModel", health.defaultModel)
+        put("permissionModes", stringArray(health.permissionModes))
+        put("allowBypassPermissions", health.allowBypassPermissions)
+        put("tunnel", tunnelJson(health.tunnel))
+    }.toString()
+
+    fun remoteEntriesJson(entries: List<RemoteFileEntry>): String =
+        buildJsonArray { entries.forEach { add(remoteEntryJson(it)) } }.toString()
+
+    fun remoteEntryJson(entry: RemoteFileEntry): JsonElement = buildJsonObject {
+        put("name", entry.name)
+        put("path", entry.path)
+        put("isDir", entry.isDir)
+        put("size", entry.size)
+        put("mtimeMs", entry.mtimeMs)
+    }
+
+    fun permissionJson(permission: PendingPermission): JsonElement = buildJsonObject {
+        put("requestId", permission.requestId)
+        put("toolName", permission.toolName)
+        put("inputJson", permission.inputJson)
+        put("title", permission.title)
+        put("description", permission.description)
+        put("expiresAt", permission.expiresAt)
     }
 }

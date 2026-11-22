@@ -82,6 +82,13 @@ object Paths {
 
     fun sessions(ctx: Context): File = File(ctx.filesDir, "sessions").apply { mkdirs() }
 
+    /**
+     * Remote host profiles. Deliberately outside `sessions/` and `backup/`: host tokens
+     * are sealed with the Android Keystore and must never enter an archive
+     * (docs/BACKUP.md §2).
+     */
+    fun hosts(ctx: Context): File = File(ctx.filesDir, "hosts").apply { mkdirs() }
+
     /** Target config and the persisted last-result status (docs/BACKUP.md §4/§6). */
     fun backup(ctx: Context): File = File(ctx.filesDir, "backup").apply { mkdirs() }
 

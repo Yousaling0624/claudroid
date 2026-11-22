@@ -315,6 +315,18 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "chat.regenerateTitle" -> chatRegenerateTitle(call)
             "chat.forget" -> chatForget(call)
             "chat.close" -> chatClose(call)
+            "chat.permission" -> chatPermission(call)
+            "hosts.list" -> hostsState()
+            "hosts.pair" -> hostsPair(call)
+            "hosts.update" -> hostsUpdate(call)
+            "hosts.remove" -> hostsRemove(call)
+            "hosts.test" -> hostsTest(call)
+            "hosts.setDefault" -> hostsSetDefault(call)
+            "hosts.browse" -> hostsBrowse(call)
+            "hosts.download" -> hostsDownload(call)
+            "hosts.open" -> hostsIntent(call, share = false)
+            "hosts.share" -> hostsIntent(call, share = true)
+            "hosts.tunnel" -> hostsTunnel(call)
             else -> mapOf("ok" to false, "error" to "未知方法 ${call.method}")
         }
     }
@@ -441,7 +453,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
      * in one command. Refuse until the work is done instead of silently disagreeing.
      */
     private fun requireWorkspaceIdle() {
-        if (container.engine.busy || terminalJob?.isActive == true) {
+        if (container.busy || terminalJob?.isActive == true) {
             throw IllegalStateException("任务正在运行，等这一轮结束后再切换工作区")
         }
     }
@@ -892,7 +904,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
      * archive is made of; a merge underneath it could see half-written JSON.
      */
     private fun requireBackupIdle() {
-        if (container.engine.busy || terminalJob?.isActive == true) {
+        if (container.busy || terminalJob?.isActive == true) {
             throw IllegalStateException("任务或终端正在运行，结束后再备份或恢复")
         }
         if (container.backup.busy) throw IllegalStateException("已有备份任务在进行")
@@ -1002,7 +1014,12 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private suspend fun sessionsNew(call: MethodCall): Map<String, Any?> {
         // Deliberately not persisted here: an empty session is litter, and the first
         // turn writes it (ChatController.persist). Dart navigates into it directly.
-        val session = container.sessions.newSession(call.str("model"))
+        // The optional host binding survives in SessionStore drafts until then.
+        val session = container.sessions.newSession(
+            model = call.str("model"),
+            hostId = call.str("hostId"),
+            remoteCwd = call.str("remoteCwd"),
+        )
         ensureChatChannel(session.id)
         return mapOf("ok" to true, "sessionJson" to BridgeWire.sessionJson(session))
     }
@@ -1111,6 +1128,143 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         return ok()
     }
 
+    private suspend fun chatPermission(call: MethodCall): Map<String, Any?> {
+        val chat = controller(call)
+        chat.load()
+        chat.respondPermission(
+            requestId = call.require("requestId"),
+            allow = call.bool("allow"),
+            always = call.bool("always"),
+        )
+        return ok()
+    }
+
+    // --------------------------------------------------------------- hosts
+
+    private suspend fun hostsState(): Map<String, Any?> {
+        container.remote.load()
+        return mapOf("ok" to true, "hostsJson" to hostsSnapshot())
+    }
+
+    private fun hostsSnapshot(): String = BridgeWire.hostsJson(container.remote.state.value)
+
+    private suspend fun hostsPair(call: MethodCall): Map<String, Any?> {
+        val profile = container.remote.pair(
+            baseUrl = call.require("baseUrl"),
+            code = call.require("code"),
+            name = call.str("name").orEmpty(),
+        )
+        val runtime = container.remote.state.value.runtime[profile.id]
+        return mapOf(
+            "ok" to true,
+            "hostsJson" to hostsSnapshot(),
+            "hostJson" to BridgeWire.hostJson(profile, runtime).toString(),
+        )
+    }
+
+    private suspend fun hostsUpdate(call: MethodCall): Map<String, Any?> {
+        container.remote.updateHost(
+            id = call.require("id"),
+            name = call.str("name"),
+            baseUrl = call.str("baseUrl"),
+            accessClientId = call.str("accessClientId"),
+            accessSecret = call.str("accessSecret"),
+        )
+        return hostsState()
+    }
+
+    private suspend fun hostsRemove(call: MethodCall): Map<String, Any?> {
+        container.remote.remove(call.require("id"))
+        return hostsState()
+    }
+
+    private suspend fun hostsTest(call: MethodCall): Map<String, Any?> {
+        val health = container.remote.test(call.require("id"))
+        return mapOf(
+            "ok" to true,
+            "healthJson" to BridgeWire.healthJson(health),
+            "hostsJson" to hostsSnapshot(),
+        )
+    }
+
+    private suspend fun hostsSetDefault(call: MethodCall): Map<String, Any?> {
+        container.remote.setDefault(call.str("id")?.takeIf { it.isNotBlank() })
+        return hostsState()
+    }
+
+    private suspend fun hostsBrowse(call: MethodCall): Map<String, Any?> {
+        val id = call.require("id")
+        val path = call.str("path")?.takeIf { it.isNotBlank() }
+            ?: container.remote.host(id)?.defaultCwd?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("请先选择主机目录")
+        val entries = container.remote.listFiles(id, path)
+        return mapOf(
+            "ok" to true,
+            "path" to path,
+            "entriesJson" to BridgeWire.remoteEntriesJson(entries),
+        )
+    }
+
+    private suspend fun hostsDownload(call: MethodCall): Map<String, Any?> {
+        val file = container.remote.download(call.require("id"), call.require("path"))
+        val entry = WorkspaceEntry(file, file.name, WorkspaceFiles.kindOf(file), file.length(), file.lastModified())
+        return mapOf(
+            "ok" to true,
+            "localPath" to file.absolutePath,
+            "name" to file.name,
+            "mime" to WorkspaceFiles.mimeOf(entry),
+            "size" to file.length(),
+            "modifiedAt" to file.lastModified(),
+        )
+    }
+
+    /**
+     * Downloads into `cacheDir/share/` first: that path is already exposed through
+     * FileProvider, so remote files open/share with the same mechanism as workspace
+     * files, and no new provider path (or permission) is needed.
+     */
+    private suspend fun hostsIntent(call: MethodCall, share: Boolean): Map<String, Any?> {
+        val remotePath = call.require("path")
+        val file = container.remote.download(call.require("id"), remotePath)
+        if (!file.isFile) throw IllegalArgumentException("文件不存在")
+        val entry = WorkspaceEntry(file, file.name, WorkspaceFiles.kindOf(file), file.length(), file.lastModified())
+        val uri = FileProvider.getUriForFile(
+            container.appContext,
+            "${container.appContext.packageName}.files",
+            file,
+        )
+        val displayName = remotePath.substringAfterLast('/').ifBlank { file.name }
+        val target = if (share) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = WorkspaceFiles.mimeOf(entry)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        } else {
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, WorkspaceFiles.mimeOf(entry))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        val intent = if (share) Intent.createChooser(target, "分享 $displayName") else target
+        startExternal(intent) { e ->
+            if (share) "无法分享：${e.message}" else "没有能打开该文件的应用"
+        }
+        return ok()
+    }
+
+    private suspend fun hostsTunnel(call: MethodCall): Map<String, Any?> {
+        val status = container.remote.tunnel(
+            id = call.require("id"),
+            action = call.str("action")?.takeIf { it.isNotBlank() },
+        )
+        return mapOf(
+            "ok" to true,
+            "tunnelJson" to BridgeWire.tunnelJson(status).toString(),
+            "hostsJson" to hostsSnapshot(),
+        )
+    }
+
     private suspend fun controller(call: MethodCall): ChatController {
         val id = call.require("sessionId")
         ensureChatChannel(id)
@@ -1124,6 +1278,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             globalJob?.cancel()
             globalJob = scope.launch {
                 container.sessions.load()
+                container.remote.load()
                 val settings = container.settings.current()
                 settingsSnapshot = settings
                 val sessions = container.sessions.sessions.value
@@ -1135,6 +1290,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                         "labelsJson" to BridgeWire.labelsJson(settings),
                         "engineJson" to BridgeWire.engineJson(container.engine.state.value, settings),
                         "sessionsJson" to BridgeWire.sessionsJson(sessions),
+                        "hostsJson" to BridgeWire.hostsJson(container.remote.state.value),
                     ),
                 )
                 sessions.forEach { ensureChatChannel(it.id) }
@@ -1163,6 +1319,13 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                     container.sessions.sessions.collect { list ->
                         sink.success(
                             mapOf("type" to "sessions", "sessionsJson" to BridgeWire.sessionsJson(list)),
+                        )
+                    }
+                }
+                launch {
+                    container.remote.state.collect { state ->
+                        sink.success(
+                            mapOf("type" to "hosts", "hostsJson" to BridgeWire.hostsJson(state)),
                         )
                     }
                 }
@@ -1276,6 +1439,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         running = chat.running.value,
         status = chat.status.value,
         statusLine = chatStatusLine(chat.running.value, chat.status.value, chatModelLabel(settings)),
+        permissions = chat.pendingPermissions.value,
     )
 
     private fun ensureChatChannel(id: String) {

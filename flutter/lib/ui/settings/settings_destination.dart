@@ -7,6 +7,7 @@ enum SettingsDestination {
   root,
   serviceModels,
   engine,
+  remoteHosts,
   features,
   appearance,
   advanced,

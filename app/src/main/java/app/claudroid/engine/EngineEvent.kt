@@ -7,6 +7,22 @@ sealed interface EngineEvent {
     data class ThinkingDelta(val text: String) : EngineEvent
     data class ToolUse(val id: String, val name: String, val inputJson: String) : EngineEvent
     data class ToolResult(val id: String, val output: String, val isError: Boolean) : EngineEvent
+
+    /**
+     * A remote host is asking the phone whether a tool call may run. Local turns never
+     * emit this: the embedded CLI has no interactive host, so its behaviour is unchanged.
+     * [expiresAt] is host wall-clock; the controller clamps it to a sane relative delay.
+     */
+    data class PermissionRequest(
+        val requestId: String,
+        val toolName: String,
+        val inputJson: String,
+        val suggestionsJson: String? = null,
+        val expiresAt: Long = 0,
+        val title: String? = null,
+        val description: String? = null,
+    ) : EngineEvent
+
     data class TurnDone(
         val resultText: String,
         val costUsd: Double?,

@@ -18,6 +18,9 @@
 不备份：
 
 - 引擎 jail / rootfs / CLI 二进制（可重装）。
+- **远程主机配置与设备令牌**：`filesDir/hosts/`（`hosts.json` 里的令牌经 Android Keystore
+  加密，Keystore 密钥不可导出，归档到别的设备也无法解密）不进入备份、导出或自动备份。
+  恢复后需要重新配对远程主机。
 - 附件缓存之外的任何运行期文件、日志、`install.json`、备份目标配置本身。
 - 工作区里的符号链接与特殊文件（socket/FIFO）：ZIP 无法可靠表达，跳过并在
   `manifest.json` 里记 `skipped` 数量。

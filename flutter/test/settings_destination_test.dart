@@ -71,4 +71,14 @@ void main() {
     expect(find.text('状态'), findsOneWidget);
     expect(find.text('模型与引擎'), findsNothing);
   });
+
+  testWidgets('remote-hosts destination opens the host list', (tester) async {
+    final state = ValueNotifier(const AppState());
+    await tester.pumpWidget(_harness(state, SettingsDestination.remoteHosts));
+    await tester.pump();
+
+    expect(find.text('远程主机'), findsWidgets);
+    expect(find.text('添加远程主机'), findsOneWidget);
+    expect(find.text('模型与引擎'), findsNothing);
+  });
 }

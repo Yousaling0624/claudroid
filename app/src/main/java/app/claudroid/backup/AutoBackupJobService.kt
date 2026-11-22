@@ -75,7 +75,7 @@ class AutoBackupJobService : JobService() {
         // Disabled or LOCAL: end silently. A persisted job can outlive this config.
         if (!AutoBackupPolicy.shouldSchedule(container.backup.savedConfig())) return
         // A running turn or terminal may be writing the very files the archive reads.
-        if (container.engine.busy || container.terminalProbe?.invoke() == true) return
+        if (container.busy || container.terminalProbe?.invoke() == true) return
         // Manual work owns the single-task slot; skip instead of racing or reporting
         // a busy error into status.json.
         if (container.backup.busy) return

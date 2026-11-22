@@ -1,5 +1,6 @@
 import '../../models/backup.dart';
 import '../../models/models.dart';
+import '../../models/remote.dart';
 import 'settings_labels.dart';
 
 /// One-line status for the "服务与模型" row.
@@ -129,6 +130,19 @@ String settingsBackupSummary(
   }
   if (config.kind == BackupTargetKind.local) return '未配置';
   return '${config.kind.label} · 未备份';
+}
+
+/// One-line status for the "远程主机" row.
+String settingsRemoteSummary(RemoteHostsState hosts) {
+  if (hosts.hosts.isEmpty) return '未添加';
+  final online = hosts.hosts.where((host) => host.online).length;
+  final failed = hosts.hosts.where((host) => host.failed).length;
+  if (failed > 0) return '$online/${hosts.hosts.length} 在线 · 有异常';
+  final defaultHost = hosts.defaultHost;
+  if (defaultHost != null) {
+    return '${hosts.hosts.length} 台 · 默认 ${defaultHost.displayName}';
+  }
+  return '${hosts.hosts.length} 台 · $online 在线';
 }
 
 /// One-line status for the "关于与诊断" row.

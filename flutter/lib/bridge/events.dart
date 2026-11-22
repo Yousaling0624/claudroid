@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 
 import '../models/backup.dart';
 import '../models/models.dart';
+import '../models/remote.dart';
 import 'api.dart';
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,7 @@ class AppState {
     this.labels = const ModelLabels(),
     this.engine = const EngineState(),
     this.sessions = const [],
+    this.hosts = const RemoteHostsState(),
     this.ready = false,
   });
 
@@ -30,6 +32,7 @@ class AppState {
   final ModelLabels labels;
   final EngineState engine;
   final List<ChatSession> sessions;
+  final RemoteHostsState hosts;
 
   /// True once the host has sent its initial `ready` payload.
   final bool ready;
@@ -39,6 +42,7 @@ class AppState {
     ModelLabels? labels,
     EngineState? engine,
     List<ChatSession>? sessions,
+    RemoteHostsState? hosts,
     bool? ready,
   }) =>
       AppState(
@@ -46,6 +50,7 @@ class AppState {
         labels: labels ?? this.labels,
         engine: engine ?? this.engine,
         sessions: sessions ?? this.sessions,
+        hosts: hosts ?? this.hosts,
         ready: ready ?? this.ready,
       );
 }
@@ -75,6 +80,9 @@ sealed class AppEvent {
             sessions: decodeJsonList(map['sessionsJson'] as String?)
                 .map(ChatSession.fromJson)
                 .toList(growable: false),
+            hosts: RemoteHostsState.fromJsonString(
+              map['hostsJson'] as String?,
+            ),
             ready: true,
           ),
         );
@@ -94,6 +102,10 @@ sealed class AppEvent {
           decodeJsonList(map['sessionsJson'] as String?)
               .map(ChatSession.fromJson)
               .toList(growable: false),
+        );
+      case 'hosts':
+        return AppHostsEvent(
+          RemoteHostsState.fromJsonString(map['hostsJson'] as String?),
         );
       default:
         // A newer host may emit event types this build does not know yet;
@@ -142,6 +154,15 @@ class AppSessionsEvent extends AppEvent {
   @override
   AppState apply(AppState previous) =>
       previous.copyWith(sessions: sessions);
+}
+
+class AppHostsEvent extends AppEvent {
+  const AppHostsEvent(this.hosts);
+
+  final RemoteHostsState hosts;
+
+  @override
+  AppState apply(AppState previous) => previous.copyWith(hosts: hosts);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +234,26 @@ sealed class ChatEvent {
         return ChatTitleBusyEvent(map['busy'] as bool? ?? false);
       case 'titleNotice':
         return ChatTitleNoticeEvent(map['notice'] as String?);
+      case 'permission':
+        final requestId = map['requestId'] as String?;
+        if (requestId == null || requestId.isEmpty) return null;
+        return ChatPermissionEvent(
+          PendingPermission(
+            requestId: requestId,
+            toolName: map['toolName'] as String? ?? '工具',
+            inputJson: map['inputJson'] as String? ?? '',
+            title: map['title'] as String?,
+            description: map['description'] as String?,
+            expiresAt: (map['expiresAt'] as num?)?.toInt() ?? 0,
+          ),
+        );
+      case 'permissionResolved':
+        final requestId = map['requestId'] as String?;
+        if (requestId == null || requestId.isEmpty) return null;
+        return ChatPermissionResolvedEvent(
+          requestId: requestId,
+          allowed: map['allowed'] as bool?,
+        );
       default:
         return null;
     }
@@ -394,6 +435,51 @@ class ChatTitleNoticeEvent extends ChatEvent {
         titleNotice: notice,
         clearTitleNotice: notice == null,
       );
+}
+
+class ChatPermissionEvent extends ChatEvent {
+  const ChatPermissionEvent(this.permission);
+
+  final PendingPermission permission;
+
+  @override
+  ChatState apply(ChatState previous) {
+    final permissions = [...previous.pendingPermissions];
+    final index = permissions.indexWhere(
+      (item) => item.requestId == permission.requestId,
+    );
+    if (index >= 0) {
+      permissions[index] = permission;
+    } else {
+      permissions.add(permission);
+    }
+    return previous.copyWith(pendingPermissions: permissions);
+  }
+}
+
+class ChatPermissionResolvedEvent extends ChatEvent {
+  const ChatPermissionResolvedEvent({
+    required this.requestId,
+    this.allowed,
+  });
+
+  final String requestId;
+
+  /// `true` / `false` for a user decision, `null` when the host ended the turn,
+  /// the connection dropped or the request timed out.
+  final bool? allowed;
+
+  @override
+  ChatState apply(ChatState previous) {
+    final permissions = [
+      for (final item in previous.pendingPermissions)
+        if (item.requestId != requestId) item,
+    ];
+    if (permissions.length == previous.pendingPermissions.length) {
+      return previous;
+    }
+    return previous.copyWith(pendingPermissions: permissions);
+  }
 }
 
 // ---------------------------------------------------------------------------

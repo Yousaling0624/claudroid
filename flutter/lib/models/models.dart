@@ -9,6 +9,8 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'remote.dart';
+
 // ---------------------------------------------------------------------------
 // Blocks
 // ---------------------------------------------------------------------------
@@ -263,6 +265,8 @@ class ChatSession {
     this.updatedAt = 0,
     this.claudeSessionId,
     this.model,
+    this.hostId,
+    this.remoteCwd,
     this.hasContent = true,
     this.preview = '',
     this.searchText = '',
@@ -274,6 +278,15 @@ class ChatSession {
   final int updatedAt;
   final String? claudeSessionId;
   final String? model;
+
+  /// Non-null when this conversation runs on a paired remote host. The binding
+  /// is written on the first turn and cannot change afterwards.
+  final String? hostId;
+
+  /// Absolute host-side working directory for [hostId].
+  final String? remoteCwd;
+
+  bool get isRemote => hostId != null && hostId!.isNotEmpty;
 
   /// False for a session that was created but never got a message; the drawer
   /// hides those instead of filling itself with empty rows.
@@ -293,6 +306,8 @@ class ChatSession {
         updatedAt: _asInt(json['updatedAt']) ?? 0,
         claudeSessionId: json['claudeSessionId'] as String?,
         model: json['model'] as String?,
+        hostId: json['hostId'] as String?,
+        remoteCwd: json['remoteCwd'] as String?,
         hasContent: json['hasContent'] as bool? ?? true,
         preview: json['preview'] as String? ?? '',
         searchText: json['searchText'] as String? ?? '',
@@ -305,6 +320,8 @@ class ChatSession {
         'updatedAt': updatedAt,
         'claudeSessionId': claudeSessionId,
         'model': model,
+        'hostId': hostId,
+        'remoteCwd': remoteCwd,
         'hasContent': hasContent,
         'preview': preview,
         'searchText': searchText,
@@ -696,6 +713,7 @@ class ChatState {
     this.running = false,
     this.status = '',
     this.statusLine = '',
+    this.pendingPermissions = const [],
   });
 
   final List<ChatMessage> messages;
@@ -708,6 +726,10 @@ class ChatState {
   final String status;
   final String statusLine;
 
+  /// Remote tool calls waiting for approve/deny. Memory-only on the host, so a
+  /// snapshot either carries them or clears them after a reconnect.
+  final List<PendingPermission> pendingPermissions;
+
   factory ChatState.fromJson(Map<String, dynamic> json) => ChatState(
         messages: (json['messages'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
@@ -719,6 +741,11 @@ class ChatState {
         running: json['running'] as bool? ?? false,
         status: json['status'] as String? ?? '',
         statusLine: json['statusLine'] as String? ?? '',
+        pendingPermissions:
+            (json['permissions'] as List<dynamic>? ?? const [])
+                .whereType<Map<String, dynamic>>()
+                .map(PendingPermission.fromJson)
+                .toList(growable: false),
       );
 
   ChatState copyWith({
@@ -730,6 +757,7 @@ class ChatState {
     bool? running,
     String? status,
     String? statusLine,
+    List<PendingPermission>? pendingPermissions,
   }) =>
       ChatState(
         messages: messages ?? this.messages,
@@ -740,6 +768,7 @@ class ChatState {
         running: running ?? this.running,
         status: status ?? this.status,
         statusLine: statusLine ?? this.statusLine,
+        pendingPermissions: pendingPermissions ?? this.pendingPermissions,
       );
 }
 

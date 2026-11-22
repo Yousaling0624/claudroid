@@ -9,6 +9,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
+import '../models/remote.dart';
 import 'attachments.dart';
 import 'chat_search.dart';
 import 'claude_dir_dialog.dart';
@@ -20,6 +21,7 @@ import 'glyphs.dart';
 import 'layout.dart';
 import 'markdown.dart';
 import 'model_menu.dart';
+import 'permission_card.dart';
 import 'permission_menu.dart';
 import 'reply_share.dart';
 import 'scaffold_bar.dart';
@@ -41,6 +43,8 @@ class ChatPage extends StatefulWidget {
     super.key,
     required this.bridge,
     required this.sessionId,
+    this.session,
+    this.hosts = const RemoteHostsState(),
     required this.settings,
     required this.labels,
     required this.onOpenDrawer,
@@ -54,6 +58,11 @@ class ChatPage extends StatefulWidget {
 
   final Bridge bridge;
   final String sessionId;
+
+  /// Drawer summary for this session, used for the remote badge and banner.
+  /// Null for a just-created session before the `sessions` event lands.
+  final ChatSession? session;
+  final RemoteHostsState hosts;
   final AppSettings settings;
   final ModelLabels labels;
   final VoidCallback onOpenDrawer;
@@ -131,6 +140,10 @@ class _ChatPageState extends State<ChatPage> {
   bool _searching = false;
   final TextEditingController _search = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
+
+  bool get _remote => widget.session?.isRemote ?? false;
+
+  RemoteHost? get _remoteHost => widget.hosts.byId(widget.session?.hostId);
 
   List<ChatMessage> get _visibleMessages => _searching
       ? searchMessages(_chat.messages, _search.text)
@@ -572,9 +585,28 @@ class _ChatPageState extends State<ChatPage> {
     return null;
   }
 
+  Future<void> _respondPermission(
+    PendingPermission permission, {
+    required bool allow,
+    required bool always,
+  }) async {
+    try {
+      await widget.bridge.respondPermission(
+        widget.sessionId,
+        permission.requestId,
+        allow: allow,
+        always: always,
+      );
+    } catch (error) {
+      if (mounted) widget.onToast('$error', isError: true);
+      rethrow;
+    }
+  }
+
   List<SlashAction> _slashActions() {
     final last = _lastAssistant;
     final hasMessages = _chat.messages.isNotEmpty;
+    final remote = _remote;
     return [
       SlashAction(
         command: 'new',
@@ -582,18 +614,19 @@ class _ChatPageState extends State<ChatPage> {
         glyph: AppGlyphs.plus,
         onPressed: widget.onNewChat,
       ),
-      SlashAction(
-        command: 'model',
-        label: '切换模型',
-        glyph: AppGlyphs.sparkle,
-        onPressed: () => showModelTierDialog(
-          context,
-          settings: widget.settings,
-          onPatch: _patch,
-          onOpenSettings: () =>
-              widget.onOpenSettings(SettingsDestination.serviceModels),
+      if (!remote)
+        SlashAction(
+          command: 'model',
+          label: '切换模型',
+          glyph: AppGlyphs.sparkle,
+          onPressed: () => showModelTierDialog(
+            context,
+            settings: widget.settings,
+            onPatch: _patch,
+            onOpenSettings: () =>
+                widget.onOpenSettings(SettingsDestination.serviceModels),
+          ),
         ),
-      ),
       SlashAction(
         command: 'plan',
         label: '规划模式（只读）',
@@ -623,28 +656,37 @@ class _ChatPageState extends State<ChatPage> {
         glyph: AppGlyphs.attachment,
         onPressed: () => _composerKey.currentState?.pickAttachments(),
       ),
-      SlashAction(
-        command: 'workspace',
-        label: '工作区',
-        glyph: AppGlyphs.folder,
-        onPressed: widget.onOpenWorkspace,
-      ),
-      SlashAction(
-        command: 'switch',
-        label: '切换工作区',
-        glyph: AppGlyphs.folder,
-        onPressed: () => showWorkspaceSwitcher(
-          context,
-          bridge: widget.bridge,
-          onToast: widget.onToast,
+      if (!remote) ...[
+        SlashAction(
+          command: 'workspace',
+          label: '工作区',
+          glyph: AppGlyphs.folder,
+          onPressed: widget.onOpenWorkspace,
         ),
-      ),
-      SlashAction(
-        command: 'cwd',
-        label: 'Claude 工作目录',
-        glyph: AppGlyphs.folder,
-        onPressed: _chooseClaudeDir,
-      ),
+        SlashAction(
+          command: 'switch',
+          label: '切换工作区',
+          glyph: AppGlyphs.folder,
+          onPressed: () => showWorkspaceSwitcher(
+            context,
+            bridge: widget.bridge,
+            onToast: widget.onToast,
+          ),
+        ),
+        SlashAction(
+          command: 'cwd',
+          label: 'Claude 工作目录',
+          glyph: AppGlyphs.folder,
+          onPressed: _chooseClaudeDir,
+        ),
+      ] else
+        SlashAction(
+          command: 'host',
+          label: '远程主机设置',
+          glyph: AppGlyphs.plug,
+          onPressed: () =>
+              widget.onOpenSettings(SettingsDestination.remoteHosts),
+        ),
       SlashAction(
         command: 'search',
         label: '搜索当前对话',
@@ -721,7 +763,16 @@ class _ChatPageState extends State<ChatPage> {
           tooltip: '会话',
         ),
         title: (context) {
-          final statusLine = _chat.running ? _chat.statusLine : '';
+          final remote = _remote;
+          final host = _remoteHost;
+          final remoteLabel = remote
+              ? '远程 · ${host?.displayName ?? '主机已移除'}'
+              : '';
+          final runningStatus = _chat.running ? _chat.statusLine : '';
+          final statusLine = [
+            if (remoteLabel.isNotEmpty) remoteLabel,
+            if (runningStatus.isNotEmpty) runningStatus,
+          ].join(' · ');
           return PopupAnchor(
             targetBuilder: (open) => GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -803,13 +854,14 @@ class _ChatPageState extends State<ChatPage> {
           );
         },
         actions: [
-          (context) => ModelTierButton(
-            labels: widget.labels,
-            settings: widget.settings,
-            onPatch: _patch,
-            onOpenSettings: () =>
-                widget.onOpenSettings(SettingsDestination.serviceModels),
-          ),
+          if (!_remote)
+            (context) => ModelTierButton(
+              labels: widget.labels,
+              settings: widget.settings,
+              onPatch: _patch,
+              onOpenSettings: () =>
+                  widget.onOpenSettings(SettingsDestination.serviceModels),
+            ),
           (context) => IconButton(
             onPressed: widget.onNewChat,
             icon: const GlyphIcon(AppGlyphs.plus),
@@ -820,6 +872,12 @@ class _ChatPageState extends State<ChatPage> {
       body: Column(
         children: [
           if (_searching) _buildSearchBar(context),
+          if (_remote && _hostIssue != null)
+            _RemoteHostBanner(
+              message: _hostIssue!,
+              onOpenSettings: () =>
+                  widget.onOpenSettings(SettingsDestination.remoteHosts),
+            ),
           Expanded(
             child: Stack(
               children: [
@@ -848,8 +906,64 @@ class _ChatPageState extends State<ChatPage> {
               ],
             ),
           ),
+          _buildPendingPermissions(context),
           _buildComposer(context),
         ],
+      ),
+    );
+  }
+
+  String? get _hostIssue {
+    if (!_remote) return null;
+    final host = _remoteHost;
+    if (host == null) return '绑定的远程主机已被删除，请到「设置 → 远程主机」重新添加。';
+    if (host.failed) {
+      final reason = host.error?.trim() ?? '';
+      return reason.isEmpty
+          ? '远程主机连接失败，正在自动重试。'
+          : '远程主机连接失败：$reason。正在自动重试。';
+    }
+    if (host.phase == 'offline') {
+      return '远程主机「${host.displayName}」当前离线，正在自动重连。';
+    }
+    return null;
+  }
+
+  Widget _buildPendingPermissions(BuildContext context) {
+    final pending = _chat.pendingPermissions;
+    if (pending.isEmpty) return const SizedBox.shrink();
+    final permission = pending.first;
+    return ContentWidth(
+      maxWidth: kChatContentWidth,
+      heightFactor: 1,
+      alignment: Alignment.center,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            PermissionCard(
+              key: ValueKey(permission.requestId),
+              permission: permission,
+              onRespond: ({required allow, required always}) =>
+                  _respondPermission(
+                    permission,
+                    allow: allow,
+                    always: always,
+                  ),
+            ),
+            if (pending.length > 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 5, 4, 0),
+                child: Text(
+                  '还有 ${pending.length - 1} 个工具调用在排队确认',
+                  style: AppTextStyle.caption2.of(context).copyWith(
+                        color: context.colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1016,9 +1130,11 @@ class _ChatPageState extends State<ChatPage> {
         onChanged: (value) {
           if (_editingId == null) chatDrafts[widget.sessionId] = value;
         },
-        footnote: permissionFootnote(
-          widget.settings.str('permissionMode', 'BYPASS'),
-        ),
+        footnote: _remote
+            ? '远程主机执行；工具调用会转发到这里确认。'
+            : permissionFootnote(
+                widget.settings.str('permissionMode', 'BYPASS'),
+              ),
         bottomInset: context.bottomInset,
       ),
     );
@@ -1802,8 +1918,67 @@ class _ActivityLine extends StatelessWidget {
   }
 }
 
-class _PulseDot extends StatefulWidget {
-  const _PulseDot({required this.color, this.size = 4});
+/// A quiet strip above the transcript when the bound host is offline or gone.
+/// Reconnection is automatic; the action only opens the host settings.
+class _RemoteHostBanner extends StatelessWidget {
+  const _RemoteHostBanner({
+    required this.message,
+    required this.onOpenSettings,
+  });
+
+  final String message;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.colorScheme;
+    return ContentWidth(
+      maxWidth: kChatContentWidth,
+      heightFactor: 1,
+      alignment: Alignment.center,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: AppRadius.md,
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.6),
+            ),
+          ),
+          child: Row(
+            children: [
+              GlyphIcon(
+                AppGlyphs.plug,
+                size: 16,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyle.caption1.of(context).copyWith(
+                        color: scheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                ),
+              ),
+              TextButton(
+                onPressed: onOpenSettings,
+                child: const Text('主机设置'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PulseDot extends StatefulWidget {  const _PulseDot({required this.color, this.size = 4});
 
   final Color color;
   final double size;
