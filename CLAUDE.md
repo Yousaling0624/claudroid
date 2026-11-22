@@ -14,7 +14,7 @@
   动了 `flutter/` 时另跑 `flutter analyze` / `flutter test`，以及 `./gradlew testDebugUnitTest assembleDebug -Pandroid.newDsl=false`（WSL 没有 Flutter，在 Windows 侧执行）。
 
 - `targetSdk = 28` 是**有意为之**（PRoot / jail 需要 exec 应用目录里的文件）；不要随手升。
-- 不要手动升版本号、打 tag、发 Release；CI 自动生成 `v0.1.<run_number>`。
+- 不要手动升版本号、打 tag、发 Release；CI 自动生成 `v0.1.<run_number>`（bridge 的 npm 版本也由 CI 计算，见 `bridge/README.md`）。
 - 签名密钥只放 GitHub Secrets；仓库和日志里绝不能出现 API Key / 密码。
 - commit 标题使用 `Android：一句话总结`，正文用列表写具体改动（Release notes 会直接使用）。
 - 完成后直接 commit 并 push `main`，无需询问或等待指示（已长期授权）；push 后 CI 自动构建并发布 APK。验证失败时仍不提交。

@@ -1,0 +1,150 @@
+name: Publish bridge to npm
+
+# Bridge releases are token-less: npm's trusted publisher validates this exact
+# workflow through GitHub OIDC. Staged publishing is deliberately not used —
+# approving a staged version always requires a human 2FA tap, which OIDC
+# cannot provide.
+#
+# The workflow file and docs are intentionally absent from `paths`: landing the
+# setup must not trigger a publish before the npmjs.com trusted publisher
+# exists. Changes to the actual distributable package do.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge/src/**'
+      - 'bridge/package.json'
+      - 'bridge/package-lock.json'
+      - 'bridge/tsconfig.json'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手动指定 semver（留空则取 npm 最新 patch + 1）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+# Publishing is permanent; never cancel an in-flight release.
+concurrency:
+  group: bridge-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      # Trusted publishing needs npm >= 11.5.1; the runner's bundled npm may be
+      # older. Pin it so the publish auth path does not move under us.
+      - name: Use npm with trusted publishing
+        run: npm install --global npm@11.21.3
+
+      - name: Install
+        run: npm ci
+
+      # Trusted publishing rejects a repository.url that does not exactly match
+      # the GitHub repo in the OIDC claim; fail before npm's less obvious E422.
+      - name: Check package metadata
+        run: |
+          set -euo pipefail
+          node -e '
+            const pkg = require("./package.json");
+            const expected = `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`;
+            if (!pkg.repository || pkg.repository.url !== expected) {
+              console.error(`repository.url 必须为 ${expected}，当前为 ${pkg.repository?.url}`);
+              process.exit(1);
+            }
+          '
+
+      - name: Test
+        run: npm test
+
+      - name: Resolve version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          latest="$(npm view claudroid-bridge version)"
+          latest_head="$(npm view "claudroid-bridge@${latest}" gitHead 2>/dev/null || true)"
+          # A re-run of the same commit has nothing new to publish; npm records
+          # the source commit as gitHead on every publish.
+          if [ -z "${REQUESTED_VERSION}" ] && [ "${latest_head}" = "${GITHUB_SHA}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::当前提交已发布为 ${latest}，跳过重复发布。"
+            exit 0
+          fi
+          if [ -n "${REQUESTED_VERSION}" ]; then
+            version="${REQUESTED_VERSION}"
+          else
+            local_version="$(node -p "require('./package.json').version")"
+            # A human may bump package.json for a minor/major release; otherwise
+            # take the next patch after whatever npm already has.
+            version="$(node -e '
+              const parse = (v) => v.split(".").map(Number);
+              const cmp = (a, b) => {
+                for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
+                return 0;
+              };
+              const latest = parse(process.argv[1]);
+              const local = parse(process.argv[2]);
+              const next = cmp(local, latest) > 0 ? local : [latest[0], latest[1], latest[2] + 1];
+              console.log(next.join("."));
+            ' "${latest}" "${local_version}")"
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::无效版本号：${version}"
+            exit 1
+          fi
+          if npm view "claudroid-bridge@${version}" version >/dev/null 2>&1; then
+            echo "::error::claudroid-bridge@${version} 已发布，npm 版本不可覆盖。"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "将发布 claudroid-bridge@${version}（npm 最新 ${latest}）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply version and build
+        if: steps.version.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          # The daemon reports this in `/v1/health`; keep it in lock-step with
+          # the npm version without committing a generated bump.
+          sed -i -E "s/(export const DAEMON_VERSION = \")[^\"]*(\";)/\1${VERSION}\2/" src/version.ts
+          grep -q "DAEMON_VERSION = \"${VERSION}\"" src/version.ts
+          npm run build
+          test "$(node dist/cli.js --version)" = "${VERSION}"
+
+      - name: Publish
+        if: steps.version.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # OIDC trusted publishing; provenance is generated from the public repo.
+          npm publish --access public --provenance
+          echo "已发布 claudroid-bridge@${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Already published
+        if: steps.version.outputs.skip == 'true'
+        run: echo "::notice::没有需要发布的版本。"

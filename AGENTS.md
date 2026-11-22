@@ -95,7 +95,9 @@
   3. 上传 `claudroid-<version>.apk` + `.sha256`；
   4. 用 commit 生成 release notes，并创建/更新 GitHub Release。
 - 纯文档改动不命中路径，不会发版；不要为了发版去改无关文件。`bridge/` 单独测试与分发，
-  不进入 App 的发版路径。
+  不进入 App 的发版路径；其 npm 发布由 `bridge-release.yml` 通过 npm trusted publishing
+  自动完成，版本由 CI 计算，不要手动升版本或手动发布（一次性 npmjs.com 配置见
+  `bridge/README.md`）。
 - 签名密钥只放在 GitHub Secrets：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、
   `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。没有密钥时 CI 用 debug key 签名，仍可侧载。
   仓库里绝不能出现 keystore / 密码。

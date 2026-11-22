@@ -201,6 +201,7 @@ WantedBy=default.target
 - 只支持聊天 + 文件；没有远程终端、git 面板或端口转发。
 - 同一时刻一个 turn；多主机并发留到后续版本。
 - 远程模型只读；模型切换在主机侧配置。
-- npm 安装是当前推荐方式。单文件二进制分发（Node SEA / Bun compile）在真机闭环后继续，
-  发布流程会使用独立的 `bridge-release.yml`，不影响 App 的自动发版。
+- npm 安装是当前推荐方式。单文件二进制分发（Node SEA / Bun compile）在真机闭环后继续。
+  `bridge-release.yml` 在 `bridge/` 代码变更落到 `main` 后通过 npm trusted publishing
+  自动发布（无长期 token、无需人工批准），不影响 App 的自动发版。
 - quick tunnel URL 会变化；长期使用请用 named tunnel。

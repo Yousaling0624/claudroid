@@ -180,7 +180,38 @@ test/               vitest；用假 runner 覆盖协议、权限、重连与路�
 
 ## 发布新版本
 
-1. `npm version 0.1.1 --no-git-tag-version`，并同步 `src/version.ts` 的 `DAEMON_VERSION`。
-2. `npm test && npm run build`。
-3. `npx npm@11 stage publish --access public`（当前 granular token 为 stage-only）。
-4. 在 npmjs.com 的 **Account settings → Staged Packages** 用 2FA 批准。
+发布由 [`.github/workflows/bridge-release.yml`](../.github/workflows/bridge-release.yml)
+自动完成：`bridge/src/**`、`package.json`、`package-lock.json` 或 `tsconfig.json` 落到
+`main` 后，CI 跑测试与构建，再通过 **npm trusted publishing（GitHub OIDC）** 直接
+`npm publish`。不需要仓库里的 npm token，也不需要人工批准 staged package。
+
+### 一次性配置（npmjs.com）
+
+1. 打开 `claudroid-bridge` 的 **Settings → Trusted publishing → GitHub Actions**，填：
+   - Repository：`Yousaling0624/claudroid`
+   - Workflow filename：`bridge-release.yml`
+   - Environment：**留空**（填了会在发布时多一道 GitHub 环境审批）
+2. **Allowed actions 必须允许直接发布（`npm publish`）**，不能只保留 `npm stage publish`。
+   staged publish 的批准只能由维护者用 2FA 完成，OIDC 不能代批；新配置默认只允许 stage，
+   而配置创建后不能编辑，选错只能删除重建。
+3. 保存后 **2 天内**手动运行一次 **Publish bridge to npm** 工作流（或推一个 `bridge/`
+   代码改动）来验证配置；超时未成功发布会失效。
+4. 包设置里的 “Require two-factor authentication and disallow tokens” 不影响 trusted
+   publisher，OIDC 照常工作。
+
+### 版本号
+
+CI 取 npm 上 `latest` 的下一个 patch（如 `0.1.2` → `0.1.3`）；如果本地 `package.json`
+更高（手动改成 `0.2.0`），就用本地版本。构建时会把同一版本写进 `src/version.ts`，
+因此**不需要手动改版本号，也不要把 CI 的版本改动提交回仓库**。同一提交重复运行工作流时，
+CI 会比对 npm 的 `gitHead` 并跳过，不会重复发布。
+
+### 紧急手动发布
+
+```bash
+cd bridge
+npm test && npm run build
+npm version <version> --no-git-tag-version
+# 同步 src/version.ts 的 DAEMON_VERSION
+npm publish --access public        # 需要本机 2FA
+```
