@@ -20,10 +20,10 @@ Cloudflare Tunnel。
 ## 安装
 
 ```bash
-# 从 npm（发布后）
+# 从 npm
 npm install -g claudroid-bridge
 
-# 从源码
+# 从源码（开发/未发布版本）
 git clone <repo> && cd claudroid/bridge
 npm ci
 npm run build
@@ -166,3 +166,10 @@ src/config.ts       配置文件读写与归一化
 src/events.ts       SSE 事件总线
 test/               vitest；用假 runner 覆盖协议、权限、重连与路径逃逸
 ```
+
+## 发布新版本
+
+1. 修改 `package.json` 的 `version`。
+2. `npm test && npm run build`。
+3. `npx npm@11 stage publish --access public`（当前 granular token 为 stage-only）。
+4. 在 npmjs.com 的 **Account settings → Staged Packages** 用 2FA 批准。

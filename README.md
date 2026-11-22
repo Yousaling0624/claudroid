@@ -200,7 +200,7 @@ cd flutter && flutter analyze && flutter test
 
 ```bash
 # 主机侧（Node 20+）
-npm install -g claudroid-bridge   # 发布后；或 cd bridge && npm ci && npm run build && npm link
+npm install -g claudroid-bridge   # 或 cd bridge && npm ci && npm run build && npm link
 claudroid-bridge init             # 写入 ~/.config/claudroid-bridge/config.json
 claudroid-bridge start            # 打印 8 位一次性配对码与主机地址
 ```
