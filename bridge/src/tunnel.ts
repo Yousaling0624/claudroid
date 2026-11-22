@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { ensureCloudflared } from "./cloudflared.js";
 import type { TunnelConfig } from "./config.js";
 import type { TunnelStatus } from "./types.js";
 
@@ -15,6 +16,8 @@ export type SpawnFn = (
   options: { stdio: ["ignore", "pipe", "pipe"] },
 ) => TunnelChild;
 
+export type EnsureBinaryFn = () => Promise<string>;
+
 function quickTunnelUrl(line: string): string | undefined {
   return line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i)?.[0];
 }
@@ -22,22 +25,31 @@ function quickTunnelUrl(line: string): string | undefined {
 /**
  * Supervises a cloudflared process. The connector must run on the host because it
  * is what exposes the host's loopback bridge; the phone only stores the public URL.
+ * The binary is resolved (and, when missing, downloaded from the pinned official
+ * release) on demand, so enabling a tunnel needs no manual cloudflared install.
  */
 export class TunnelManager {
   private status: TunnelStatus;
   private child: TunnelChild | null = null;
   private stopped = true;
+  private launching = false;
+  private generation = 0;
+  private resolvedBinary: string | null = null;
   private attempt = 0;
   private restartTimer: NodeJS.Timeout | null = null;
   private readonly spawnFn: SpawnFn;
+  private readonly ensureBinary: EnsureBinaryFn;
 
   constructor(
     private readonly config: TunnelConfig,
     private readonly port: number,
     private readonly onChange: (status: TunnelStatus) => void,
     spawnFn: SpawnFn = spawn as unknown as SpawnFn,
+    ensureBinary?: EnsureBinaryFn,
+    log: (message: string) => void = () => undefined,
   ) {
     this.spawnFn = spawnFn;
+    this.ensureBinary = ensureBinary ?? (() => ensureCloudflared(this.config, log));
     this.status = { mode: config.mode, state: "off", changedAt: Date.now() };
   }
 
@@ -57,13 +69,15 @@ export class TunnelManager {
       });
       return;
     }
-    if (this.child) return;
+    if (this.child || this.launching) return;
     this.stopped = false;
     this.launch();
   }
 
   stop(): void {
     this.stopped = true;
+    this.generation += 1;
+    this.launching = false;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -86,11 +100,8 @@ export class TunnelManager {
 
   private launch(): void {
     if (this.stopped) return;
-    const binary = this.config.cloudflaredPath || "cloudflared";
-    const args =
-      this.config.mode === "quick"
-        ? ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${this.port}`]
-        : ["tunnel", "--no-autoupdate", "run", "--token", this.config.token ?? ""];
+    const generation = ++this.generation;
+    this.launching = true;
     this.set({
       state: "starting",
       url:
@@ -99,6 +110,34 @@ export class TunnelManager {
           : undefined,
       error: undefined,
     });
+    void this.resolveBinary()
+      .then((binary) => {
+        if (this.stopped || generation !== this.generation) return;
+        this.launching = false;
+        this.spawnChild(binary);
+      })
+      .catch((error: unknown) => {
+        if (this.stopped || generation !== this.generation) return;
+        this.launching = false;
+        // A failed download/installation is permanent until the user retries;
+        // do not hammer the network with the crash-restart backoff.
+        this.fail(error instanceof Error ? error.message : String(error), false);
+      });
+  }
+
+  private async resolveBinary(): Promise<string> {
+    if (this.resolvedBinary) return this.resolvedBinary;
+    const binary = this.config.cloudflaredPath || (await this.ensureBinary());
+    this.resolvedBinary = binary;
+    return binary;
+  }
+
+  private spawnChild(binary: string): void {
+    if (this.stopped) return;
+    const args =
+      this.config.mode === "quick"
+        ? ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${this.port}`]
+        : ["tunnel", "--no-autoupdate", "run", "--token", this.config.token ?? ""];
 
     let child: TunnelChild;
     try {
@@ -120,7 +159,7 @@ export class TunnelManager {
       this.child = null;
       const message =
         error && typeof error === "object" && "code" in error && error.code === "ENOENT"
-          ? "未找到 cloudflared。请先安装：https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+          ? "未找到 cloudflared。请检查 tunnel.cloudflaredPath，或删除该配置让守护进程自动下载。"
           : error instanceof Error
             ? error.message
             : String(error);
@@ -151,9 +190,9 @@ export class TunnelManager {
     }
   }
 
-  private fail(message: string): void {
+  private fail(message: string, retry = true): void {
     this.set({ state: "error", error: message });
-    this.scheduleRestart();
+    if (retry) this.scheduleRestart();
   }
 
   private scheduleRestart(): void {

@@ -15,7 +15,7 @@ Cloudflare Tunnel。
 - 主机上已能运行 Claude Code：执行过 `claude login`，或环境里配置了
   `ANTHROPIC_API_KEY` 等。默认使用 Agent SDK 自带的 CLI；也可用
   `claudeExecutable` / `--config` 指向系统安装的 `claude`。
-- 只有使用隧道时才需要 `cloudflared`（见下文）。
+- 使用隧道时无需预先安装 `cloudflared`：首次启用会自动下载官方版本并校验 sha256（见下文）。
 
 ## 安装
 
@@ -87,7 +87,7 @@ claudroid-bridge devices revoke <id>  # 吊销设备令牌
 | `claudeExecutable` | 可选；不填时使用 Agent SDK 随包的 CLI |
 | `tunnel.mode` | `off` / `quick` / `named` |
 | `tunnel.token` / `hostname` | named 隧道必填 |
-| `tunnel.cloudflaredPath` | 可选；默认从 `PATH` 找 `cloudflared` |
+| `tunnel.cloudflaredPath` | 可选；指定自定义 cloudflared。留空时先复用 `PATH`，缺失则自动下载到 `~/.config/claudroid-bridge/bin/` |
 
 `start` 的等价参数：`--bind`、`--port`、`--root`（可重复）、`--tunnel`、
 `--tunnel-token`、`--tunnel-hostname`、`--allow-bypass`、`--config`。
@@ -103,6 +103,12 @@ claudroid-bridge start --tunnel named \
   --tunnel-token <token> \
   --tunnel-hostname claude.example.com
 ```
+
+**cloudflared 无需手动安装。** 首次启用隧道时，daemon 会从 Cloudflare 官方 GitHub
+Release 下载固定版本的连接器，按内置 SHA-256 校验后安装到
+`~/.config/claudroid-bridge/bin/cloudflared`（Windows 为 `cloudflared.exe`），之后复用。
+若 `PATH` 里已有 cloudflared，会优先使用；`tunnel.cloudflaredPath` 可强制指定。
+下载失败或校验不符时隧道进入错误状态并在 App 中显示原因，不会带病启动。
 
 daemon 负责启动与监督 `cloudflared`，异常退出按指数退避重启；隧道状态与公网地址通过
 `/v1/tunnel` 和 SSE 推给 App，也可以在手机的主机详情页开关。quick 地址会变化，长期使用
@@ -161,7 +167,8 @@ src/turns.ts        turn 生命周期与有界事件缓冲
 src/sdk-runner.ts   Agent SDK query() 封装（stream-json 透传、resume、abort）
 src/permissions.ts  canUseTool → SSE → 等待手机决定
 src/files.ts        roots 校验与文件 RPC
-src/tunnel.ts       cloudflared 检测、启动、URL 解析与监督
+src/tunnel.ts       cloudflared 启动、URL 解析与监督
+src/cloudflared.ts  固定版本下载、sha256 校验与托管路径
 src/config.ts       配置文件读写与归一化
 src/events.ts       SSE 事件总线
 test/               vitest；用假 runner 覆盖协议、权限、重连与路径逃逸
@@ -169,7 +176,7 @@ test/               vitest；用假 runner 覆盖协议、权限、重连与路�
 
 ## 发布新版本
 
-1. 修改 `package.json` 的 `version`。
+1. `npm version 0.1.1 --no-git-tag-version`，并同步 `src/version.ts` 的 `DAEMON_VERSION`。
 2. `npm test && npm run build`。
 3. `npx npm@11 stage publish --access public`（当前 granular token 为 stage-only）。
 4. 在 npmjs.com 的 **Account settings → Staged Packages** 用 2FA 批准。

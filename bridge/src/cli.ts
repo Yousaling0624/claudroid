@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AuthService, DeviceStore, type PairingInfo } from "./auth.js";
+import { managedCloudflaredPath } from "./cloudflared.js";
 import {
   configPath,
   defaultConfig,
@@ -226,19 +227,26 @@ async function start(options: CliOptions): Promise<void> {
   };
 
   let server: ReturnType<typeof createBridgeServer> | null = null;
-  const tunnel = new TunnelManager(config.tunnel, config.port, (status) => {
-    bus.publish({ kind: "tunnel", tunnel: status });
-    if (server && server.listening) {
-      const address = server.address() as AddressInfo;
-      state.urls = [
-        ...localUrls(config.bind, address.port),
-        ...(status.url ? [status.url] : []),
-      ];
-      writePairFile(state);
-    }
-    if (status.state === "up" && status.url) console.log(`隧道已就绪: ${status.url}`);
-    if (status.state === "error" && status.error) console.error(`隧道错误: ${status.error}`);
-  });
+  const tunnel = new TunnelManager(
+    config.tunnel,
+    config.port,
+    (status) => {
+      bus.publish({ kind: "tunnel", tunnel: status });
+      if (server && server.listening) {
+        const address = server.address() as AddressInfo;
+        state.urls = [
+          ...localUrls(config.bind, address.port),
+          ...(status.url ? [status.url] : []),
+        ];
+        writePairFile(state);
+      }
+      if (status.state === "up" && status.url) console.log(`隧道已就绪: ${status.url}`);
+      if (status.state === "error" && status.error) console.error(`隧道错误: ${status.error}`);
+    },
+    undefined,
+    undefined,
+    (message) => console.log(message),
+  );
 
   server = createBridgeServer({
     config,
@@ -296,14 +304,16 @@ function printDoctor(options: CliOptions): void {
       console.log(`✓ 工作区: ${root}`);
     }
   }
-  const cloudflared = spawnSync(config.tunnel.cloudflaredPath ?? "cloudflared", ["--version"], {
+  const managed = managedCloudflaredPath();
+  const candidate = config.tunnel.cloudflaredPath ?? (existsSync(managed) ? managed : "cloudflared");
+  const cloudflared = spawnSync(candidate, ["--version"], {
     encoding: "utf8",
   });
   if (cloudflared.error || cloudflared.status !== 0) {
-    console.log("! 未找到 cloudflared（只有使用隧道时才需要）");
-    console.log("  https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/");
+    console.log("! 未找到 cloudflared；启用隧道时会自动下载官方版本并校验 sha256");
+    console.log("  也可以手动安装，或用 tunnel.cloudflaredPath 指定可执行文件");
   } else {
-    console.log(`✓ cloudflared: ${(cloudflared.stdout || "").trim()}`);
+    console.log(`✓ cloudflared: ${(cloudflared.stdout || "").trim()}${candidate === managed ? "（托管）" : ""}`);
   }
   if (config.tunnel.mode === "named" && (!config.tunnel.token || !config.tunnel.hostname)) {
     console.error("✗ named 隧道需要 tunnel.token 与 tunnel.hostname");
@@ -375,6 +385,8 @@ start 选项:
   --tunnel-token <token>     named 隧道 token
   --tunnel-hostname <host>   named 隧道的公网域名
   --allow-bypass             允许 App 请求 bypassPermissions（默认关闭）
+
+隧道首次启用时会自动下载并校验 cloudflared；tunnel.cloudflaredPath 可覆盖。
 
 配置文件示例见 bridge/README.md。`);
 }

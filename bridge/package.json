@@ -1,6 +1,6 @@
 {
   "name": "claudroid-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Host-side bridge that runs Claude Code for the Claudroid Android app",
   "license": "GPL-3.0-only",
   "type": "module",

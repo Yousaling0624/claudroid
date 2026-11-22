@@ -126,7 +126,9 @@ daemon 只保存令牌的 SHA-256 哈希，并支持 `claudroid-bridge devices r
 ## 5. Cloudflare Tunnel
 
 APK **不含** cloudflared：连接器必须运行在主机上，手机里的二进制无法反向连到别人的主机。
-daemon 负责检测、启动与监督 cloudflared。
+主机侧也**无需手动安装**：daemon 首次启用隧道时会从 Cloudflare 官方 GitHub Release 下载
+固定版本，按内置 SHA-256 校验后安装到 `~/.config/claudroid-bridge/bin/`，之后复用；
+`PATH` 中已有的 cloudflared 会优先使用，`tunnel.cloudflaredPath` 可强制指定。
 
 ```bash
 # 临时隧道：每次启动生成新的 *.trycloudflare.com 地址
@@ -186,7 +188,7 @@ WantedBy=default.target
 | 配对失败 401 | 配对码过期或已用过；重启 `claudroid-bridge start` 生成新码（`pair` 只查看当前码） |
 | 设置页一直离线 | 检查地址能否在手机浏览器打开 `/v1/health`；确认 daemon 在跑、端口/隧道正确 |
 | 提示协议版本不兼容 | 升级主机上的 `claudroid-bridge` 到与 App 相同的协议版本（v1） |
-| 隧道启动失败 | `claudroid-bridge doctor` 检查 cloudflared 是否安装、token/域名是否正确 |
+| 隧道启动失败 | `claudroid-bridge doctor` 检查 token/域名；cloudflared 缺失时 daemon 会自动下载，失败原因会显示在 App 与日志中 |
 | 工具确认总是被拒 | 手机不在线或超过 `permissionTimeoutMs`；确认 App 在前台且 SSE 已连接 |
 | 目录选择为空 | `defaultCwd` / `paths` 不在 `roots` 内，或主机的 `roots` 配错 |
 | 远程会话报“主机没有允许完全放行” | 改用其他权限模式，或在主机配置开启 `allowBypassPermissions` |

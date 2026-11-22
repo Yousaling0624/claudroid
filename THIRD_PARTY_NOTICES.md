@@ -39,6 +39,9 @@ host and is not bundled in the Android app. Its npm dependencies keep their own 
   The daemon uses it to run the host's own Claude Code installation.
 - **TypeScript** (Apache License 2.0), **vitest**, **tsx**, **@types/node**
   (MIT) — build and test tooling only.
+- **cloudflared** (Apache License 2.0) — not bundled; the daemon may download the
+  official release from Cloudflare's GitHub repository at runtime when the user enables
+  a tunnel.
 
 ## Other dependencies
 

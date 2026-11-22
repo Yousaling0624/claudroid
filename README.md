@@ -211,7 +211,8 @@ claudroid-bridge start            # 打印 8 位一次性配对码与主机地�
 
 - 远程会话只使用主机自己的 Claude 登录 / API Key / Base URL / 模型配置，手机不发送
   任何本机凭据或代理设置。
-- 公网访问由主机托管的 cloudflared 提供（`--tunnel quick|named`），APK 不含该二进制。
+- 公网访问由主机托管的 cloudflared 提供（`--tunnel quick|named`），APK 不含该二进制；
+  主机也无需手动安装，首次启用隧道时 daemon 会自动下载官方版本并校验 sha256。
 - 设备令牌用 Android Keystore 加密，只存在本机，不进备份。
 
 协议、部署、systemd 与排障见 [`docs/REMOTE_HOST.md`](docs/REMOTE_HOST.md)；
