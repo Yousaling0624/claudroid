@@ -2,4 +2,8 @@
 <resources>
     <color name="boot_background">#FFF8F4ED</color>
     <color name="ic_launcher_background">#FFF8F4ED</color>
+    <!-- ZXing's capture activity resolves these library resource names; overriding
+         them keeps the pairing scanner on the app's clay accent. -->
+    <color name="zxing_viewfinder_laser">#FFD97757</color>
+    <color name="zxing_status_text">#FFF8F4ED</color>
 </resources>

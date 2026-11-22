@@ -39,6 +39,7 @@ host and is not bundled in the Android app. Its npm dependencies keep their own 
   The daemon uses it to run the host's own Claude Code installation.
 - **TypeScript** (Apache License 2.0), **vitest**, **tsx**, **@types/node**
   (MIT) — build and test tooling only.
+- **uqr** (MIT) — QR encoding for the pairing code printed in the terminal.
 - **cloudflared** (Apache License 2.0) — not bundled; the daemon may download the
   official release from Cloudflare's GitHub repository at runtime when the user enables
   a tunnel.
@@ -46,5 +47,7 @@ host and is not bundled in the Android app. Its npm dependencies keep their own 
 ## Other dependencies
 
 AndroidX Core / DataStore (Apache License 2.0), NanoHTTPD (BSD 3-Clause), Kotlinx
-Serialization and Coroutines (Apache License 2.0) keep their own licenses; see the
-dependency declarations in `app/build.gradle.kts` and `flutter/pubspec.yaml`.
+Serialization and Coroutines (Apache License 2.0), and **zxing-android-embedded** /
+**ZXing core** (Apache License 2.0, used for on-device remote-host QR pairing) keep
+their own licenses; see the dependency declarations in `app/build.gradle.kts` and
+`flutter/pubspec.yaml`.

@@ -433,6 +433,15 @@ class Bridge {
     );
   }
 
+  /// Opens the bundled QR scanner and returns its text. Null means the user
+  /// backed out or the code was unreadable; the camera permission is requested
+  /// by the scanner activity itself.
+  Future<String?> scanPairing() async {
+    final map = await _call('hosts.scanPairing');
+    final text = (map['text'] as String? ?? '').trim();
+    return text.isEmpty ? null : text;
+  }
+
   /// Null fields stay unchanged; pass `accessSecret: ''` to clear the stored
   /// Cloudflare Access secret.
   Future<RemoteHostsState> updateHost(

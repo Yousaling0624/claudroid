@@ -27,6 +27,8 @@ import app.claudroid.chat.ChatController
 import app.claudroid.chat.chatStatusLine
 import app.claudroid.data.chatModelLabel
 import app.claudroid.data.activeProviderPreset
+import com.journeyapps.barcodescanner.ScanIntentResult
+import com.journeyapps.barcodescanner.ScanOptions
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -85,10 +87,11 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private val chatJobs = mutableMapOf<String, Job>()
     private val chatLock = Mutex()
 
-    /** The host Activity, used only for the document picker and for opening URLs. */
+    /** The host Activity, used for the document picker, QR scanner and opening URLs. */
     private var activity: Activity? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var pendingPick: CompletableDeferred<Uri?>? = null
+    private var pendingScan: CompletableDeferred<String?>? = null
 
     /** One SAF picker at a time; export and import share this slot. */
     private var pendingDocument: CompletableDeferred<Uri?>? = null
@@ -119,6 +122,21 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                 val pending = pendingDocument
                 pendingDocument = null
                 pending?.complete(picked)
+                true
+            }
+            SCAN_REQUEST -> {
+                // ZXing's helper only accepts a real result intent; a user back-out
+                // arrives as RESULT_CANCELED and simply yields no text.
+                val text = if (result == Activity.RESULT_OK && data != null) {
+                    runCatching {
+                        ScanIntentResult.parseActivityResult(result, data).contents
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                val pending = pendingScan
+                pendingScan = null
+                pending?.complete(text)
                 true
             }
             else -> false
@@ -206,6 +224,8 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         pendingPick = null
         pendingDocument?.complete(null)
         pendingDocument = null
+        pendingScan?.complete(null)
+        pendingScan = null
     }
 
     // ----------------------------------------------------------------- methods
@@ -318,6 +338,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "chat.permission" -> chatPermission(call)
             "hosts.list" -> hostsState()
             "hosts.pair" -> hostsPair(call)
+            "hosts.scanPairing" -> hostsScanPairing()
             "hosts.update" -> hostsUpdate(call)
             "hosts.remove" -> hostsRemove(call)
             "hosts.test" -> hostsTest(call)
@@ -1162,6 +1183,34 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         )
     }
 
+    /**
+     * Opens ZXing's capture activity and returns the raw QR text; parsing and
+     * pairing stay in Dart/Kotlin. The decoder is bundled, so scanning works
+     * offline and without Google Play services.
+     */
+    private suspend fun hostsScanPairing(): Map<String, Any?> {
+        val host = activity ?: throw IllegalStateException("界面不在前台，无法扫码")
+        if (pendingScan != null) throw IllegalStateException("已有扫码正在进行")
+        val deferred = CompletableDeferred<String?>()
+        pendingScan = deferred
+        val options = ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("对准主机终端上的配对二维码")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+        host.startActivityForResult(options.createScanIntent(host), SCAN_REQUEST)
+        val text = try {
+            deferred.await()
+        } finally {
+            if (pendingScan === deferred) pendingScan = null
+        }
+        return mapOf(
+            "ok" to true,
+            "cancelled" to text.isNullOrBlank(),
+            "text" to (text ?: ""),
+        )
+    }
+
     private suspend fun hostsUpdate(call: MethodCall): Map<String, Any?> {
         container.remote.updateHost(
             id = call.require("id"),
@@ -1486,6 +1535,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         const val ENGINE_CACHE_KEY = "claudroid"
 
         private const val ATTACHMENT_REQUEST = 0x0A77
+        private const val SCAN_REQUEST = 0x0A7A
         private const val BACKUP_EXPORT_REQUEST = 0x0A78
         private const val BACKUP_IMPORT_REQUEST = 0x0A79
         private const val MAX_IMAGE_BYTES = 6L * 1024 * 1024

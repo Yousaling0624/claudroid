@@ -194,6 +194,11 @@ Flutter 插件在配置期执行 `rootProject.allprojects { repositories.maven {
 （`HtmlPreviewView`），Dart 侧只用 `AndroidView`，同时沿用原先的安全策略：null base
 URL、关闭文件与 content provider 访问。
 
+远程主机的扫码配对同理没有引入 Flutter 相机插件：`hosts.scanPairing` 直接启动 ZXing 的
+`CaptureActivity`（纯 `android.app.Activity`，不依赖 AppCompat 或 Google Play 服务），
+解码在设备本地完成，Dart 只解析返回的文本。这是系统能力的宿主实现（和文件选择器、
+`HtmlPreviewView` 一类），不是第二套业务前端。
+
 `flutter/lib/**` 只用 `package:flutter/widgets.dart`（`ValueListenable` 一类从
 `package:flutter/foundation.dart` 取），**不要 import Material**：`prism_ui` 自带
 `AppBar` / `ThemeMode` / `TextField`，同时引入会产生 `ambiguous_import`。

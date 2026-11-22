@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { networkInterfaces } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AuthService, DeviceStore, type PairingInfo } from "./auth.js";
 import { managedCloudflaredPath } from "./cloudflared.js";
@@ -18,7 +18,9 @@ import {
 } from "./config.js";
 import { EventBus } from "./events.js";
 import { FileService } from "./files.js";
+import { buildPairingPayload, selectPairingUrl } from "./pairing.js";
 import { PermissionBroker } from "./permissions.js";
+import { renderTerminalQr } from "./qr.js";
 import { SdkClaudeRunner } from "./sdk-runner.js";
 import { createBridgeServer } from "./server.js";
 import { TunnelManager } from "./tunnel.js";
@@ -168,11 +170,19 @@ function localUrls(bind: string, port: number): string[] {
 function printPairing(code: string, expiresAt: number, urls: string[]): void {
   console.log("");
   console.log(`配对码: ${code}（${new Date(expiresAt).toLocaleString()} 前有效）`);
+  const qrUrl = selectPairingUrl(urls);
+  if (qrUrl) {
+    console.log("扫码配对：App 内「设置 → 远程主机 → 添加远程主机 → 扫描二维码」");
+    console.log(renderTerminalQr(buildPairingPayload({ baseUrl: qrUrl, code, name: hostname() })));
+  }
   if (urls.length > 0) {
     console.log("主机地址:");
     for (const url of urls) console.log(`  ${url}`);
   }
-  console.log("在 App 里进入「设置 → 远程主机 → 添加主机」，填入地址和配对码。");
+  if (!qrUrl) {
+    console.log("! 当前只有本机回环地址，手机无法直接连接；请开启隧道，或用 --bind 0.0.0.0 监听局域网。");
+  }
+  console.log("也可以在 App 里手动填地址和配对码。二维码等同配对码，请勿截图外传。");
   console.log("");
 }
 
@@ -226,6 +236,14 @@ async function start(options: CliOptions): Promise<void> {
     pairFile,
   };
 
+  // A tunnel URL appears after startup; reprint the QR once it becomes the
+  // address the phone should scan, otherwise the first QR would point at LAN.
+  let printedQrUrl: string | null = null;
+  const printCurrentPairing = (): void => {
+    printedQrUrl = selectPairingUrl(state.urls);
+    printPairing(state.pairing.code, state.pairing.expiresAt, state.urls);
+  };
+
   let server: ReturnType<typeof createBridgeServer> | null = null;
   const tunnel = new TunnelManager(
     config.tunnel,
@@ -240,7 +258,13 @@ async function start(options: CliOptions): Promise<void> {
         ];
         writePairFile(state);
       }
-      if (status.state === "up" && status.url) console.log(`隧道已就绪: ${status.url}`);
+      if (
+        status.state === "up" &&
+        status.url &&
+        selectPairingUrl(state.urls) !== printedQrUrl
+      ) {
+        printCurrentPairing();
+      }
       if (status.state === "error" && status.error) console.error(`隧道错误: ${status.error}`);
     },
     undefined,
@@ -259,7 +283,7 @@ async function start(options: CliOptions): Promise<void> {
     onPairingChanged: (info) => {
       state.pairing = info;
       writePairFile(state);
-      printPairing(info.code, info.expiresAt, state.urls);
+      printCurrentPairing();
     },
   });
 
@@ -276,7 +300,7 @@ async function start(options: CliOptions): Promise<void> {
   console.log(`claudroid-bridge ${DAEMON_VERSION} 已启动`);
   console.log(`监听: ${config.bind}:${address.port}`);
   console.log(`工作区: ${files.workspaceRoots.join(", ")}`);
-  printPairing(state.pairing.code, state.pairing.expiresAt, state.urls);
+  printCurrentPairing();
   if (config.tunnel.mode !== "off") tunnel.start();
 
   const shutdown = (): void => {
@@ -370,9 +394,9 @@ function help(): void {
   console.log(`claudroid-bridge ${DAEMON_VERSION}
 
 用法:
-  claudroid-bridge start [选项]      启动守护进程并打印配对码
+  claudroid-bridge start [选项]      启动守护进程并打印配对码与二维码
   claudroid-bridge init              写入默认配置
-  claudroid-bridge pair              查看当前配对码与主机地址
+  claudroid-bridge pair              查看当前配对码、二维码与主机地址
   claudroid-bridge doctor            检查配置、工作区与 cloudflared
   claudroid-bridge devices [list|revoke <id>]
 

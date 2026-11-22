@@ -202,10 +202,11 @@ cd flutter && flutter analyze && flutter test
 # 主机侧（Node 20+）
 npm install -g claudroid-bridge   # 或 cd bridge && npm ci && npm run build && npm link
 claudroid-bridge init             # 写入 ~/.config/claudroid-bridge/config.json
-claudroid-bridge start            # 打印 8 位一次性配对码与主机地址
+claudroid-bridge start            # 打印 8 位一次性配对码、二维码与主机地址
 ```
 
-手机：**设置 → 远程主机 → 添加远程主机**，填地址和配对码。之后首页输入框上方可以选
+手机：**设置 → 远程主机 → 添加远程主机**，点 **扫描二维码** 对准主机终端即可完成配对
+（也可手动填地址和配对码）。之后首页输入框上方可以选
 「本机 / 主机名」并挑远端工作目录；聊天页会显示主机状态与工具确认卡片（允许一次 /
 本会话总是允许 / 拒绝），设置页还能浏览主机文件、开关 Cloudflare Tunnel。
 

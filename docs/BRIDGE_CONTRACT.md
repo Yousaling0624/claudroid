@@ -439,6 +439,7 @@ Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不�
 | --- | --- | --- | --- |
 | `hosts.list` | — | `{ok, hostsJson}` | 主机列表 + 运行时状态 |
 | `hosts.pair` | `baseUrl`, `code`, `name?` | `{ok, hostsJson, hostJson}` | 用 8 位一次性配对码换 token；同一 `baseUrl` 重配对会更新原条目 |
+| `hosts.scanPairing` | — | `{ok, cancelled, text}` | 打开本地二维码扫描页；取消时 `cancelled:true`、`text` 为空。解码在设备本地完成 |
 | `hosts.update` | `id`, `name?`, `baseUrl?`, `accessClientId?`, `accessSecret?` | `{ok, hostsJson}` | 缺省字段保持不变；`accessSecret=""` 表示清除 Cloudflare Access 凭据 |
 | `hosts.remove` | `id` | `{ok, hostsJson}` | 同时停止该主机的 SSE；正在跑的 turn 会被取消 |
 | `hosts.test` | `id` | `{ok, healthJson, hostsJson}` | `GET /v1/health`；失败转 `ok:false` |
@@ -448,6 +449,11 @@ Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不�
 | `hosts.open` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_VIEW` |
 | `hosts.share` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_SEND` |
 | `hosts.tunnel` | `id`, `action?` | `{ok, tunnelJson, hostsJson}` | `action` 为 `start`/`stop`/`restart`；缺省只查询 |
+
+配对二维码由 daemon 在终端打印，内容为
+`claudroid://pair?v=1&url=<百分号编码的 baseUrl>&code=<8 位配对码>&name=<主机名>`。
+App 取到扫描文本后先在本地校验 scheme、版本、地址与码长，通过后再走 `hosts.pair`；
+非 claudroid 二维码不会产生网络请求，配对码过期则由 daemon 返回 401。
 
 `hostsJson`：
 

@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
+import '../../models/pairing.dart';
 import '../../models/remote.dart';
 import '../dialog_motion.dart';
 import '../glyphs.dart';
@@ -92,6 +93,7 @@ class _RemoteHostPairPageState extends State<RemoteHostPairPage> {
   String _code = '';
   String _name = '';
   bool _busy = false;
+  bool _scanning = false;
 
   Future<void> _edit({
     required String title,
@@ -120,6 +122,42 @@ class _RemoteHostPairPageState extends State<RemoteHostPairPage> {
     );
     if (value == null) return;
     apply(value.trim());
+  }
+
+  /// Scans the daemon's pairing QR and pairs in one step: the QR already names
+  /// the address and carries the one-time code, so stopping to re-confirm only
+  /// burns the code's 10-minute window. Failures keep the parsed values on
+  /// screen for a manual retry.
+  Future<void> _scanAndPair() async {
+    if (_busy || _scanning) return;
+    setState(() => _scanning = true);
+    final String? raw;
+    try {
+      raw = await widget.controller.bridge.scanPairing();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _scanning = false);
+      widget.controller.onToast('无法打开相机：$error', isError: true);
+      return;
+    }
+    if (!mounted) return;
+    if (raw == null) {
+      setState(() => _scanning = false);
+      return;
+    }
+    final payload = PairingPayload.tryParse(raw);
+    if (payload == null) {
+      setState(() => _scanning = false);
+      widget.controller.onToast('不是有效的 claudroid 配对二维码', isError: true);
+      return;
+    }
+    setState(() {
+      _scanning = false;
+      _baseUrl = payload.baseUrl;
+      _code = payload.code;
+      _name = payload.name;
+    });
+    await _pair();
   }
 
   Future<void> _pair() async {
@@ -159,8 +197,20 @@ class _RemoteHostPairPageState extends State<RemoteHostPairPage> {
       listenable: controllerListenable,
       builder: (context) => [
         generateSection(
-          title: '连接信息',
-          footer: '在主机上执行 claudroid-bridge setup，再按提示生成配对码；'
+          title: '扫码配对',
+          footer: '扫描主机终端上打印的二维码，地址和一次性配对码会自动填入并直接配对。',
+          items: [
+            SettingsActionRow(
+              label: _scanning ? '正在打开相机…' : '扫描二维码',
+              glyph: AppGlyphs.scan,
+              busy: _scanning,
+              onPressed: (_busy || _scanning) ? null : _scanAndPair,
+            ),
+          ],
+        ),
+        generateSection(
+          title: '手动填写',
+          footer: '也可以在主机上启动 claudroid-bridge start，按提示获取 8 位配对码；'
               '经 Cloudflare Tunnel 暴露时，地址填隧道公网 URL。',
           items: [
             SettingsValueRow(

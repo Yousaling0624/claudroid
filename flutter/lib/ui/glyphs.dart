@@ -562,4 +562,32 @@ abstract final class AppGlyphs {
       GlyphVertex(12, 20),
     ], role: GlyphRole.detail),
   ]);
+
+  /// A scan frame: four corner brackets around a capture line.
+  static const scan = Glyph([
+    GlyphPolyline([
+      GlyphVertex(4, 9),
+      GlyphVertex(4, 4),
+      GlyphVertex(9, 4),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(15, 4),
+      GlyphVertex(20, 4),
+      GlyphVertex(20, 9),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(20, 15),
+      GlyphVertex(20, 20),
+      GlyphVertex(15, 20),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(9, 20),
+      GlyphVertex(4, 20),
+      GlyphVertex(4, 15),
+    ], role: GlyphRole.line),
+    GlyphPolyline([
+      GlyphVertex(7, 12),
+      GlyphVertex(17, 12),
+    ], role: GlyphRole.detail),
+  ]);
 }

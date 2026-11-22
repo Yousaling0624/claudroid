@@ -36,17 +36,19 @@ npm link            # 把 claudroid-bridge 命令链到当前构建
 claudroid-bridge init      # 写入 ~/.config/claudroid-bridge/config.json
 $EDITOR ~/.config/claudroid-bridge/config.json   # 至少改 roots / defaultCwd
 claudroid-bridge doctor    # 检查 Node、配置、工作区与 cloudflared
-claudroid-bridge start     # 启动并打印配对码与主机地址
+claudroid-bridge start     # 启动并打印配对码、二维码与主机地址
 ```
 
 `start` 打印的 8 位配对码 10 分钟内有效、只能使用一次；配对成功后 daemon 会轮换下一个
-配对码并重新打印。配对码过期后重启 `start` 生成新码。手机端在
-**设置 → 远程主机 → 添加远程主机** 填入主机地址和配对码。
+配对码并重新打印。终端还会打印二维码（`claudroid://pair?v=1&url=…&code=…`），手机在
+**设置 → 远程主机 → 添加远程主机 → 扫描二维码** 一扫即完成配对；也可以手动填入地址和
+配对码。二维码只在存在手机可达地址（隧道 URL 或局域网 IP）时打印，等同配对码，请勿截图外传。
+配对码过期后重启 `start` 生成新码。
 
 常用命令：
 
 ```bash
-claudroid-bridge pair                 # 查看当前配对码、有效期与主机地址
+claudroid-bridge pair                 # 查看/重新打印当前配对码、二维码与主机地址
 claudroid-bridge devices              # 列出已配对设备
 claudroid-bridge devices revoke <id>  # 吊销设备令牌
 ```
@@ -163,6 +165,8 @@ npm run build      # 产出 dist/（CLI 入口 dist/cli.js）
 src/cli.ts          命令解析、启动/配对/doctor/devices
 src/server.ts       HTTP + SSE 路由
 src/auth.ts         配对码、设备令牌哈希、设备存储
+src/pairing.ts      QR 配对载荷（claudroid://pair URI）
+src/qr.ts           终端二维码渲染
 src/turns.ts        turn 生命周期与有界事件缓冲
 src/sdk-runner.ts   Agent SDK query() 封装（stream-json 透传、resume、abort）
 src/permissions.ts  canUseTool → SSE → 等待手机决定
