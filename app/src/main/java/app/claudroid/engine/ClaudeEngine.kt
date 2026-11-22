@@ -7,6 +7,7 @@ import app.claudroid.core.Logx
 import app.claudroid.core.Paths
 import app.claudroid.data.AppSettings
 import app.claudroid.data.AuthStyle
+import app.claudroid.data.PermissionMode
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -401,6 +402,7 @@ class ClaudeEngine(private val ctx: Context, private val root: RootExec) {
         }
         EngineEnv.applyModel(env, s)
         EngineEnv.applyFeatures(env, s)
+        EngineEnv.applyAutoMode(env, s)
         // A per-app VPN only routes apps the user included, and the CLI ignores
         // Android's system proxy. Exporting it is the only way WebFetch / curl / git
         // reach the network the browser uses. Merged before extraEnv so a user's own
@@ -539,5 +541,19 @@ internal object EngineEnv {
         if (!settings.autoMemory) env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         if (!settings.backgroundTasks) env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         if (!settings.extendedThinking) env["CLAUDE_CODE_DISABLE_THINKING"] = "1"
+    }
+
+    /**
+     * Auto's server-side safety review only runs for sessions that talk straight to the
+     * Anthropic API. This app always points the CLI at the user's gateway or the local
+     * OpenAI proxy, and since CLI 2.1.319 such sessions refuse every action that needs
+     * review. `SERVER=0` switches the CLI to its built-in classifier instead; classifier
+     * requests still go to the configured endpoint. `extraEnv` is merged after this
+     * block, so an explicit user value (including `=1`) still wins.
+     */
+    fun applyAutoMode(env: MutableMap<String, String>, settings: AppSettings) {
+        if (settings.permissionMode == PermissionMode.AUTO) {
+            env["CLAUDE_CODE_AUTO_MODE_SERVER"] = "0"
+        }
     }
 }

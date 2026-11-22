@@ -92,15 +92,33 @@ class RemoteHostStoreTest {
                 """{"hosts":[
                     {"id":"old","name":"old","baseUrl":"https://old.example.com","tokenSealed":"sealed"},
                     {"id":"bad","name":"bad","baseUrl":"https://bad.example.com","tokenSealed":"sealed",
-                     "permissionMode":"auto","allowBypassPermissions":false}
+                     "permissionMode":"dontAsk","allowBypassPermissions":false}
                 ]}""",
             )
             val store = RemoteHostStore(file)
             store.load()
             assertEquals("default", store.find("old")?.permissionMode)
             assertEquals(false, store.find("old")?.allowBypassPermissions)
-            // "auto" is a local-engine mode and must not leak into a remote turn.
+            // Unknown daemon/engine modes must not leak into a remote turn.
             assertEquals("default", store.find("bad")?.permissionMode)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `auto permission mode survives a reload`() = runBlocking {
+        val dir = Files.createTempDirectory("claudroid-hosts").toFile()
+        try {
+            val file = File(dir, "hosts.json")
+            RemoteHostStore(file).apply {
+                load()
+                upsert(profile("a", permissionMode = "auto"))
+            }
+
+            val reopened = RemoteHostStore(file)
+            reopened.load()
+            assertEquals("auto", reopened.find("a")?.permissionMode)
         } finally {
             dir.deleteRecursively()
         }

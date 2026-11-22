@@ -2,6 +2,7 @@ package app.claudroid.engine
 
 import app.claudroid.data.AppSettings
 import app.claudroid.data.ModelTier
+import app.claudroid.data.PermissionMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -140,6 +141,31 @@ class EngineEnvTest {
         assertNull(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"])
         assertNull(env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"])
         assertNull(env["CLAUDE_CODE_DISABLE_THINKING"])
+    }
+
+    @Test
+    fun `auto permission mode switches off the server-side safety review`() {
+        val env = linkedMapOf<String, String>()
+
+        EngineEnv.applyAutoMode(env, AppSettings(permissionMode = PermissionMode.AUTO))
+
+        assertEquals("0", env["CLAUDE_CODE_AUTO_MODE_SERVER"])
+    }
+
+    @Test
+    fun `non auto permission modes leave the auto mode server setting alone`() {
+        listOf(
+            PermissionMode.BYPASS,
+            PermissionMode.ACCEPT_EDITS,
+            PermissionMode.MANUAL,
+            PermissionMode.PLAN,
+        ).forEach { mode ->
+            val env = linkedMapOf<String, String>()
+
+            EngineEnv.applyAutoMode(env, AppSettings(permissionMode = mode))
+
+            assertNull("$mode must not write CLAUDE_CODE_AUTO_MODE_SERVER", env["CLAUDE_CODE_AUTO_MODE_SERVER"])
+        }
     }
 
     @Test

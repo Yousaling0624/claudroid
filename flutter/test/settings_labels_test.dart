@@ -16,12 +16,14 @@ void main() {
 
   test('remote permission labels stay in picker order', () {
     expect(remotePermissionLabels.keys.toList(), [
+      'auto',
       'default',
       'acceptEdits',
       'plan',
       'bypassPermissions',
     ]);
-    expect(remotePermissionLabels['default'], '自动（每次确认）');
+    expect(remotePermissionLabels['auto'], '自动');
+    expect(remotePermissionLabels['default'], '每次确认');
     expect(remotePermissionLabels['acceptEdits'], '自动改文件');
     expect(remotePermissionLabels['plan'], '只读规划');
     expect(remotePermissionLabels['bypassPermissions'], '完全放行');
@@ -31,6 +33,12 @@ void main() {
     final bypass = remotePermissionFootnote('bypassPermissions');
     expect(bypass, contains('远程主机执行'));
     expect(bypass, contains('命令会在主机上直接执行'));
+
+    // Claude Auto reviews on the host; nothing is forwarded for approval.
+    final auto = remotePermissionFootnote('auto');
+    expect(auto, contains('远程主机执行'));
+    expect(auto, contains('Auto'));
+    expect(auto, isNot(contains('工具调用会转发到手机确认')));
 
     final forwarded = remotePermissionFootnote('default');
     expect(forwarded, contains('远程主机执行'));

@@ -188,7 +188,7 @@
 - 保留全部既有设置项与行为。「功能与实验」二级页包含 agent teams（诚实标注 headless `-p`
   下队友无法真正启动，属实验）、workflows、auto memory、background tasks、extended thinking；
   `EffortLevel`（AUTO 不传 `--effort`）；`subagentModel`；`autoModeModel`（仅供官方 auto
-  权限分类器）。权限模式含「自动（官方 Auto）」并说明网关兼容性；模型档位区分
+  权限分类器）。权限模式含「自动（官方 Auto，网关下自动改用内置分类器）」；模型档位区分
   「默认 / 路由组」（把原始模型 ID 原样传给 `--model`，可填 Magpie 的 `auto/dfmodel[1m]`）
   与「CLI 默认（不指定模型）」（完全不传 `--model`）。
 

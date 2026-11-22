@@ -67,6 +67,7 @@ class RemoteTunnelStatus {
 
 /// The remote turn's permission mode accepted on the wire.
 const remotePermissionModes = {
+  'auto',
   'default',
   'acceptEdits',
   'plan',
@@ -113,7 +114,7 @@ class RemoteHost {
   final String? error;
   final bool hasAccessToken;
 
-  /// `default`, `acceptEdits`, `plan` or `bypassPermissions`.
+  /// `auto`, `default`, `acceptEdits`, `plan` or `bypassPermissions`.
   final String permissionMode;
 
   /// The host's latest health capability; false until it reports otherwise.

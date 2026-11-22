@@ -437,7 +437,12 @@ Magpie 路由组（如 `auto/dfmodel[1m]`）走另一条路：「默认 / 路由
 `--model`，由网关混合调度，App 不做自动路由。
 
 `--permission-mode auto` 是官方权限模式，需要分类器模型；`CLAUDE_CODE_AUTO_MODE_MODEL`
-只影响分类器，不是主模型。网关不支持对应协议时，CLI 会退回只读，因此设置页必须写清限制。
+只影响分类器，不是主模型。CLI 2.1.319 起，走网关或自定义端点的会话用不了**服务端**安全
+审查，需要审查的操作会被直接拒绝（`Auto mode is unavailable: its safety check does not
+run for this session`）。本 App 总是把 CLI 指向用户配置的网关或本机 OpenAI 代理，因此
+`EngineEnv.applyAutoMode` 在 AUTO 模式下注入 `CLAUDE_CODE_AUTO_MODE_SERVER=0`，改用 CLI
+内置分类器；分类器请求走当前端点，可用 `autoModeModel` 指定模型。`extraEnv` 最后合并，
+用户显式写 `=1` 仍可覆盖。
 
 实验开关直接映射为环境变量（`extraEnv` 最后合并，用户手写值优先）：
 
@@ -450,6 +455,7 @@ Magpie 路由组（如 `auto/dfmodel[1m]`）走另一条路：「默认 / 路由
 | 扩展思考关闭 | `CLAUDE_CODE_DISABLE_THINKING=1` |
 | 子代理模型 | `CLAUDE_CODE_SUBAGENT_MODEL` |
 | Auto 权限分类器 | `CLAUDE_CODE_AUTO_MODE_MODEL` |
+| Auto 审查位置（AUTO 模式自动注入） | `CLAUDE_CODE_AUTO_MODE_SERVER=0` |
 | 推理强度 | `--effort low/medium/high/xhigh/max`（Auto 不传） |
 
 注意：非交互 `-p` 模式下 agent teams 的队友无法真正启动，开关只能保证 CLI 侧特性开启，

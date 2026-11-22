@@ -4,12 +4,14 @@ export const PROTOCOL_VERSION = 1;
 
 export type PermissionMode =
   | "default"
+  | "auto"
   | "acceptEdits"
   | "plan"
   | "bypassPermissions";
 
 export const SAFE_PERMISSION_MODES: PermissionMode[] = [
   "default",
+  "auto",
   "acceptEdits",
   "plan",
 ];

@@ -24,7 +24,8 @@ String permissionFootnote(String mode) => mode == 'BYPASS'
 
 /// Remote-turn permission modes, in the order the host pickers list them.
 const remotePermissionLabels = {
-  'default': '自动（每次确认）',
+  'auto': '自动',
+  'default': '每次确认',
   'acceptEdits': '自动改文件',
   'plan': '只读规划',
   'bypassPermissions': '完全放行',
@@ -36,6 +37,8 @@ const remotePermissionLabels = {
 String remotePermissionFootnote(String mode) => switch (mode) {
       'bypassPermissions' =>
         '远程主机执行；完全放行：命令会在主机上直接执行，请确认主机与任务可信。',
+      'auto' => '远程主机执行；由主机的 Claude Auto 模式审核敏感操作，不再逐条确认。',
+      'default' => '远程主机执行；工具调用会转发到手机确认。',
       'acceptEdits' => '远程主机执行；文件修改会自动通过，其他工具调用会转发到手机确认。',
       'plan' => '远程主机执行；只读规划，不会执行修改。',
       _ => '远程主机执行；工具调用会转发到手机确认。',

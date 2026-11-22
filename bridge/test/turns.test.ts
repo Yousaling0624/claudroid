@@ -162,6 +162,20 @@ describe("TurnManager", () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  it("accepts auto and forwards it to the runner", async () => {
+    const runner = new FakeRunner();
+    const harness = await makeHarness(runner);
+    const started = await harness.turns.start("device-1", {
+      cwd: harness.root,
+      prompt: "auto",
+      permissionMode: "auto",
+    });
+    expect(started.status).toBe("running");
+    const done = await waitForFinished(harness, started.turnId);
+    expect(done.status).toBe("done");
+    expect(runner.requests[0].permissionMode).toBe("auto");
+  });
+
   it("gates bypassPermissions behind host configuration", async () => {
     const blocked = await makeHarness(new FakeRunner());
     await expect(

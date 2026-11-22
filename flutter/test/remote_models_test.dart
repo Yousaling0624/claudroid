@@ -83,6 +83,20 @@ void main() {
     expect(host.toJson()['allowBypassPermissions'], isTrue);
   });
 
+  test('hosts accept the Claude Auto permission mode', () {
+    final host = RemoteHost.fromJson({
+      'id': 'h1',
+      'name': '开发机',
+      'baseUrl': 'https://x',
+      'permissionMode': 'auto',
+    });
+    expect(host.permissionMode, 'auto');
+
+    final roundTrip = RemoteHost.fromJson(host.toJson());
+    expect(roundTrip.permissionMode, 'auto');
+    expect(host.toJson()['permissionMode'], 'auto');
+  });
+
   test('unknown permission modes and missing fields fall back safely', () {
     final unknown = RemoteHost.fromJson({
       'id': 'h1',

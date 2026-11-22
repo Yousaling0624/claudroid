@@ -41,7 +41,7 @@ class RemoteHostManagerTest {
             manager.load()
 
             val rejected = runCatching {
-                manager.updateHost("a", null, null, null, null, permissionMode = "auto")
+                manager.updateHost("a", null, null, null, null, permissionMode = "dontAsk")
             }.exceptionOrNull()
             assertTrue("unknown modes must be rejected", rejected is RemoteException)
             assertEquals("default", manager.host("a")?.permissionMode)
@@ -52,6 +52,31 @@ class RemoteHostManagerTest {
             val reopened = RemoteHostStore(file)
             reopened.load()
             assertEquals("acceptEdits", reopened.find("a")?.permissionMode)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `auto is a valid per-host permission mode and persists`() = runBlocking {
+        val dir = Files.createTempDirectory("claudroid-hosts").toFile()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val file = File(dir, "hosts.json")
+            RemoteHostStore(file).apply {
+                load()
+                upsert(profile("a"))
+            }
+            val manager = RemoteHostManager(file, File(dir, "cache"), scope, FakeCipher)
+            manager.load()
+
+            manager.updateHost("a", null, null, null, null, permissionMode = "auto")
+            assertEquals("auto", manager.host("a")?.permissionMode)
+
+            val reopened = RemoteHostStore(file)
+            reopened.load()
+            assertEquals("auto", reopened.find("a")?.permissionMode)
         } finally {
             scope.cancel()
             dir.deleteRecursively()

@@ -116,8 +116,10 @@ class RemoteHostManager(
             defaultCwd = response.host.defaultCwd,
             workspaceRoots = response.host.workspaceRoots,
             tunnel = response.host.tunnel,
-            // Re-pairing the same URL must not reset the host's own mode.
-            permissionMode = existing?.permissionMode ?: RemotePermissionModes.DEFAULT,
+            // Re-pairing the same URL must not reset the host's own mode. A new host
+            // starts in Auto: the daemon's classifier reviews sensitive calls, so the
+            // phone is not asked to confirm every tool invocation.
+            permissionMode = existing?.permissionMode ?: RemotePermissionModes.AUTO,
             allowBypassPermissions = response.host.allowBypassPermissions,
         )
         store.upsert(profile)

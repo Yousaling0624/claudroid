@@ -9,7 +9,7 @@ import java.io.File
 data class TurnRequest(
     val prompt: String,
     val resumeSessionId: String?,
-    /** One of `default`, `acceptEdits`, `plan`, `bypassPermissions`. */
+    /** One of `default`, `auto`, `acceptEdits`, `plan`, `bypassPermissions`. */
     val permissionMode: String,
     val model: String? = null,
 )

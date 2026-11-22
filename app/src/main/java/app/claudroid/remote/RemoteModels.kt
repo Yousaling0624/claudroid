@@ -175,9 +175,10 @@ data class RemoteEventBatch(
 /** Per-host permission modes the daemon accepts (docs/BRIDGE_CONTRACT.md §6.9). */
 object RemotePermissionModes {
     const val DEFAULT = "default"
+    const val AUTO = "auto"
     const val BYPASS = "bypassPermissions"
 
-    val ALLOWED = setOf(DEFAULT, "acceptEdits", "plan", BYPASS)
+    val ALLOWED = setOf(DEFAULT, AUTO, "acceptEdits", "plan", BYPASS)
 
     /**
      * hosts.json may predate this field or be hand-edited. The daemon rejects

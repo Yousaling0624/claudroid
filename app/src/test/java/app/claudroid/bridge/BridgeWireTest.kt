@@ -292,8 +292,12 @@ class BridgeWireTest {
         ).toString()
         assertTrue(liveFalse.contains("\"allowBypassPermissions\":false"))
 
+        // Auto is a real remote mode: the daemon's classifier reviews sensitive calls.
+        val auto = BridgeWire.hostJson(host.copy(permissionMode = "auto"), null).toString()
+        assertTrue(auto.contains("\"permissionMode\":\"auto\""))
+
         // A stale/invalid value must not reach the frontend or a remote turn.
-        val legacy = BridgeWire.hostJson(host.copy(permissionMode = "auto"), null).toString()
+        val legacy = BridgeWire.hostJson(host.copy(permissionMode = "dontAsk"), null).toString()
         assertTrue(legacy.contains("\"permissionMode\":\"default\""))
     }
 

@@ -19,7 +19,7 @@ enum class PermissionMode(val cli: String, val label: String, val hint: String) 
     AUTO(
         "auto",
         "自动",
-        "官方 Auto 模式：分类器审查每次敏感操作。需要支持审查模型的网关，不可用时 CLI 会退回只读。",
+        "官方 Auto 模式：CLI 内置分类器审查敏感操作，网关 / 本机代理也可用；分类器模型可在「功能与实验」指定。",
     ),
     BYPASS("bypassPermissions", "完全放行", "不询问，所有工具直接执行。root 场景常用。"),
     ACCEPT_EDITS("acceptEdits", "自动改文件", "文件编辑和常见文件命令自动通过，其他命令仍会被拒绝。"),
