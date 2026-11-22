@@ -36,6 +36,39 @@ String settingsEngineSummary(EngineState engine) {
   return engine.prootAvailable ? '未安装 · PRoot 可用' : '未安装';
 }
 
+/// The one action the engine page offers as its primary button. Updating the
+/// CLI alone is the cheap path; a full reinstall stays reachable as a
+/// secondary row on the same section.
+enum EnginePrimaryAction { install, updateCli, reinstall }
+
+/// Picks the primary action from the engine snapshot. `latestVersion` is only
+/// trusted once the host has checked updates, so an empty value keeps the
+/// reinstall path instead of inventing an upgrade.
+EnginePrimaryAction enginePrimaryAction(EngineState engine) {
+  final installed = engine.installedVersion;
+  if (installed == null || installed.isEmpty) {
+    return EnginePrimaryAction.install;
+  }
+  final latest = engine.latestVersion;
+  if (latest != null && latest.isNotEmpty && latest != installed) {
+    return EnginePrimaryAction.updateCli;
+  }
+  return EnginePrimaryAction.reinstall;
+}
+
+/// Label for [enginePrimaryAction]; names the target version when updating so
+/// the button says what will change.
+String enginePrimaryActionLabel(EngineState engine) {
+  switch (enginePrimaryAction(engine)) {
+    case EnginePrimaryAction.install:
+      return '安装 Claude Code';
+    case EnginePrimaryAction.updateCli:
+      return '仅更新 CLI 到 ${engine.latestVersion}';
+    case EnginePrimaryAction.reinstall:
+      return '重装 / 修复容器';
+  }
+}
+
 /// One-line status for the "功能与实验" row.
 String settingsFeaturesSummary(AppSettings settings) {
   final enabled = featureFlagDefaults.entries

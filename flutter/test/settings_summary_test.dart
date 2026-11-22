@@ -72,6 +72,38 @@ void main() {
     });
   });
 
+  group('engine primary action', () {
+    test('an uninstalled engine offers install', () {
+      expect(
+        enginePrimaryAction(const EngineState()),
+        EnginePrimaryAction.install,
+      );
+      expect(enginePrimaryActionLabel(const EngineState()), '安装 Claude Code');
+    });
+
+    test('a newer latest version updates only the CLI', () {
+      const engine = EngineState(
+        installedVersion: '2.1.320',
+        latestVersion: '2.1.330',
+      );
+      expect(enginePrimaryAction(engine), EnginePrimaryAction.updateCli);
+      expect(enginePrimaryActionLabel(engine), '仅更新 CLI 到 2.1.330');
+    });
+
+    test('a matching or unknown latest version falls back to reinstall', () {
+      const same = EngineState(
+        installedVersion: '2.1.330',
+        latestVersion: '2.1.330',
+      );
+      expect(enginePrimaryAction(same), EnginePrimaryAction.reinstall);
+      expect(enginePrimaryActionLabel(same), '重装 / 修复容器');
+
+      const unchecked = EngineState(installedVersion: '2.1.330');
+      expect(enginePrimaryAction(unchecked), EnginePrimaryAction.reinstall);
+      expect(enginePrimaryActionLabel(unchecked), '重装 / 修复容器');
+    });
+  });
+
   group('features summary', () {
     test('defaults enable four flags and auto effort', () {
       expect(settingsFeaturesSummary(AppSettings()), '4 项开启 · 推理 自动');

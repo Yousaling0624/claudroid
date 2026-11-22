@@ -9,6 +9,7 @@ import '../press_guard.dart';
 import 'settings_controller.dart';
 import 'settings_dialogs.dart';
 import 'settings_labels.dart';
+import 'settings_summary.dart';
 import 'settings_widgets.dart';
 
 class EnginePage extends StatelessWidget {
@@ -196,6 +197,7 @@ class EnginePage extends StatelessWidget {
     final engine = controller.engine;
     final working = engine.phase == 'Working';
     final busy = controller.busy;
+    final action = enginePrimaryAction(engine);
     return generateSection(
       title: '维护',
       items: [
@@ -207,14 +209,17 @@ class EnginePage extends StatelessWidget {
                 child: DeferredDisable(
                   onPressed: busy
                       ? null
-                      : () => controller.installEngine(
-                            force: engine.installedVersion != null,
-                          ),
+                      : () => switch (action) {
+                            EnginePrimaryAction.install =>
+                              controller.installEngine(force: false),
+                            EnginePrimaryAction.updateCli =>
+                              controller.updateCli(),
+                            EnginePrimaryAction.reinstall =>
+                              controller.installEngine(force: true),
+                          },
                   builder: (context, onPressed) => GlassTonalButton(
                     size: TonalButtonSize.section,
-                    label: engine.installedVersion == null
-                        ? '安装 Claude Code'
-                        : '升级 / 重装',
+                    label: enginePrimaryActionLabel(engine),
                     onPressed: onPressed,
                   ),
                 ),
@@ -222,6 +227,15 @@ class EnginePage extends StatelessWidget {
             ],
           ),
         ),
+        // Only the CLI moves between versions; keep the full reinstall within
+        // reach without competing with the primary button.
+        if (action == EnginePrimaryAction.updateCli)
+          SettingsActionRow(
+            label: '重装 / 修复容器（完整）',
+            glyph: AppGlyphs.refresh,
+            onPressed:
+                busy ? null : () => controller.installEngine(force: true),
+          ),
         SettingsActionRow(
           label: '检查更新',
           glyph: AppGlyphs.refresh,

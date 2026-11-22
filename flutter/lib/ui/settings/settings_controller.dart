@@ -381,6 +381,9 @@ class SettingsController extends ChangeNotifier {
   Future<void> installEngine({required bool force}) =>
       _run(() => bridge.engineInstall(force: force), '安装没能开始');
 
+  Future<void> updateCli() =>
+      _run(() => bridge.engineUpdateCli(), '更新 CLI 没能开始');
+
   Future<void> checkEngineUpdate({bool quiet = false}) =>
       _run(() => bridge.engineCheckUpdate(quiet: quiet), '检查更新失败');
 

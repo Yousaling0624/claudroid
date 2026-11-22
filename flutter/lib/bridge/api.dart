@@ -304,6 +304,8 @@ class Bridge {
   Future<void> engineInstall({bool force = false}) =>
       _call('engine.install', {'force': force});
 
+  Future<void> engineUpdateCli() => _call('engine.updateCli');
+
   Future<void> engineCheckUpdate({bool quiet = true}) =>
       _call('engine.checkUpdate', {'quiet': quiet});
 

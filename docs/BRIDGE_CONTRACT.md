@@ -219,6 +219,7 @@ Kotlin，Dart 不复制：
 | --- | --- | --- |
 | `engine.bootstrap` | — | `{ok}` |
 | `engine.install` | `force: bool` | `{ok}` |
+| `engine.updateCli` | — | `{ok}` |
 | `engine.checkUpdate` | `quiet: bool` | `{ok}` |
 | `engine.probeRoot` | — | `{ok, granted: bool}` |
 | `engine.selfTest` | — | `{ok, report}` |

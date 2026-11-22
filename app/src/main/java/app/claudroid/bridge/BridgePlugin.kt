@@ -263,6 +263,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "sessions.rename" -> sessionsRename(call)
             "engine.bootstrap" -> { container.engine.bootstrap(); ok() }
             "engine.install" -> { container.engine.install(call.bool("force")); ok() }
+            "engine.updateCli" -> { container.engine.install(cliOnly = true); ok() }
             "engine.checkUpdate" -> { container.engine.checkForUpdate(call.bool("quiet")); ok() }
             "engine.probeRoot" -> {
                 // `probeRoot` is not suspend and performs a blocking `su` round trip;

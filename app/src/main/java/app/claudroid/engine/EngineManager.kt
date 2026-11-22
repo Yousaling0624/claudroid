@@ -302,7 +302,7 @@ class EngineManager(
         return toolchain.verify(existing, existing.rootMode)
     }
 
-    suspend fun install(force: Boolean = false) = withContext(Dispatchers.IO) {
+    suspend fun install(force: Boolean = false, cliOnly: Boolean = false) = withContext(Dispatchers.IO) {
         // Bootstrap and the settings button can both fire; a second 300 MB download is worse
         // than simply ignoring the second request.
         if (!installLock.compareAndSet(false, true)) return@withContext
@@ -317,7 +317,14 @@ class EngineManager(
                 return@withContext
             }
             engine.cancel(CancelReason.ENGINE_INSTALL)
-            _state.update { it.copy(phase = Phase.Working, error = null, stage = "准备中", fraction = 0f) }
+            _state.update {
+                it.copy(
+                    phase = Phase.Working,
+                    error = null,
+                    stage = if (cliOnly) "更新 CLI" else "准备中",
+                    fraction = 0f,
+                )
+            }
             runCatching {
                 val settings = settingsRepo.flow.first()
                 if (!_state.value.rootGranted) probeRoot()
@@ -337,7 +344,7 @@ class EngineManager(
                 var lastProgressAt = 0L
                 var lastStage = ""
                 var lastDetail = ""
-                val installation = toolchain.ensure(force = force, useRoot = useRoot) { p ->
+                val installation = toolchain.ensure(force = force, useRoot = useRoot, cliOnly = cliOnly) { p ->
                     // The downloader reports every 256 KiB. Forwarding every tick floods
                     // the Flutter channel, and each event rebuilds the settings page, which
                     // reads as the interface freezing for a fraction of a second. Rate-limit

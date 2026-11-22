@@ -47,6 +47,7 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
     suspend fun ensure(
         force: Boolean = false,
         useRoot: Boolean,
+        cliOnly: Boolean = false,
         onProgress: (Progress) -> Unit = {},
     ): Installation = withContext(Dispatchers.IO) {
         val target = Registry.target()
@@ -61,6 +62,30 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
                 "rootfs=${existing?.rootfsVersion ?: "旧版"}",
             ctx,
         )
+
+        // Explicit "replace the CLI only" path: no rootfs download and no apt rebuild.
+        // It fails closed on anything but the exact pinned rootfs, the requested mode and
+        // a healthy jail. Copying a new CLI into a broken container would only postpone
+        // the failure to the next turn — after the previous (working) CLI was pruned.
+        if (cliOnly) {
+            val healthy = existing != null && existing.rootMode == useRoot && verify(existing, useRoot)
+            cliOnlyBlocker(existing, useRoot, spec, healthy)?.let { error(it) }
+            val inst = existing!!
+            if (inst.version == latest) {
+                onProgress(Progress("已是最新", 1f, latest))
+                return@withContext inst
+            }
+            requireFreeSpace(700)
+            val staging = Paths.staging(ctx)
+            onProgress(Progress("更新 CLI $latest", 0.05f, target.abi))
+            val claude = stageClaude(target, latest, staging, onProgress)
+            onProgress(Progress("更新 CLI", 0.84f, latest))
+            val updated = upgradeInPlace(inst, claude, latest, onProgress)
+            cleanupStaging(claude)
+            onProgress(Progress("就绪", 1f, latest))
+            Logx.i("CLI $latest 已更新（仅 CLI，jail=${updated.jailPath}, root=$useRoot）", ctx)
+            return@withContext updated
+        }
 
         if (!force && existing != null && existing.version == latest &&
             existing.rootMode == useRoot && existing.rootfsSha256 == spec.digest &&
@@ -1015,6 +1040,40 @@ class Toolchain(private val ctx: Context, private val rootExec: RootExec) {
             return parts.all { part ->
                 part.length in 1..3 && part.all { it in '0'..'9' } && part.toIntOrNull() in 0..255
             }
+        }
+
+        /**
+         * Why `ensure(cliOnly = true)` cannot proceed, or null when it can.
+         *
+         * The check is stricter than [verify] on purpose: a CLI-only update must never be
+         * the first thing that repairs a container. Every precondition here is one that a
+         * full reinstall would fix, so the message tells the user exactly which button to
+         * press; a healthy jail only needs the CLI swapped.
+         */
+        internal fun cliOnlyBlocker(
+            existing: Installation?,
+            useRoot: Boolean,
+            spec: RootfsSpec,
+            healthy: Boolean,
+        ): String? {
+            if (existing == null) {
+                return "尚未安装 Claude Code，无法只更新 CLI。请先点「安装 Claude Code」。"
+            }
+            if (existing.rootMode != useRoot) {
+                val installed = if (existing.rootMode) "Root" else "PRoot"
+                val wanted = if (useRoot) "Root" else "PRoot"
+                return "已安装的容器是 $installed 模式，与当前引擎模式（$wanted）不一致，无法只更新 CLI。" +
+                    "请点「重装 / 修复容器（完整）」切换模式。"
+            }
+            if (existing.rootfsVersion != spec.version || existing.rootfsSha256 != spec.digest) {
+                return "应用内置的容器运行时已更新（${spec.image}），与已安装版本不一致，无法只更新 CLI。" +
+                    "请点「重装 / 修复容器（完整）」完整更新。"
+            }
+            if (!healthy) {
+                return "容器状态异常（缺少 bash、git 或 CLI 不完整），无法只更新 CLI。" +
+                    "请点「重装 / 修复容器（完整）」修复。"
+            }
+            return null
         }
 
         /**

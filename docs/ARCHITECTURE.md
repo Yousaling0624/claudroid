@@ -309,6 +309,10 @@ apt 装工具 + verify（debian_version、bash、git、CLI > 100 MB）
 下次 turn 即生效
 ```
 
+设置页有可用更新时走 `engine.updateCli`，显式只替换 `/opt/claude/<version>/claude`；
+容器不健康、引擎模式不一致或内置 rootfs 摘要已变化时拒绝，并引导用户点「重装 / 修复容器
+（完整）」走上面的整树重建。
+
 rootfs 本身也走 OCI：`library/debian:13`，digest 钉死在 `Registry.kt`
 （arm64 `sha256:23b69c48…` 49,778,604 B；amd64 `sha256:a6dd1c05…` 49,412,508 B）。
 先试 Docker Hub，失败再试 DaoCloud 镜像 `docker.m.daocloud.io`；两边的 token 端点与
