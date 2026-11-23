@@ -418,6 +418,7 @@ class _Shell extends StatelessWidget {
         activeId: sessionId,
         engine: state.engine,
         activeHost: _activeHost,
+        hosts: state.hosts,
         onSelect: (id) {
           // Pop synchronously: `maybePop` is async and would race the route
           // pushed right after it, popping the new page instead of the drawer.
@@ -433,6 +434,10 @@ class _Shell extends StatelessWidget {
         onChooseHost: () {
           Navigator.of(sheetContext).pop();
           _chooseHost(context);
+        },
+        onSelectHost: (hostId) {
+          Navigator.of(sheetContext).pop();
+          unawaited(onSelectHost(hostId));
         },
         onWorkspace: () {
           final host = _activeHost;

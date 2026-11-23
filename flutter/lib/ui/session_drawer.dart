@@ -28,11 +28,13 @@ class SessionDrawer extends StatefulWidget {
     required this.activeId,
     required this.engine,
     required this.activeHost,
+    required this.hosts,
     required this.onSelect,
     required this.onNew,
     required this.onRename,
     required this.onDelete,
     required this.onChooseHost,
+    required this.onSelectHost,
     required this.onWorkspace,
     required this.onOpenHostSettings,
     required this.onSettings,
@@ -46,11 +48,17 @@ class SessionDrawer extends StatefulWidget {
 
   /// Null means the local engine.
   final RemoteHost? activeHost;
+
+  /// Every paired host, listed by the footer's quick-switch menu.
+  final RemoteHostsState hosts;
   final ValueChanged<String> onSelect;
   final VoidCallback onNew;
   final void Function(String id, String title) onRename;
   final ValueChanged<String> onDelete;
   final VoidCallback onChooseHost;
+
+  /// Switches the app-wide current host; null means the local engine.
+  final ValueChanged<String?> onSelectHost;
   final VoidCallback onWorkspace;
   final ValueChanged<String> onOpenHostSettings;
   final ValueChanged<SettingsDestination> onSettings;
@@ -208,26 +216,21 @@ class _SessionDrawerState extends State<SessionDrawer> {
     );
   }
 
-  /// The footer capsule is the quick host switch — same picker as the host bar
-  /// above — while a long press keeps the old shortcut into the current
-  /// executor's settings page. The gear inside the picker reaches the same
-  /// page, so tap remains the fast path.
+  /// The footer capsule is the quick host switch: a tap drops the executor
+  /// list as an anchored menu (like the model picker), while a long press keeps
+  /// the shortcut into the current executor's settings page.
   Widget _footerCapsule({
     required String semanticsLabel,
     required VoidCallback onLongPress,
-    required Widget child,
+    required Widget Function(VoidCallback openMenu) builder,
   }) {
-    return Semantics(
-      button: true,
-      label: semanticsLabel,
+    return _FooterCapsule(
+      semanticsLabel: semanticsLabel,
       onLongPress: onLongPress,
-      child: GestureDetector(
-        onLongPress: () {
-          unawaited(HapticFeedback.selectionClick());
-          onLongPress();
-        },
-        child: child,
-      ),
+      hosts: widget.hosts.hosts,
+      activeHostId: widget.activeHost?.id,
+      onSelectHost: widget.onSelectHost,
+      builder: builder,
     );
   }
 
@@ -252,10 +255,10 @@ class _SessionDrawerState extends State<SessionDrawer> {
               semanticsLabel:
                   '当前主机：${host.displayName} · ${host.phaseLabel}，点按切换执行位置，长按打开主机设置',
               onLongPress: () => widget.onOpenHostSettings(host.id),
-              child: PressSurface(
+              builder: (openMenu) => PressSurface(
                 fill: scheme.surfaceContainerHigh,
                 shape: AppShape.full,
-                onPressed: widget.onChooseHost,
+                onPressed: openMenu,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: SizedBox(
                   height: 56,
@@ -395,10 +398,10 @@ class _SessionDrawerState extends State<SessionDrawer> {
                   '引擎状态：$title · $status，点按切换执行位置，长按打开引擎设置',
               onLongPress: () =>
                   widget.onSettings(SettingsDestination.engine),
-              child: PressSurface(
+              builder: (openMenu) => PressSurface(
                 fill: scheme.surfaceContainerHigh,
                 shape: AppShape.full,
-                onPressed: widget.onChooseHost,
+                onPressed: openMenu,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: SizedBox(
                   height: 56,
@@ -650,6 +653,92 @@ class _SessionDrawerState extends State<SessionDrawer> {
                 .copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The drawer footer's executor capsule. The caller builds the [PressSurface]
+/// through [builder] so each footer variant keeps its own content; the menu
+/// anchor and the long-press gesture live here.
+class _FooterCapsule extends StatefulWidget {
+  const _FooterCapsule({
+    required this.semanticsLabel,
+    required this.onLongPress,
+    required this.hosts,
+    required this.activeHostId,
+    required this.onSelectHost,
+    required this.builder,
+  });
+
+  final String semanticsLabel;
+  final VoidCallback onLongPress;
+  final List<RemoteHost> hosts;
+  final String? activeHostId;
+  final ValueChanged<String?> onSelectHost;
+  final Widget Function(VoidCallback openMenu) builder;
+
+  @override
+  State<_FooterCapsule> createState() => _FooterCapsuleState();
+}
+
+class _FooterCapsuleState extends State<_FooterCapsule> {
+  Rect? _anchorRect() {
+    final box = context.findRenderObject();
+    final navigatorBox =
+        Navigator.maybeOf(context)?.context.findRenderObject();
+    if (box is! RenderBox ||
+        !box.attached ||
+        !box.hasSize ||
+        navigatorBox is! RenderBox) {
+      return null;
+    }
+    return box.localToGlobal(Offset.zero, ancestor: navigatorBox) & box.size;
+  }
+
+  /// The same executor list as the centered picker, but anchored to the
+  /// capsule like the model menu, so the choice stays where the finger is.
+  void _openMenu() {
+    final navigator = Navigator.maybeOf(context);
+    final rect = _anchorRect();
+    if (navigator == null || rect == null) return;
+    final route = AnchoredPopupRoute<void>(
+      barrierLabel: UiLocalizations.of(context).close,
+      anchorOf: () => rect,
+      placement: PopupPlacement.overAnchorEnd,
+      elevated: ElevatedSurfaceTheme.isIn(context),
+      builder: (_) => PopupMenu(
+        items: [
+          PopupMenuItem(
+            label: '本机',
+            checked: widget.activeHostId == null,
+            onPressed: () => widget.onSelectHost(null),
+          ),
+          for (final host in widget.hosts)
+            PopupMenuItem(
+              label: host.displayName,
+              subtitle: '${host.phaseLabel} · ${host.baseUrl}',
+              checked: widget.activeHostId == host.id,
+              onPressed: () => widget.onSelectHost(host.id),
+            ),
+        ],
+      ),
+    );
+    unawaited(navigator.push(route));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: widget.semanticsLabel,
+      onLongPress: widget.onLongPress,
+      child: GestureDetector(
+        onLongPress: () {
+          unawaited(HapticFeedback.selectionClick());
+          widget.onLongPress();
+        },
+        child: widget.builder(_openMenu),
       ),
     );
   }
