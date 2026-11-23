@@ -170,6 +170,15 @@ class Bridge {
     return _decodeStringList(map['relativePathsJson'] as String?);
   }
 
+  /// Opens the system camera; the photo is copied into the active workspace by
+  /// Kotlin and returned as a relative path (e.g. `attachments/IMG_….jpg`).
+  /// Empty when the user backs out of the camera without taking a photo.
+  Future<List<String>> captureAttachment() async {
+    final map = await _call('attachments.capture');
+    if (map['cancelled'] == true) return const [];
+    return _decodeStringList(map['relativePathsJson'] as String?);
+  }
+
   Future<List<String>> readLogs() async =>
       _decodeStringList((await _call('logs.read'))['linesJson'] as String?);
 

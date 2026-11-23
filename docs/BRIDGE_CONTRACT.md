@@ -291,6 +291,7 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 | `share.text` | `text: String` | `{ok}` | `ACTION_SEND` + `text/plain` 系统分享面板；空白或超过 20 万字符返回中文错误 |
 | `share.image` | `bytes: ByteArray` | `{ok}` | 写入 `cacheDir/share/` 后经 FileProvider 以 `image/png` 分享；空或超过 24 MiB 返回中文错误 |
 | `attachments.pick` | — | `{ok, relativePathsJson, cancelled}` | 系统 `OpenDocument` 选择器 + `Attachments.import`，复制进**当前活动工作区**的 `attachments/<name>` |
+| `attachments.capture` | — | `{ok, relativePathsJson, cancelled}` | 系统相机 `ACTION_IMAGE_CAPTURE` + `Attachments.import`；临时照片写入 `cacheDir/capture/`，调用前先申请 `CAMERA` 运行时权限 |
 | `logs.read` | — | `{ok, linesJson}` | `Logx.lines.value` |
 | `logs.clear` | — | `{ok}` | `Logx.clear()` |
 
@@ -311,6 +312,15 @@ Dart 里重写（它过滤以 `[` 或 `{` 开头的诊断输出，规则将来�
 `{"ok":true,"cancelled":true,"relativePathsJson":"[]"}`。Dart 把每个路径当作待发送附件，
 在提交时用 `composeChatPrompt` 把 `@attachments/<name>` 追加到 prompt；界面只显示预览图，
 不再把路径插进输入框。预览图直接复用 `workspace.preview` 读取图片字节，不新增通道方法。
+
+`attachments.capture` 打开系统相机，拍完由 Kotlin 把照片导入当前活动工作区的 `attachments/`，
+返回结构与 `attachments.pick` 完全一致：取消时 `{"ok":true,"cancelled":true,"relativePathsJson":"[]"}`。
+manifest 虽已声明 `CAMERA`，但未授予运行时权限时部分设备会让 `ACTION_IMAGE_CAPTURE` 抛
+`SecurityException`，所以调用前先 `requestPermissions` 申请；拒绝时返回带下一步指引的中文错误。
+相机输出写到 `cacheDir/capture/IMG_yyyyMMdd_HHmmss.jpg`，经 `${applicationId}.files` FileProvider
+的 `<cache-path name="capture" path="capture/" />` 授权写入；每次拍摄前清理 24 小时前或最近
+10 张之外的照片。取消、没有可用相机应用、`RESULT_OK` 但文件为空时都会删除临时文件并给出
+对应语义（取消不算错误）。
 
 ### 6.5 服务商与模型
 

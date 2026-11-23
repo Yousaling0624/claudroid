@@ -35,4 +35,20 @@ void main() {
     }
     expect(AppGlyphs.share.shapes.whereType<GlyphCircle>(), hasLength(3));
   });
+
+  test('camera keeps its viewfinder bump stroked and its lens a detail', () {
+    // The attachment menu paints with `fill: 1` too: a body-role open bump
+    // would fill into a solid block above the camera body.
+    final shapes = AppGlyphs.camera.shapes;
+
+    final body = shapes.whereType<GlyphBox>().single;
+    expect(body.role, GlyphRole.body);
+
+    final bump = shapes.whereType<GlyphPolyline>().single;
+    expect(bump.role, GlyphRole.line);
+    expect(bump.closed, isFalse);
+
+    final lens = shapes.whereType<GlyphCircle>().single;
+    expect(lens.role, GlyphRole.detail);
+  });
 }

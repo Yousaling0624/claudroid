@@ -204,6 +204,20 @@ abstract final class AppGlyphs {
     ], role: GlyphRole.detail),
   ]);
 
+  /// Camera body with a viewfinder bump and a lens. The bump is an open [line]:
+  /// icon buttons paint with `fill: 1`, and a body-role open polyline would be
+  /// filled into a solid block.
+  static const camera = Glyph([
+    GlyphBox(3.5, 6.5, 20.5, 19.5, 2.6),
+    GlyphPolyline([
+      GlyphVertex(9, 6.5),
+      GlyphVertex(10, 4.5, 0.8),
+      GlyphVertex(14, 4.5, 0.8),
+      GlyphVertex(15, 6.5),
+    ], role: GlyphRole.line),
+    GlyphCircle(12, 13, 3.4, role: GlyphRole.detail),
+  ]);
+
   static const code = Glyph([
     GlyphPolyline([
       GlyphVertex(9, 7.5),

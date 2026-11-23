@@ -1,11 +1,16 @@
 package app.claudroid.bridge
 
+import android.Manifest
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import app.claudroid.AppContainer
 import app.claudroid.BuildConfig
@@ -92,6 +97,11 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
     private var activityBinding: ActivityPluginBinding? = null
     private var pendingPick: CompletableDeferred<Uri?>? = null
     private var pendingScan: CompletableDeferred<String?>? = null
+    private var pendingCameraPermission: CompletableDeferred<Boolean>? = null
+    private var pendingCapture: CompletableDeferred<Boolean>? = null
+
+    /** Guards the whole capture round trip, including the import after the camera. */
+    private var captureInProgress = false
 
     /** One SAF picker at a time; export and import share this slot. */
     private var pendingDocument: CompletableDeferred<Uri?>? = null
@@ -118,6 +128,14 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
                 pending?.complete(picked)
                 true
             }
+            ATTACHMENT_CAPTURE_REQUEST -> {
+                // The photo arrives through EXTRA_OUTPUT, so only the result code
+                // matters; the caller validates that the file has content.
+                val pending = pendingCapture
+                pendingCapture = null
+                pending?.complete(result == Activity.RESULT_OK)
+                true
+            }
             BACKUP_EXPORT_REQUEST, BACKUP_IMPORT_REQUEST -> {
                 val pending = pendingDocument
                 pendingDocument = null
@@ -142,6 +160,26 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             else -> false
         }
     }
+
+    /**
+     * The camera permission is requested at capture time: the manifest declares
+     * CAMERA, and devices that enforce the declaration refuse `ACTION_IMAGE_CAPTURE`
+     * with a SecurityException when the runtime grant is missing.
+     */
+    private val cameraPermissionListener =
+        PluginRegistry.RequestPermissionsResultListener { requestCode, _, grantResults ->
+            if (requestCode != CAMERA_PERMISSION_REQUEST) {
+                false
+            } else {
+                val pending = pendingCameraPermission
+                pendingCameraPermission = null
+                pending?.complete(
+                    grantResults.isNotEmpty() &&
+                        grantResults[0] == PackageManager.PERMISSION_GRANTED,
+                )
+                true
+            }
+        }
 
     // ------------------------------------------------------------------ plugin
 
@@ -213,10 +251,12 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         activity = binding.activity
         activityBinding = binding
         binding.addActivityResultListener(pickResultListener)
+        binding.addRequestPermissionsResultListener(cameraPermissionListener)
     }
 
     private fun detachActivity() {
         activityBinding?.removeActivityResultListener(pickResultListener)
+        activityBinding?.removeRequestPermissionsResultListener(cameraPermissionListener)
         activityBinding = null
         activity = null
         // A picker that never returned must not leave the Dart caller awaiting forever.
@@ -226,6 +266,11 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         pendingDocument = null
         pendingScan?.complete(null)
         pendingScan = null
+        // Denying here aborts a capture whose result can no longer be delivered.
+        pendingCameraPermission?.complete(false)
+        pendingCameraPermission = null
+        pendingCapture?.complete(false)
+        pendingCapture = null
     }
 
     // ----------------------------------------------------------------- methods
@@ -256,6 +301,7 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "models.list" -> modelsFetch(testOnly = false)
             "models.test" -> modelsFetch(testOnly = true)
             "attachments.pick" -> attachmentsPick()
+            "attachments.capture" -> attachmentsCapture()
             "workspace.list" -> workspaceList(call)
             "workspace.preview" -> workspacePreview(call)
             "workspace.delete" -> workspaceDelete(call)
@@ -454,6 +500,103 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
             "cancelled" to false,
             "relativePathsJson" to BridgeWire.stringListJson(listOf(relative)),
         )
+    }
+
+    /** Suspends until the runtime camera grant is known; a denial is a user-facing error. */
+    private suspend fun ensureCameraPermission(host: Activity): Boolean {
+        if (
+            ContextCompat.checkSelfPermission(host, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return true
+        }
+        val deferred = CompletableDeferred<Boolean>()
+        pendingCameraPermission = deferred
+        host.requestPermissions(arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_REQUEST)
+        val granted = try {
+            deferred.await()
+        } finally {
+            if (pendingCameraPermission === deferred) pendingCameraPermission = null
+        }
+        if (!granted) {
+            throw IllegalStateException(
+                "没有相机权限，无法拍照。请在系统设置里允许 Claudroid 使用相机后重试。",
+            )
+        }
+        return true
+    }
+
+    private suspend fun attachmentsCapture(): Map<String, Any?> {
+        val host = activity ?: throw IllegalStateException("界面不在前台，无法拍照")
+        if (captureInProgress) {
+            throw IllegalStateException("正在拍照，请等当前相机操作结束")
+        }
+        captureInProgress = true
+        try {
+            ensureCameraPermission(host)
+            // The camera writes into our own cache over a FileProvider URI, so the
+            // photo never has to round-trip through the result intent.
+            val dir = File(host.cacheDir, "capture")
+            val shot = withContext(Dispatchers.IO) {
+                if (!dir.isDirectory && !dir.mkdirs()) {
+                    throw IllegalStateException("无法创建拍照缓存目录")
+                }
+                CaptureFiles.prune(dir, System.currentTimeMillis())
+                CaptureFiles.newPhotoFile(dir, System.currentTimeMillis())
+            }
+            val uri = FileProvider.getUriForFile(host, "${host.packageName}.files", shot)
+            val deferred = CompletableDeferred<Boolean>()
+            pendingCapture = deferred
+            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            try {
+                host.startActivityForResult(intent, ATTACHMENT_CAPTURE_REQUEST)
+            } catch (notFound: ActivityNotFoundException) {
+                pendingCapture = null
+                shot.delete()
+                throw IllegalStateException("没有找到可用的相机应用", notFound)
+            }
+            val ok = try {
+                deferred.await()
+            } finally {
+                if (pendingCapture === deferred) pendingCapture = null
+            }
+            if (!ok) {
+                shot.delete()
+                return mapOf(
+                    "ok" to true,
+                    "cancelled" to true,
+                    "relativePathsJson" to "[]",
+                )
+            }
+            if (!shot.exists() || shot.length() == 0L) {
+                shot.delete()
+                throw IllegalStateException("相机没有保存照片，请再试一次")
+            }
+            // Same pipeline as attachments.pick: copy through Attachments.import so
+            // the CLI can reference @attachments/<name> inside its chroot.
+            val workspace = workspaceRoot()
+            val relative = withContext(Dispatchers.IO) {
+                try {
+                    val file = Attachments.import(host, uri, workspace).getOrThrow()
+                    Attachments.relativePath(workspace, file)
+                } finally {
+                    shot.delete()
+                }
+            }
+            return mapOf(
+                "ok" to true,
+                "cancelled" to false,
+                "relativePathsJson" to BridgeWire.stringListJson(listOf(relative)),
+            )
+        } finally {
+            captureInProgress = false
+        }
     }
 
     // ------------------------------------------------------------- workspace
@@ -1536,6 +1679,8 @@ class BridgePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandl
         const val ENGINE_CACHE_KEY = "claudroid"
 
         private const val ATTACHMENT_REQUEST = 0x0A77
+        private const val ATTACHMENT_CAPTURE_REQUEST = 0x0A7B
+        private const val CAMERA_PERMISSION_REQUEST = 0x0A7C
         private const val SCAN_REQUEST = 0x0A7A
         private const val BACKUP_EXPORT_REQUEST = 0x0A78
         private const val BACKUP_IMPORT_REQUEST = 0x0A79

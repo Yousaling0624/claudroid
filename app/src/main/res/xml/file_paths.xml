@@ -6,4 +6,6 @@
     <files-path name="workspaces" path="workspaces/" />
     <!-- Temporary PNGs staged by share.image; pruned to the newest 10 files / 24 h. -->
     <cache-path name="share" path="share/" />
+    <!-- Camera output for attachments.capture; imported then deleted, pruned to 10 / 24 h. -->
+    <cache-path name="capture" path="capture/" />
 </paths>

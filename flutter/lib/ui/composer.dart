@@ -150,11 +150,11 @@ Future<void> showSlashHelpDialog(
 
 /// The input capsule shared by the home page and the chat page.
 ///
-/// It owns only presentation: expanding the panel for `/`, opening the system
-/// file picker, and holding the picked files as preview chips. The picked paths
-/// are handed to the page on submit (`composeChatPrompt` appends them to the
-/// prompt); the text itself lives in the caller's [controller], so drafts and
-/// "edit and resend" stay under the page's control.
+/// It owns only presentation: expanding the panel for `/`, opening the attachment
+/// menu (camera or document picker), and holding the picked files as preview chips.
+/// The picked paths are handed to the page on submit (`composeChatPrompt` appends
+/// them to the prompt); the text itself lives in the caller's [controller], so
+/// drafts and "edit and resend" stay under the page's control.
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
@@ -320,11 +320,17 @@ class ChatComposerState extends State<ChatComposer> {
     action.onPressed();
   }
 
-  Future<void> pickAttachments() async {
+  /// Shared pick/import flow: one request at a time, dedupe on append, then focus
+  /// the field so the user can type the message. [failure] is the leading phrase
+  /// of the toast, e.g. 「没能添加附件」.
+  Future<void> _addAttachments(
+    Future<List<String>> Function() pick,
+    String failure,
+  ) async {
     if (_picking) return;
     setState(() => _picking = true);
     try {
-      final paths = await widget.bridge.pickAttachments();
+      final paths = await pick();
       if (!mounted || paths.isEmpty) return;
       setState(() {
         for (final path in paths) {
@@ -333,11 +339,17 @@ class ChatComposerState extends State<ChatComposer> {
       });
       widget.focusNode.requestFocus();
     } catch (error) {
-      widget.onToast('没能添加附件（$error）。再试一次。', isError: true);
+      widget.onToast('$failure（$error）。再试一次。', isError: true);
     } finally {
       if (mounted) setState(() => _picking = false);
     }
   }
+
+  Future<void> pickAttachments() =>
+      _addAttachments(widget.bridge.pickAttachments, '没能添加附件');
+
+  Future<void> captureAttachment() =>
+      _addAttachments(widget.bridge.captureAttachment, '没能拍照');
 
   @override
   Widget build(BuildContext context) {
@@ -430,15 +442,35 @@ class ChatComposerState extends State<ChatComposer> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      IconButton(
-                        onPressed: pickAttachments,
-                        icon: _picking
-                            ? ActivityIndicator(
-                                size: 16,
-                                color: scheme.onSurfaceVariant,
-                              )
-                            : const GlyphIcon(AppGlyphs.attachment, size: 19),
-                        tooltip: '添加附件',
+                      PopupAnchor(
+                        placement: PopupPlacement.overAnchorStart,
+                        targetBuilder: (open) => IconButton(
+                          onPressed: () {
+                            if (_picking) return;
+                            open();
+                          },
+                          icon: _picking
+                              ? ActivityIndicator(
+                                  size: 16,
+                                  color: scheme.onSurfaceVariant,
+                                )
+                              : const GlyphIcon(AppGlyphs.attachment, size: 19),
+                          tooltip: '添加附件',
+                        ),
+                        popupBuilder: (_) => PopupMenu(
+                          items: [
+                            PopupMenuItem(
+                              label: '拍照',
+                              glyph: AppGlyphs.camera,
+                              onPressed: () => unawaited(captureAttachment()),
+                            ),
+                            PopupMenuItem(
+                              label: '选择文件',
+                              glyph: AppGlyphs.file,
+                              onPressed: () => unawaited(pickAttachments()),
+                            ),
+                          ],
+                        ),
                       ),
                       Expanded(
                         child: Focus(
