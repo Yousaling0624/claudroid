@@ -4,8 +4,11 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../bridge/api.dart';
+import '../app_search_field.dart';
 import '../glyphs.dart';
+import '../layout.dart';
 import '../press_guard.dart';
+import '../selection_menu.dart';
 import 'log_filter.dart';
 import 'settings_widgets.dart';
 
@@ -112,12 +115,12 @@ class _LogsPageState extends State<LogsPage> {
         if (_lines.isNotEmpty) ...[
           Padding(
             padding: EdgeInsets.fromLTRB(
-              16,
+              kPageInset,
               context.contentTopPadding,
-              16,
+              kPageInset,
               6,
             ),
-            child: SearchField(
+            child: AppSearchField(
               controller: _search,
               hintText: '过滤日志',
               height: 44,
@@ -125,7 +128,7 @@ class _LogsPageState extends State<LogsPage> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+            padding: const EdgeInsets.fromLTRB(kPageInset, 0, kPageInset, 6),
             child: Text(
               hasQuery ? '${visible.length} / ${_lines.length} 行' : '${_lines.length} 行',
               style: AppTextStyle.caption2.of(context).copyWith(
@@ -137,9 +140,9 @@ class _LogsPageState extends State<LogsPage> {
         Expanded(
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(
-              16,
+              kPageInset,
               _lines.isEmpty ? context.contentTopPadding : 0,
-              16,
+              kPageInset,
               24 + context.bottomInset,
             ),
             child: SelectableText(
@@ -148,6 +151,7 @@ class _LogsPageState extends State<LogsPage> {
                   : visible.isEmpty
                       ? '没有匹配的日志'
                       : visible.join('\n'),
+              contextMenuBuilder: appEditableTextMenu,
               style: AppTextStyle.caption1
                   .of(context)
                   .copyWith(fontFamily: 'monospace', height: 1.45),

@@ -10,6 +10,7 @@ import '../bridge/api.dart';
 import '../bridge/events.dart';
 import '../models/models.dart';
 import '../models/remote.dart';
+import 'app_search_field.dart';
 import 'attachments.dart';
 import 'chat_search.dart';
 import 'claude_dir_dialog.dart';
@@ -890,7 +891,7 @@ class _ChatPageState extends State<ChatPage> {
                 ),
                 if (_chat.messages.isNotEmpty && !_searching)
                   Positioned(
-                    right: 16,
+                    right: kPageInset,
                     bottom: 10,
                     child: context.disableAnimations
                         ? (_followBottom
@@ -938,7 +939,7 @@ class _ChatPageState extends State<ChatPage> {
       heightFactor: 1,
       alignment: Alignment.center,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+        padding: const EdgeInsets.fromLTRB(kPageInset, 6, kPageInset, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -977,11 +978,16 @@ class _ChatPageState extends State<ChatPage> {
       heightFactor: 1,
       alignment: Alignment.center,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(16, context.contentTopPadding + 4, 6, 4),
+        padding: EdgeInsets.fromLTRB(
+          kPageInset,
+          context.contentTopPadding + 4,
+          6,
+          4,
+        ),
         child: Row(
           children: [
             Expanded(
-              child: SearchField(
+              child: AppSearchField(
                 controller: _search,
                 focusNode: _searchFocus,
                 hintText: '搜索当前对话',
@@ -1035,9 +1041,9 @@ class _ChatPageState extends State<ChatPage> {
       child: ListView.separated(
         controller: _scroll,
         padding: EdgeInsets.fromLTRB(
-          20,
+          kPageInset,
           _searching ? 8 : context.contentTopPadding,
-          20,
+          kPageInset,
           56,
         ),
         itemCount: messages.length,
@@ -1183,7 +1189,12 @@ class _EmptyConversationState extends State<_EmptyConversation> {
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(28, context.contentTopPadding, 28, 24),
+      padding: EdgeInsets.fromLTRB(
+        kPageInset,
+        context.contentTopPadding,
+        kPageInset,
+        24,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1387,6 +1398,7 @@ class _UserBubble extends StatelessWidget {
                       if (hasBody)
                         SelectableText(
                           text,
+                          contextMenuBuilder: appEditableTextMenu,
                           style: context.listTitleStyle.copyWith(
                             color: scheme.onSurface,
                           ),
@@ -1846,6 +1858,7 @@ class _ThinkingPill extends StatelessWidget {
               ),
               child: SelectableText(
                 text,
+                contextMenuBuilder: appEditableTextMenu,
                 style: AppTextStyle.caption1
                     .of(context)
                     .copyWith(color: scheme.onSurfaceVariant, height: 20 / 13),
@@ -1937,7 +1950,7 @@ class _RemoteHostBanner extends StatelessWidget {
       heightFactor: 1,
       alignment: Alignment.center,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        padding: const EdgeInsets.fromLTRB(kPageInset, 4, kPageInset, 4),
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
           decoration: BoxDecoration(
@@ -2203,6 +2216,7 @@ class _ThinkingFold extends StatelessWidget {
               ),
               child: SelectableText(
                 text,
+                contextMenuBuilder: appEditableTextMenu,
                 style: AppTextStyle.caption1
                     .of(context)
                     .copyWith(color: scheme.onSurfaceVariant, height: 20 / 13),
@@ -2604,6 +2618,7 @@ class _MonoBlockState extends State<_MonoBlock> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: SelectableText(
               widget.text,
+              contextMenuBuilder: appEditableTextMenu,
               style: AppTextStyle.caption1
                   .of(context)
                   .copyWith(

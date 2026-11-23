@@ -6,6 +6,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -81,5 +83,34 @@ class RemoteHostManagerTest {
             scope.cancel()
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `auto passes the preflight when the host advertises it`() {
+        assertNull(
+            RemotePermissionModes.unsupportedReason("nas", "auto", listOf("default", "auto")),
+        )
+    }
+
+    @Test
+    fun `auto is rejected with an upgrade hint when the host omits it`() {
+        val reason = RemotePermissionModes.unsupportedReason(
+            "旧主机",
+            "auto",
+            listOf("default", "acceptEdits", "plan"),
+        )
+        assertNotNull(reason)
+        requireNotNull(reason)
+        assertTrue("names the host", reason.contains("旧主机"))
+        assertTrue("names the mode", reason.contains("自动"))
+        assertTrue("includes supported modes", reason.contains("自动改文件"))
+        assertTrue("offers the safe fallback", reason.contains("每次确认"))
+        assertTrue("tells the user to upgrade", reason.contains("升级 claudroid-bridge"))
+    }
+
+    @Test
+    fun `an empty capability list never blocks a mode`() {
+        assertNull(RemotePermissionModes.unsupportedReason("legacy", "auto", emptyList()))
+        assertNull(RemotePermissionModes.unsupportedReason("legacy", "plan", emptyList()))
     }
 }

@@ -7,21 +7,92 @@ import 'package:prism_ui/prism_ui.dart';
 
 import 'glyphs.dart';
 
-/// The selection menu used by the chat body and the workspace preview.
+/// The selection menu used by every selectable text in the app.
 ///
 /// prism_ui's own menu mirrors the platform's buttons but drops share, and its
 /// select-all closes the menu; here every framework item is mapped, and
 /// selecting all reopens the menu with the fresh selection so the reader can
 /// pick copy or share without starting over.
 Widget appSelectionMenu(BuildContext context, SelectableRegionState state) =>
-    _AppSelectionMenu(state: state);
+    _AppSelectionMenu(
+      owner: state.context,
+      anchors: () => state.contextMenuAnchors,
+      buttons: () => state.contextMenuButtonItems,
+    );
+
+/// The same menu for [SelectableText] and prism_ui's editable text fields,
+/// whose selection lives in an [EditableTextState] instead of a selection
+/// region.
+///
+/// prism's default `TextSelectionMenu.editableText` also closes on select-all,
+/// which is why read-only tool output and search fields lost every action after
+/// "全选". This adapter keeps the framework's button order and adds the
+/// collapsed-selection "选择" word item that prism provides on touch.
+Widget appEditableTextMenu(BuildContext context, EditableTextState state) =>
+    _AppSelectionMenu(
+      owner: state.context,
+      anchors: () => state.contextMenuAnchors,
+      buttons: () => _editableButtons(context, state),
+    );
+
+List<ContextMenuButtonItem> _editableButtons(
+  BuildContext context,
+  EditableTextState state,
+) {
+  final value = state.textEditingValue;
+  final selection = value.selection;
+  final field = state.widget;
+  final canSelectWord = !isDesktopPlatform &&
+      selection.isCollapsed &&
+      !field.obscureText &&
+      field.enableInteractiveSelection &&
+      value.text.isNotEmpty;
+  final buttons = [...state.contextMenuButtonItems];
+  if (canSelectWord) {
+    // The framework has no "select word" kind; prism models it as a custom
+    // item and recognizes it by label. Keep it just before select-all.
+    final item = ContextMenuButtonItem(
+      label: UiLocalizations.of(context).select,
+      onPressed: () => _selectWord(state),
+    );
+    final selectAll = buttons.indexWhere(
+      (button) => button.kind == ContextMenuButtonKind.selectAll,
+    );
+    if (selectAll < 0) {
+      buttons.add(item);
+    } else {
+      buttons.insert(selectAll, item);
+    }
+  }
+  return buttons;
+}
+
+void _selectWord(EditableTextState state) {
+  final value = state.textEditingValue;
+  final word = state.renderEditable.getWordBoundary(value.selection.base);
+  state.userUpdateTextEditingValue(
+    value.copyWith(
+      selection: TextSelection(baseOffset: word.start, extentOffset: word.end),
+    ),
+    SelectionChangedCause.toolbar,
+  );
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (state.mounted) state.showToolbar();
+  });
+}
 
 class _AppSelectionMenu extends StatefulWidget {
-  const _AppSelectionMenu({required this.state});
+  const _AppSelectionMenu({
+    required this.owner,
+    required this.anchors,
+    required this.buttons,
+  });
 
   /// Held rather than snapshotted: every open reads the live button items and
   /// anchors, which is what makes reopening after select-all work.
-  final SelectableRegionState state;
+  final BuildContext owner;
+  final TextSelectionToolbarAnchors Function() anchors;
+  final List<ContextMenuButtonItem> Function() buttons;
 
   @override
   State<_AppSelectionMenu> createState() => _AppSelectionMenuState();
@@ -50,7 +121,7 @@ class _AppSelectionMenuState extends State<_AppSelectionMenu> {
       if (mounted) _updateSelection();
     });
     if (_route == null) return;
-    final keys = _keysOf(widget.state.contextMenuButtonItems);
+    final keys = _keysOf(widget.buttons());
     if (listEquals(keys, _openKeys)) return;
     _close();
     _scheduleOpen();
@@ -90,15 +161,31 @@ class _AppSelectionMenuState extends State<_AppSelectionMenu> {
   List<PopupMenuItem> _menuItems() {
     final localizations = UiLocalizations.of(context);
     final items = <PopupMenuItem>[];
-    for (final button in widget.state.contextMenuButtonItems) {
+    for (final button in widget.buttons()) {
       final onPressed = button.onPressed;
       if (onPressed == null) continue;
       final kind = button.kind;
-      if (kind == ContextMenuButtonKind.copy) {
+      if (kind == ContextMenuButtonKind.cut) {
+        items.add(
+          PopupMenuItem(
+            glyph: Glyphs.cut,
+            label: localizations.cut,
+            onPressed: onPressed,
+          ),
+        );
+      } else if (kind == ContextMenuButtonKind.copy) {
         items.add(
           PopupMenuItem(
             glyph: Glyphs.copy,
             label: localizations.copy,
+            onPressed: onPressed,
+          ),
+        );
+      } else if (kind == ContextMenuButtonKind.paste) {
+        items.add(
+          PopupMenuItem(
+            glyph: Glyphs.paste,
+            label: localizations.paste,
             onPressed: onPressed,
           ),
         );
@@ -123,6 +210,17 @@ class _AppSelectionMenuState extends State<_AppSelectionMenu> {
             },
           ),
         );
+      } else if (kind == ContextMenuButtonKind.custom &&
+          button.label == localizations.select) {
+        // prism's word-level "选择" item; selecting a word reopens the menu
+        // through showToolbar once the selection has settled.
+        items.add(
+          PopupMenuItem(
+            glyph: Glyphs.selectAll,
+            label: localizations.select,
+            onPressed: onPressed,
+          ),
+        );
       }
     }
     return items;
@@ -132,33 +230,32 @@ class _AppSelectionMenuState extends State<_AppSelectionMenu> {
     // Reopening after select-all races the overlay rebuild; whichever path
     // arrives second must not push a duplicate route.
     if (!mounted || _route != null) return;
-    final state = widget.state;
-    if (!state.mounted) return;
+    final owner = widget.owner;
+    if (!owner.mounted) return;
+    final buttons = widget.buttons();
     final items = _menuItems();
-    final navigator = Navigator.maybeOf(state.context);
+    final navigator = Navigator.maybeOf(owner);
     final navigatorBox = navigator?.context.findRenderObject();
     if (items.isEmpty || navigator == null || navigatorBox is! RenderBox) {
       return;
     }
     _updateSelection();
     final route = _route = EditMenuRoute(
-      barrierLabel: UiLocalizations.of(state.context).close,
-      elevated: ElevatedSurfaceTheme.isIn(state.context),
+      barrierLabel: UiLocalizations.of(owner).close,
+      elevated: ElevatedSurfaceTheme.isIn(owner),
       items: items,
       selection: _selection,
     );
-    _openKeys = _keysOf(state.contextMenuButtonItems);
+    _openKeys = _keysOf(buttons);
     // Any request made before a route opened is served by this one.
     _reopenRequested = false;
     unawaited(navigator.push(route).whenComplete(() => _handlePopped(route)));
   }
 
   void _updateSelection() {
-    final box = Navigator.maybeOf(
-      widget.state.context,
-    )?.context.findRenderObject();
+    final box = Navigator.maybeOf(widget.owner)?.context.findRenderObject();
     if (box is! RenderBox || !box.attached) return;
-    final anchors = widget.state.contextMenuAnchors;
+    final anchors = widget.anchors();
     _selection.value = Rect.fromPoints(
       box.globalToLocal(anchors.primaryAnchor),
       box.globalToLocal(anchors.secondaryAnchor ?? anchors.primaryAnchor),

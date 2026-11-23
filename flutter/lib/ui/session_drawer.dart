@@ -3,8 +3,10 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../models/models.dart';
+import 'app_search_field.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
+import 'layout.dart';
 import 'settings/settings_destination.dart';
 import 'settings/settings_dialogs.dart';
 import 'time_format.dart';
@@ -96,7 +98,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
             _header(context),
             _newChat(context),
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+              padding: const EdgeInsets.fromLTRB(kPageInset, 12, kPageInset, 0),
               child: Container(
                 height: 50,
                 padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -104,7 +106,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
                   color: scheme.surfaceContainerHigh,
                   borderRadius: AppRadius.full,
                 ),
-                child: SearchField(
+                child: AppSearchField(
                   controller: _search,
                   hintText: '搜索对话',
                   height: 50,
@@ -131,7 +133,12 @@ class _SessionDrawerState extends State<SessionDrawer> {
                         _allConversations(context, count),
                         for (final group in groups) ...[
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+                            padding: EdgeInsets.fromLTRB(
+                              kListInset,
+                              14,
+                              kListInset,
+                              6,
+                            ),
                             child: Text(
                               group.label,
                               style: AppTextStyle.footnote
@@ -142,7 +149,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
                           for (final session in group.sessions)
                             Padding(
                               padding:
-                                  const EdgeInsets.symmetric(horizontal: 10),
+                                  const EdgeInsets.symmetric(horizontal: kRowGap),
                               child: _SessionRow(
                                 session: session,
                                 selected: session.id == widget.activeId,
@@ -168,7 +175,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
   Widget _allConversations(BuildContext context, int count) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+      padding: const EdgeInsets.fromLTRB(kListInset, 18, kListInset, 0),
       child: Row(
         children: [
           Text(
@@ -329,7 +336,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
   Widget _header(BuildContext context) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 10, 0),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 8, 10, 0),
       child: Row(
         children: [
           Container(
@@ -369,7 +376,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
   Widget _newChat(BuildContext context) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 14, kPageInset, 0),
       child: PressSurface(
         fill: scheme.primaryContainer,
         shape: AppShape.full,

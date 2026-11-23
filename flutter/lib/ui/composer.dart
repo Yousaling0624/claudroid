@@ -10,6 +10,8 @@ import 'attachments.dart';
 import 'dialog_motion.dart';
 import 'fold.dart';
 import 'glyphs.dart';
+import 'layout.dart';
+import 'selection_menu.dart';
 
 /// One entry in the slash palette. [command] is what the user types after `/`;
 /// [label] is the human-readable action shown in the list.
@@ -352,7 +354,12 @@ class ChatComposerState extends State<ChatComposer> {
     );
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + widget.bottomInset),
+      padding: EdgeInsets.fromLTRB(
+        kPageInset,
+        8,
+        kPageInset,
+        8 + widget.bottomInset,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -455,6 +462,7 @@ class ChatComposerState extends State<ChatComposer> {
                           child: TextField(
                             controller: widget.controller,
                             focusNode: widget.focusNode,
+                            contextMenuBuilder: appEditableTextMenu,
                             minLines: 1,
                             maxLines: 6,
                             keyboardType: TextInputType.multiline,
@@ -518,7 +526,7 @@ class ComposerFootnote extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 7, 16, 0),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 7, kPageInset, 0),
       child: Text(
         text,
         textAlign: TextAlign.center,

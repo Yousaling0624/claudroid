@@ -132,6 +132,9 @@ daemon 只保存令牌的 SHA-256 哈希，并支持 `claudroid-bridge devices r
   只读规划 / 完全放行），手机的全局模式只作用于本机引擎。「自动」对应 Claude 官方 Auto：
   由主机侧分类器审核，一般操作不再逐条转发；「每次确认」才是每次工具调用都转发到手机。
   新配对主机默认「自动」；完全放行仍需主机 `allowBypassPermissions`。
+  回合启动前 App 会用 `/v1/health` 的 `permissionModes` 预检：主机不支持所选模式时直接
+  提示升级，不再把 daemon 的 400 文案原样抛给用户。旧版 daemon 不上报该字段（空列表），
+  此时不做拦截，仍由 daemon 校验，以免误伤实际可用的模式。
 - **文件**：设置 → 远程主机 → 浏览主机文件可查看 roots 下的目录，打开/分享会先下载到本机缓存。
 - **重连**：daemon 保留有界事件缓冲；网络恢复后 App 从最后的 `seq` 重放并收敛回合状态，
   重复/交叠的事件按 `seq` 去重。Quick Tunnel 下自动改用长轮询，聊天页顶部仍显示主机离线/
@@ -220,6 +223,7 @@ bash bridge/deploy/install.sh
 | 聊天一直停在「准备中…」 | 主机 daemon 过旧（没有 `/v1/events/batch`）；升级主机上的 `claudroid-bridge`。Quick Tunnel 必须靠轮询回退 |
 | 目录选择为空 | `defaultCwd` / `paths` 不在 `roots` 内，或主机的 `roots` 配错 |
 | 远程会话报“主机没有允许完全放行” | 改用其他权限模式，或在主机配置开启 `allowBypassPermissions` |
+| 远程会话报“claudroid-bridge 版本不支持「自动」权限模式” | 主机 daemon 过旧（0.1.7 之前没有 `auto`）；在主机升级并重启：`npm install -g claudroid-bridge`，或临时改用「每次确认」 |
 | 「自动」模式的工具调用被拒，提示 Auto mode 的 safety check 不可用 | 主机 CLI 走网关/自定义端点时，服务端审查跑不了。在主机环境或 `~/.claude/settings.json` 设 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（用内置分类器），或改用「自动改文件 / 每次确认」 |
 
 ## 9. 当前限制

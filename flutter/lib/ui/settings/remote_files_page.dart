@@ -5,6 +5,8 @@ import 'package:prism_ui/prism_ui.dart';
 import '../../bridge/api.dart';
 import '../../models/remote.dart';
 import '../glyphs.dart';
+import '../layout.dart';
+import '../selection_menu.dart';
 import 'settings_labels.dart';
 import 'settings_widgets.dart';
 
@@ -102,7 +104,7 @@ class _RemoteFilesPageState extends State<RemoteFilesPage> {
         ),
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: kPageInset),
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: context.colorScheme.surfaceBright,
@@ -125,6 +127,7 @@ class _RemoteFilesPageState extends State<RemoteFilesPage> {
                     Expanded(
                       child: SelectableText(
                         _path.isEmpty ? widget.host.defaultCwd : _path,
+                        contextMenuBuilder: appEditableTextMenu,
                         maxLines: 2,
                         style: AppTextStyle.caption1
                             .of(context)
@@ -152,7 +155,7 @@ class _RemoteFilesPageState extends State<RemoteFilesPage> {
             SettingsNote(text: _error!, isError: true),
           if (parent != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: kPageInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: context.colorScheme.surfaceBright,
@@ -170,7 +173,7 @@ class _RemoteFilesPageState extends State<RemoteFilesPage> {
               ),
             ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+            padding: const EdgeInsets.fromLTRB(kPageInset, 18, kPageInset, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

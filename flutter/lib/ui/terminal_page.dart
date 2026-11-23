@@ -12,6 +12,7 @@ import '../bridge/events.dart';
 import '../models/models.dart';
 import 'glyphs.dart';
 import 'layout.dart';
+import 'selection_menu.dart';
 import 'scaffold_bar.dart';
 import 'terminal_buffer.dart';
 
@@ -679,7 +680,8 @@ class _TerminalPageState extends State<TerminalPage> {
   Widget _buildHeader(BuildContext context) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: EdgeInsets.fromLTRB(18, context.contentTopPadding, 18, 6),
+      padding: EdgeInsets.fromLTRB(
+        kPageInset, context.contentTopPadding, kPageInset, 6),
       child: Row(
         children: [
           Expanded(
@@ -1076,6 +1078,7 @@ class _TerminalPageState extends State<TerminalPage> {
             child: TextField(
               controller: _input,
               focusNode: _inputFocus,
+              contextMenuBuilder: appEditableTextMenu,
               enabled: live,
               maxLines: 1,
               keyboardType: TextInputType.text,

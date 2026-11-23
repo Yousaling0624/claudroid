@@ -260,6 +260,13 @@ class RemoteHostManager(
                     "或在主机配置中开启 allowBypassPermissions。",
             )
         }
+        // Defense in depth for callers other than ChatController. The daemon would
+        // answer with a bare 400; failing here names the host and the upgrade path.
+        if (request.permissionMode != RemotePermissionModes.BYPASS) {
+            RemotePermissionModes
+                .unsupportedReason(profile.name, request.permissionMode, health.permissionModes)
+                ?.let { throw RemoteException(it) }
+        }
         rememberHealth(profile, health)
 
         if (isCancelled()) return@withContext -2

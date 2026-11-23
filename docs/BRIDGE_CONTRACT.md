@@ -482,7 +482,10 @@ App 取到扫描文本后先在本地校验 scheme、版本、地址与码长，
 `default` 处理；新配对主机默认 `auto`），远程回合用它而不是手机的全局模式。`auto` 对应
 Claude 官方 Auto（主机侧分类器审核，通常不再逐条转发确认）；`default` 才是每次工具调用
 都转发到手机确认。`allowBypassPermissions` 优先取运行时 health，没有 health 时回退到上次
-持久化的值。
+持久化的值。App 在启动回合前用 health 的 `permissionModes` 预检；该字段为空表示旧 daemon
+不上报能力，此时 App 不拦截任何模式。daemon 拒绝不支持的 `permissionMode` 时返回 400，
+文案包含当前支持的模式列表与「请升级 claudroid-bridge」提示；`bypassPermissions` 未开启
+仍返回 403。
 
 `entriesJson` 与 `workspace.list` 类似，但 `path` 是主机绝对路径：
 

@@ -4,8 +4,11 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/remote.dart';
+import 'dialog_actions.dart';
+import 'dialog_list.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
+import 'layout.dart';
 
 /// What a settings shortcut in the picker should open on the home page.
 /// A normal selection leaves the intent null.
@@ -55,81 +58,102 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
     final selectedHost = _selectedHost;
     return AlertDialog(
       title: '在哪儿执行？',
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop((
-            hostId: _selected,
-            intent: null,
-          )),
-          child: Text(
-            selectedHost == null ? '使用本机' : '使用 ${selectedHost.displayName}',
-          ),
-        ),
-      ],
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 360,
           maxHeight: MediaQuery.sizeOf(context).height * 0.55,
         ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              DialogRowReveal(
-                index: 0,
-                child: _choiceRow(
-                  context,
-                  glyph: AppGlyphs.cpu,
-                  title: '本机',
-                  subtitle: '在手机里通过 PRoot 运行',
-                  selected: _selected == null,
-                  online: true,
-                  settingsKey: const ValueKey('host-picker-settings-local'),
-                  onPressed: () => setState(() => _selected = null),
-                  onConfigure: () => Navigator.of(context).pop((
-                    hostId: null,
-                    intent: RemoteHostPickerIntent.configureLocal,
-                  )),
+        // The list scrolls, the guidance and the actions stay pinned to the
+        // bottom so a long host list never hides the confirmation.
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DialogRowReveal(
+                      index: 0,
+                      child: _choiceRow(
+                        context,
+                        glyph: AppGlyphs.cpu,
+                        title: '本机',
+                        subtitle: '在手机里通过 PRoot 运行',
+                        selected: _selected == null,
+                        online: true,
+                        settingsKey: const ValueKey(
+                          'host-picker-settings-local',
+                        ),
+                        onPressed: () => setState(() => _selected = null),
+                        onConfigure: () => Navigator.of(context).pop((
+                          hostId: null,
+                          intent: RemoteHostPickerIntent.configureLocal,
+                        )),
+                      ),
+                    ),
+                    for (final (index, host) in widget.hosts.hosts.indexed)
+                      DialogRowReveal(
+                        index: index + 1,
+                        child: _choiceRow(
+                          context,
+                          glyph: AppGlyphs.plug,
+                          title: host.displayName,
+                          subtitle: '${host.phaseLabel} · ${host.baseUrl}',
+                          selected: _selected == host.id,
+                          online: host.online,
+                          settingsKey: ValueKey(
+                            'host-picker-settings-${host.id}',
+                          ),
+                          onPressed: () =>
+                              setState(() => _selected = host.id),
+                          onConfigure: () => Navigator.of(context).pop((
+                            hostId: host.id,
+                            intent: RemoteHostPickerIntent.configureHost,
+                          )),
+                        ),
+                      ),
+                    DialogRowReveal(
+                      index: widget.hosts.hosts.length + 1,
+                      child: _addRow(context),
+                    ),
+                  ],
                 ),
               ),
-              for (final (index, host) in widget.hosts.hosts.indexed)
-                DialogRowReveal(
-                  index: index + 1,
-                  child: _choiceRow(
-                    context,
-                    glyph: AppGlyphs.plug,
-                    title: host.displayName,
-                    subtitle: '${host.phaseLabel} · ${host.baseUrl}',
-                    selected: _selected == host.id,
-                    online: host.online,
-                    settingsKey: ValueKey('host-picker-settings-${host.id}'),
-                    onPressed: () => setState(() => _selected = host.id),
-                    onConfigure: () => Navigator.of(context).pop((
-                      hostId: host.id,
-                      intent: RemoteHostPickerIntent.configureHost,
-                    )),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '选择主机后可以再点首页的目录胶囊，指定它在主机上的工作目录。'
+              '远程会话使用主机自己的登录与模型配置。',
+              style: AppTextStyle.caption2.of(context).copyWith(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.4,
+                  ),
+            ),
+            DialogActionRow(
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop((
+                    hostId: _selected,
+                    intent: null,
+                  )),
+                  child: Text(
+                    selectedHost == null
+                        ? '使用本机'
+                        : '使用 ${selectedHost.displayName}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              DialogRowReveal(
-                index: widget.hosts.hosts.length + 1,
-                child: _addRow(context),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '选择主机后可以再点首页的目录胶囊，指定它在主机上的工作目录。'
-                '远程会话使用主机自己的登录与模型配置。',
-                style: AppTextStyle.caption2.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 1.4,
-                    ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -148,67 +172,105 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
   }) {
     final scheme = context.colorScheme;
     // The settings button sits outside the selectable segment so tapping it
-    // never also changes the selected host.
+    // never also changes the selected host. The trailing slots are fixed so
+    // every row's dot, check and gear sit on the same vertical lines.
     return Row(
       children: [
         Expanded(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: onPressed,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(
-                children: [
-                  GlyphIcon(
-                    glyph,
-                    size: 19,
-                    color: selected ? scheme.primary : scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title, style: context.listTitleStyle),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTextStyle.caption2.of(context).copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: kRowGap),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 28,
+                      child: Center(
+                        child: GlyphIcon(
+                          glyph,
+                          size: 18,
+                          color: selected
+                              ? scheme.primary
+                              : scheme.onSurfaceVariant,
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: online ? scheme.success : scheme.onSurfaceVariant,
-                      shape: BoxShape.circle,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.listTitleStyle,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyle.caption2.of(context).copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  if (selected) ...[
-                    const SizedBox(width: 8),
-                    GlyphIcon(Glyphs.check, size: 17, color: scheme.primary),
+                    const SizedBox(width: kRowGap),
+                    SizedBox(
+                      width: 33,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: online
+                                  ? scheme.success
+                                  : scheme.onSurfaceVariant,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 17,
+                            child: selected
+                                ? GlyphIcon(
+                                    Glyphs.check,
+                                    size: 17,
+                                    color: scheme.primary,
+                                  )
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
-                ],
+                ),
               ),
             ),
           ),
         ),
-        IconButton(
-          key: settingsKey,
-          onPressed: onConfigure,
-          tooltip: '设置',
-          padding: const EdgeInsets.all(10),
-          icon: GlyphIcon(
-            AppGlyphs.settings,
-            size: 18,
-            color: scheme.onSurfaceVariant,
+        SizedBox(
+          width: 40,
+          height: 40,
+          child: IconButton(
+            key: settingsKey,
+            onPressed: onConfigure,
+            tooltip: '设置',
+            padding: EdgeInsets.zero,
+            icon: GlyphIcon(
+              AppGlyphs.settings,
+              size: 18,
+              color: scheme.onSurfaceVariant,
+            ),
           ),
         ),
       ],
@@ -216,52 +278,81 @@ class _HostPickerDialogState extends State<_HostPickerDialog> {
   }
 
   /// One quiet row under the host list; it exits to the pairing flow instead
-  /// of selecting anything, so it is not styled as a primary button.
+  /// of selecting anything. Its chevron occupies the same right rail as the
+  /// rows' settings keys, and the fixed trailing slots keep its text column
+  /// on the same edge as the host titles.
   Widget _addRow(BuildContext context) {
     final scheme = context.colorScheme;
-    return GestureDetector(
-      key: const ValueKey('host-picker-add'),
-      behavior: HitTestBehavior.opaque,
-      onTap: () => Navigator.of(context).pop((
-        hostId: null,
-        intent: RemoteHostPickerIntent.addHost,
-      )),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            GlyphIcon(
-              AppGlyphs.plus,
-              size: 19,
-              color: scheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('添加设备', style: context.listTitleStyle),
-                  const SizedBox(height: 2),
-                  Text(
-                    '扫码或手动填写配对码，接入运行 claudroid-bridge 的主机',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTextStyle.caption2.of(context).copyWith(
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            key: const ValueKey('host-picker-add'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(context).pop((
+              hostId: null,
+              intent: RemoteHostPickerIntent.addHost,
+            )),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: kRowGap),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 28,
+                      child: Center(
+                        child: GlyphIcon(
+                          AppGlyphs.plus,
+                          size: 18,
                           color: scheme.onSurfaceVariant,
                         ),
-                  ),
-                ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '添加设备',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.listTitleStyle,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '扫码或手动填写配对码，接入运行 claudroid-bridge 的主机',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTextStyle.caption2.of(context).copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: kRowGap),
+                    const SizedBox(width: 33),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(width: 8),
-            GlyphIcon(
+          ),
+        ),
+        SizedBox(
+          width: 40,
+          height: 40,
+          child: Center(
+            child: GlyphIcon(
               Glyphs.chevronForward,
               size: 15,
               color: scheme.onSurfaceVariant,
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -355,18 +446,6 @@ class _RemoteDirectoryDialogState extends State<_RemoteDirectoryDialog> {
     final parent = listing?.parent;
     return AlertDialog(
       title: '选择主机目录',
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: _loading || _path.isEmpty
-              ? null
-              : () => Navigator.of(context).pop(_path),
-          child: const Text('使用此目录'),
-        ),
-      ],
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 420,
@@ -380,7 +459,7 @@ class _RemoteDirectoryDialogState extends State<_RemoteDirectoryDialog> {
               children: [
                 GlyphIcon(
                   AppGlyphs.folder,
-                  size: 17,
+                  size: 18,
                   color: scheme.primary,
                 ),
                 const SizedBox(width: 8),
@@ -436,46 +515,45 @@ class _RemoteDirectoryDialogState extends State<_RemoteDirectoryDialog> {
                     for (final (index, dir) in dirs.indexed)
                       DialogRowReveal(
                         index: index,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _loading ? null : () => _load(dir.path),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 9),
-                            child: Row(
-                              children: [
-                                GlyphIcon(
-                                  AppGlyphs.folder,
-                                  size: 18,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    dir.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: context.listTitleStyle,
-                                  ),
-                                ),
-                                GlyphIcon(
-                                  Glyphs.chevronForward,
-                                  size: 15,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ],
-                            ),
+                        child: DialogListRow(
+                          leading: GlyphIcon(
+                            AppGlyphs.folder,
+                            size: 18,
+                            color: scheme.onSurfaceVariant,
                           ),
+                          title: dir.name,
+                          trailing: GlyphIcon(
+                            Glyphs.chevronForward,
+                            size: 15,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          onPressed: _loading ? null : () => _load(dir.path),
                         ),
                       ),
                   ],
                 ),
               ),
             ),
+            const SizedBox(height: kRowGap),
             Text(
               '只能进入主机配置的允许目录。',
               style: AppTextStyle.caption2.of(context).copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
+            ),
+            DialogActionRow(
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: _loading || _path.isEmpty
+                      ? null
+                      : () => Navigator.of(context).pop(_path),
+                  child: const Text('使用此目录'),
+                ),
+              ],
             ),
           ],
         ),

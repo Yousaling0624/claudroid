@@ -125,6 +125,28 @@ void main() {
     expect(choice?.hostId, isNull);
   });
 
+  testWidgets('a long host name stays on one ellipsized line', (tester) async {
+    const longName = 'PC-20260824HJFC-WORKSTATION-WITH-A-LONG-NAME';
+    const hosts = RemoteHostsState(
+      hosts: [
+        RemoteHost(
+          id: 'h1',
+          name: longName,
+          baseUrl: 'https://claude.example',
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      _harness(hosts: hosts, onResult: (_) {}),
+    );
+    await tester.tap(find.text('打开主机选择'));
+    await tester.pumpAndSettle();
+
+    final title = tester.widget<Text>(find.text(longName));
+    expect(title.maxLines, 1);
+    expect(title.overflow, TextOverflow.ellipsis);
+  });
+
   testWidgets('a normal row tap still returns a plain selection', (
     tester,
   ) async {

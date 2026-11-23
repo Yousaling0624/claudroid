@@ -5,6 +5,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../../models/model_info.dart';
+import '../app_search_field.dart';
 import '../dialog_motion.dart';
 import '../glass_controls.dart';
 import '../glyphs.dart';
@@ -259,7 +260,7 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
                 ),
               ],
             ),
-            SearchField(
+            AppSearchField(
               controller: _search,
               hintText: '搜索名称、ID 或分组',
               height: 44,

@@ -4,6 +4,8 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'dialog_actions.dart';
+import 'dialog_list.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
 
@@ -135,76 +137,88 @@ class _ClaudeDirDialogState extends State<_ClaudeDirDialog> {
         : claudeDirChildren(listing);
     return AlertDialog(
       title: 'Claude 工作目录',
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(''),
-          child: const Text('工作区根目录'),
-        ),
-        TextButton(
-          onPressed: _loading ? null : () => Navigator.of(context).pop(_path),
-          child: const Text('选择此目录'),
-        ),
-      ],
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 340,
           maxHeight: MediaQuery.sizeOf(context).height * 0.6,
         ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Claude Code 会把这个目录当作项目根目录（容器内路径 /work/…）',
-                style: AppTextStyle.caption1.of(context).copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 1.4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Claude Code 会把这个目录当作项目根目录（容器内路径 /work/…）',
+                      style: AppTextStyle.caption1.of(context).copyWith(
+                            color: scheme.onSurfaceVariant,
+                            height: 1.4,
+                          ),
                     ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                claudeDirLabel(_path),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: AppTextStyle.caption2.of(context).copyWith(
-                      fontFamily: 'monospace',
-                      color: scheme.onSurfaceVariant,
+                    const SizedBox(height: 8),
+                    Text(
+                      claudeDirLabel(_path),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTextStyle.caption2.of(context).copyWith(
+                            fontFamily: 'monospace',
+                            color: scheme.onSurfaceVariant,
+                          ),
                     ),
-              ),
-              const SizedBox(height: 4),
-              if (_path.isNotEmpty) _upRow(context),
-              if (_loading)
-                SizedBox(
-                  height: 88,
-                  child: Center(
-                    child: ActivityIndicator(
-                      size: 22,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                )
-              else if (listing == null)
-                _errorRow(context)
-              else if (children.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  child: Text(
-                    '没有子目录',
-                    textAlign: TextAlign.center,
-                    style: AppTextStyle.caption1.of(context).copyWith(
-                          color: scheme.onSurfaceVariant,
+                    const SizedBox(height: 4),
+                    if (_path.isNotEmpty) _upRow(context),
+                    if (_loading)
+                      SizedBox(
+                        height: 88,
+                        child: Center(
+                          child: ActivityIndicator(
+                            size: 22,
+                            color: scheme.onSurfaceVariant,
+                          ),
                         ),
-                  ),
-                )
-              else
-                for (final (index, entry) in children.indexed)
-                  DialogRowReveal(
-                    index: index,
-                    child: _dirRow(context, entry),
-                  ),
-            ],
-          ),
+                      )
+                    else if (listing == null)
+                      _errorRow(context)
+                    else if (children.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        child: Text(
+                          '没有子目录',
+                          textAlign: TextAlign.center,
+                          style: AppTextStyle.caption1.of(context).copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      )
+                    else
+                      for (final (index, entry) in children.indexed)
+                        DialogRowReveal(
+                          index: index,
+                          child: _dirRow(context, entry),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+            DialogActionRow(
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(''),
+                  child: const Text('工作区根目录'),
+                ),
+                TextButton(
+                  onPressed: _loading
+                      ? null
+                      : () => Navigator.of(context).pop(_path),
+                  child: const Text('选择此目录'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -212,64 +226,30 @@ class _ClaudeDirDialogState extends State<_ClaudeDirDialog> {
 
   Widget _upRow(BuildContext context) {
     final scheme = context.colorScheme;
-    return Semantics(
-      button: true,
-      label: '上一级目录',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _loading ? null : () => _load(parentClaudeDir(_path)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            children: [
-              GlyphIcon(
-                Glyphs.chevronBack,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Text('.. 上一级', style: context.listTitleStyle),
-              ),
-            ],
-          ),
-        ),
+    return DialogListRow(
+      leading: GlyphIcon(
+        Glyphs.chevronBack,
+        size: 18,
+        color: scheme.onSurfaceVariant,
       ),
+      title: '.. 上一级',
+      semanticLabel: '上一级目录',
+      onPressed: _loading ? null : () => _load(parentClaudeDir(_path)),
     );
   }
 
   Widget _dirRow(BuildContext context, WorkspaceEntry entry) {
     final scheme = context.colorScheme;
-    return Semantics(
-      button: true,
-      label: '进入 ${entry.name}',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _loading ? null : () => _load(entry.path),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            children: [
-              GlyphIcon(AppGlyphs.folder, size: 18, color: scheme.primary),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Text(
-                  entry.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: context.listTitleStyle,
-                ),
-              ),
-              const SizedBox(width: 8),
-              GlyphIcon(
-                Glyphs.chevronForward,
-                size: 15,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-        ),
+    return DialogListRow(
+      leading: GlyphIcon(AppGlyphs.folder, size: 18, color: scheme.primary),
+      title: entry.name,
+      semanticLabel: '进入 ${entry.name}',
+      trailing: GlyphIcon(
+        Glyphs.chevronForward,
+        size: 15,
+        color: scheme.onSurfaceVariant,
       ),
+      onPressed: _loading ? null : () => _load(entry.path),
     );
   }
 

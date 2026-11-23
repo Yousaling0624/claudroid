@@ -4,8 +4,10 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'dialog_list.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
+import 'layout.dart';
 import 'settings/settings_dialogs.dart';
 
 /// Opens the workspace picker. Returns `true` when the active workspace changed,
@@ -204,32 +206,21 @@ class _WorkspaceSwitcherDialogState extends State<_WorkspaceSwitcherDialog> {
                   margin: const EdgeInsets.symmetric(vertical: 6),
                   color: scheme.outlineVariant.withValues(alpha: 0.5),
                 ),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _busy ? null : _create,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        _busyId == 'create'
-                            ? ActivityIndicator(
-                                size: 16,
-                                color: scheme.onSurfaceVariant,
-                              )
-                            : GlyphIcon(
-                                AppGlyphs.plus,
-                                size: 17,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                        const SizedBox(width: 11),
-                        Text(
-                          '新建工作区…',
-                          style: context.listTitleStyle,
+                DialogListRow(
+                  leading: _busyId == 'create'
+                      ? ActivityIndicator(
+                          size: 16,
+                          color: scheme.onSurfaceVariant,
+                        )
+                      : GlyphIcon(
+                          AppGlyphs.plus,
+                          size: 18,
+                          color: scheme.onSurfaceVariant,
                         ),
-                      ],
-                    ),
-                  ),
+                  title: '新建工作区…',
+                  onPressed: _busy ? null : _create,
                 ),
+                const SizedBox(height: kRowGap),
                 Text(
                   '切换后，新回合会在这个工作区的 /work 下执行。',
                   style: AppTextStyle.caption2.of(context).copyWith(
@@ -248,49 +239,38 @@ class _WorkspaceSwitcherDialogState extends State<_WorkspaceSwitcherDialog> {
     final scheme = context.colorScheme;
     final active = space.id == _spaces.activeId;
     final busy = _busyId == space.id;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _busy ? null : () => _select(space),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            GlyphIcon(
-              AppGlyphs.folder,
-              size: 18,
-              color: active ? scheme.primary : scheme.onSurfaceVariant,
+    return DialogListRow(
+      leading: GlyphIcon(
+        AppGlyphs.folder,
+        size: 18,
+        color: active ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+      title: space.name,
+      onPressed: _busy ? null : () => _select(space),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (busy)
+            ActivityIndicator(size: 14, color: scheme.onSurfaceVariant)
+          else if (active)
+            GlyphIcon(Glyphs.check, size: 17, color: scheme.primary),
+          if (!space.isDefault) ...[
+            IconButton(
+              onPressed: _busy ? null : () => _rename(space),
+              icon: const GlyphIcon(AppGlyphs.edit, size: 16),
+              iconSize: 16,
+              padding: const EdgeInsets.all(6),
+              tooltip: '重命名',
             ),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Text(
-                space.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: context.listTitleStyle,
-              ),
+            IconButton(
+              onPressed: _busy ? null : () => _remove(space),
+              icon: const GlyphIcon(AppGlyphs.trash, size: 16),
+              iconSize: 16,
+              padding: const EdgeInsets.all(6),
+              tooltip: '删除',
             ),
-            if (busy)
-              ActivityIndicator(size: 14, color: scheme.onSurfaceVariant)
-            else if (active)
-              GlyphIcon(Glyphs.check, size: 17, color: scheme.primary),
-            if (!space.isDefault) ...[
-              IconButton(
-                onPressed: _busy ? null : () => _rename(space),
-                icon: const GlyphIcon(AppGlyphs.edit, size: 16),
-                iconSize: 16,
-                padding: const EdgeInsets.all(6),
-                tooltip: '重命名',
-              ),
-              IconButton(
-                onPressed: _busy ? null : () => _remove(space),
-                icon: const GlyphIcon(AppGlyphs.trash, size: 16),
-                iconSize: 16,
-                padding: const EdgeInsets.all(6),
-                tooltip: '删除',
-              ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }

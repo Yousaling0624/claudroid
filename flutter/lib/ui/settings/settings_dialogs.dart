@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../dialog_motion.dart';
+import '../selection_menu.dart';
 import 'settings_controller.dart';
 
 /// Text prompt used by every editable settings row.
@@ -111,6 +112,7 @@ class _SettingsTextPromptState extends State<SettingsTextPrompt> {
                   controller: _controller,
                   focusNode: _focus,
                   autofocus: true,
+                  contextMenuBuilder: appEditableTextMenu,
                   maxLength: widget.maxLength,
                   keyboardType: widget.keyboardType ??
                       (singleLine

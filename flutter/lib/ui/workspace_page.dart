@@ -8,6 +8,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../models/models.dart';
+import 'app_search_field.dart';
 import 'dialog_motion.dart';
 import 'glass_controls.dart';
 import 'glyphs.dart';
@@ -400,15 +401,15 @@ class _WorkspacePageState extends State<WorkspacePage> {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-              18,
+              kPageInset,
               context.contentTopPadding,
-              18,
+              kPageInset,
               2,
             ),
             child: _buildBreadcrumb(context),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
+            padding: const EdgeInsets.fromLTRB(kPageInset, 0, kPageInset, 4),
             child: Text(
               subtitle,
               maxLines: 1,
@@ -492,11 +493,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
         ? '默认顺序'
         : '${_sortMode!.label} ${_sortAscending ? '升序' : '降序'}';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 2, 12, 6),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 2, 12, 6),
       child: Row(
         children: [
           Expanded(
-            child: SearchField(
+            child: AppSearchField(
               controller: _filter,
               hintText: '筛选文件',
               height: 40,
@@ -686,9 +687,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
         children: [
           Padding(
             padding: EdgeInsets.fromLTRB(
-              18,
+              kPageInset,
               context.contentTopPadding,
-              18,
+              kPageInset,
               6,
             ),
             child: Text(
@@ -772,7 +773,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return _withPreviewNotice(
         preview,
         SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(18, 2, 18, 28 + context.bottomInset),
+          padding: EdgeInsets.fromLTRB(
+            kPageInset, 2, kPageInset, 28 + context.bottomInset),
           // MarkdownText 只负责排版，选择域由这里统一提供。
           child: SelectionArea(
             contextMenuBuilder: appSelectionMenu,
@@ -794,13 +796,15 @@ class _WorkspacePageState extends State<WorkspacePage> {
     );
     final body = _codeWrap
         ? SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(18, 2, 18, 28 + context.bottomInset),
+            padding: EdgeInsets.fromLTRB(
+            kPageInset, 2, kPageInset, 28 + context.bottomInset),
             child: selection,
           )
         : SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(18, 2, 18, 28 + context.bottomInset),
+              padding: EdgeInsets.fromLTRB(
+            kPageInset, 2, kPageInset, 28 + context.bottomInset),
               // prism 的 SelectableText 内部是只读 EditableText，在横向滚动视图的
               // 无界宽度里会布局失败并画不出字；Text + SelectionArea 既可选择又能量出
               // 真实的独占宽度。
@@ -817,7 +821,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(18, 4, 18, 8),
+          padding: const EdgeInsets.fromLTRB(kPageInset, 4, kPageInset, 8),
           child: Text(
             '内容较大，仅显示开头部分（共 ${_humanBytes(preview.size)}）。',
             style: AppTextStyle.caption2.of(context).copyWith(

@@ -454,9 +454,9 @@ class _HomePageState extends State<HomePage> {
                   maxWidth: kHomeContentWidth,
                   child: SingleChildScrollView(
                     padding: EdgeInsets.fromLTRB(
-                      26,
+                      kPageInset,
                       context.contentTopPadding,
-                      26,
+                      kPageInset,
                       8,
                     ),
                     child: ConstrainedBox(
@@ -717,7 +717,7 @@ class _SuggestionStrip extends StatelessWidget {
           key: ValueKey(loading),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+            padding: const EdgeInsets.fromLTRB(kPageInset, 2, kPageInset, 8),
             child: Row(
               children: [
                 if (loading)
@@ -784,7 +784,7 @@ class _EngineHint extends StatelessWidget {
     };
     final dot = engine.phase == 'Failed' ? scheme.error : scheme.primary;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 0, kPageInset, 8),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onPressed,
@@ -882,7 +882,7 @@ class _HostSelectionBar extends StatelessWidget {
     final scheme = context.colorScheme;
     final remote = host;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 0, kPageInset, 6),
       child: Wrap(
         alignment: WrapAlignment.center,
         crossAxisAlignment: WrapCrossAlignment.center,

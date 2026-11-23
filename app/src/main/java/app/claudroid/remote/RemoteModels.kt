@@ -180,6 +180,33 @@ object RemotePermissionModes {
 
     val ALLOWED = setOf(DEFAULT, AUTO, "acceptEdits", "plan", BYPASS)
 
+    private val LABELS = mapOf(
+        DEFAULT to "每次确认",
+        AUTO to "自动",
+        "acceptEdits" to "自动改文件",
+        "plan" to "只读规划",
+        BYPASS to "完全放行",
+    )
+
+    fun label(mode: String): String = LABELS[mode] ?: mode
+
+    /**
+     * Explains why [mode] cannot run on a host that advertised [supported], or returns
+     * null when it may proceed. Empty [supported] is an older daemon without capability
+     * reporting: it still validates every request, so a guess here would wrongly block
+     * modes that actually work. Only a non-empty list that omits [mode] is a hard signal.
+     */
+    fun unsupportedReason(hostName: String, mode: String, supported: List<String>): String? {
+        if (supported.isEmpty() || mode in supported) return null
+        val current = supported.map(::label).joinToString("、")
+        // Old daemons always accept default; fall back to whatever they do report if
+        // they ever stop doing so.
+        val fallback = supported.firstOrNull { it == DEFAULT } ?: supported.first()
+        return "主机「$hostName」的 claudroid-bridge 版本不支持「${label(mode)}」权限模式" +
+            "（主机当前支持：$current）。请先在主机上升级 claudroid-bridge" +
+            "（npm install -g claudroid-bridge），或改用「${label(fallback)}」。"
+    }
+
     /**
      * hosts.json may predate this field or be hand-edited. The daemon rejects
      * anything outside [ALLOWED], so the UI and chat only ever see a valid value.

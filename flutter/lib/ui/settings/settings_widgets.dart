@@ -7,6 +7,7 @@ import '../glyphs.dart';
 import '../layout.dart';
 import '../palette.dart';
 import '../scaffold_bar.dart';
+import '../selection_menu.dart';
 
 /// A settings page: floating bar, back button, and a grouped list that rebuilds
 /// from [listenable]. Subpages use this instead of repeating the scaffold.
@@ -90,12 +91,12 @@ class SettingsGroup extends StatelessWidget {
     final radius = BorderRadius.circular(22);
     final divider = scheme.outlineVariant.withValues(alpha: 0.55);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: kPageInset),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: EdgeInsets.fromLTRB(8, first ? 4 : 26, 8, 10),
+            padding: EdgeInsets.fromLTRB(8, first ? 4 : kSectionGap, 8, 10),
             child: Text(
               title,
               style: AppTextStyle.callout
@@ -374,6 +375,7 @@ class SettingsCopyRow extends StatelessWidget {
       onPressed: onPressed,
       subtitle: SelectableText(
         value,
+        contextMenuBuilder: appEditableTextMenu,
         style: context.listCaptionStyle.copyWith(
           fontFamily: 'monospace',
           height: 1.35,
@@ -492,7 +494,7 @@ class SettingsNote extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = context.colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+      padding: const EdgeInsets.fromLTRB(kPageInset, 8, kPageInset, 10),
       child: Text(
         text,
         style: AppTextStyle.caption1

@@ -566,6 +566,17 @@ class ChatController(private val container: AppContainer, val sessionId: String)
             )
             return null
         }
+        // An old daemon rejects the request with a bare 400. Check the advertised
+        // capabilities first so the transcript says why and what to do next. Bypass
+        // keeps its dedicated check above: there the cause is config, not a version.
+        if (remotePermissionMode != RemotePermissionModes.BYPASS) {
+            RemotePermissionModes
+                .unsupportedReason(host.name, remotePermissionMode, health.permissionModes)
+                ?.let {
+                    appendError(it)
+                    return null
+                }
+        }
         val cwd = storedCwd?.takeIf { it.isNotBlank() }
             ?: health.defaultCwd.ifBlank { host.defaultCwd }
         if (cwd.isBlank()) {

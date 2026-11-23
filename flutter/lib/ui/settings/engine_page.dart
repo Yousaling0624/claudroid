@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 import '../glass_controls.dart';
 import '../glyphs.dart';
 import '../press_guard.dart';
+import '../selection_menu.dart';
 import 'settings_controller.dart';
 import 'settings_dialogs.dart';
 import 'settings_labels.dart';
@@ -311,13 +312,18 @@ class EnginePage extends StatelessWidget {
             title: const Text('Root 探测报告'),
             subtitle: SelectableText(
               controller.rootReport,
+              contextMenuBuilder: appEditableTextMenu,
               style: context.listCaptionStyle,
             ),
           ),
         if (selfTest.isNotEmpty)
           DecorationListItem(
             title: const Text('自检报告'),
-            subtitle: SelectableText(selfTest, style: context.listCaptionStyle),
+            subtitle: SelectableText(
+              selfTest,
+              contextMenuBuilder: appEditableTextMenu,
+              style: context.listCaptionStyle,
+            ),
           ),
       ],
     );

@@ -5,7 +5,7 @@ import { EventBus } from "../src/events.js";
 import { FileService } from "../src/files.js";
 import { PermissionBroker } from "../src/permissions.js";
 import type { ClaudeRunner } from "../src/runner.js";
-import { TurnManager } from "../src/turns.js";
+import { TurnManager, unsupportedPermissionModeError } from "../src/turns.js";
 import type { BridgeEvent } from "../src/types.js";
 import { cleanup, FakeRunner, tempDir, waitFor } from "./helpers.js";
 
@@ -174,6 +174,31 @@ describe("TurnManager", () => {
     const done = await waitForFinished(harness, started.turnId);
     expect(done.status).toBe("done");
     expect(runner.requests[0].permissionMode).toBe("auto");
+  });
+
+  it("explains an unsupported mode with the supported list and an upgrade hint", async () => {
+    // A mode added to the app after this daemon was installed (e.g. auto on 0.1.6).
+    const error = unsupportedPermissionModeError("auto", [
+      "default",
+      "acceptEdits",
+      "plan",
+    ]);
+    expect(error.status).toBe(400);
+    expect(error.message).toContain("auto");
+    expect(error.message).toContain("default、acceptEdits、plan");
+    expect(error.message).toContain("请升级 claudroid-bridge");
+
+    const harness = await makeHarness(new FakeRunner());
+    const rejected = await harness.turns
+      .start("device-1", {
+        cwd: harness.root,
+        prompt: "x",
+        permissionMode: "dontAsk" as never,
+      })
+      .catch((e: unknown) => e);
+    expect(rejected).toMatchObject({ status: 400 });
+    expect((rejected as Error).message).toContain("请升级 claudroid-bridge");
+    expect((rejected as Error).message).toContain("default");
   });
 
   it("gates bypassPermissions behind host configuration", async () => {

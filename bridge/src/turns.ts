@@ -38,6 +38,23 @@ export interface TurnManagerDeps {
   config: BridgeConfig;
 }
 
+/**
+ * A bare "不支持的权限模式" leaves the phone with no clue that the host merely needs
+ * an upgrade. Name the modes this daemon accepts (and keep 400, not 500).
+ */
+export function unsupportedPermissionModeError(
+  mode: string,
+  allowed: readonly PermissionMode[],
+): HttpError {
+  const raw = String(mode).slice(0, 40);
+  return new HttpError(
+    `不支持的权限模式「${raw}」。当前 claudroid-bridge 支持：${allowed.join("、")}。` +
+      "请升级 claudroid-bridge 到最新版本（npm install -g claudroid-bridge），" +
+      "或改用上面列出的权限模式。",
+    400,
+  );
+}
+
 export class TurnManager {
   private readonly turns = new Map<string, TurnState>();
 
@@ -62,12 +79,10 @@ export class TurnManager {
       ? [...SAFE_PERMISSION_MODES, "bypassPermissions"]
       : SAFE_PERMISSION_MODES;
     if (!allowed.includes(permissionMode)) {
-      throw new HttpError(
-        permissionMode === "bypassPermissions"
-          ? "主机没有允许 bypassPermissions。"
-          : "不支持的权限模式。",
-        permissionMode === "bypassPermissions" ? 403 : 400,
-      );
+      if (permissionMode === "bypassPermissions") {
+        throw new HttpError("主机没有允许 bypassPermissions。", 403);
+      }
+      throw unsupportedPermissionModeError(String(permissionMode), allowed);
     }
     for (const turn of this.turns.values()) {
       if (turn.deviceId === deviceId && turn.status === "running") {
