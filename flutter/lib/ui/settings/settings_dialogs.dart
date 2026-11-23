@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../dialog_motion.dart';
+import '../secret_field.dart';
 import '../selection_menu.dart';
 import 'settings_controller.dart';
 
@@ -98,7 +99,7 @@ class _SettingsTextPromptState extends State<SettingsTextPrompt> {
           curve: const Cubic(0.0, 0.0, 0.2, 1.0),
           alignment: AlignmentDirectional.topCenter,
           child: widget.obscure
-              ? SecretTextFormField(
+              ? AppSecretTextFormField(
                   controller: _controller,
                   focusNode: _focus,
                   autofocus: true,

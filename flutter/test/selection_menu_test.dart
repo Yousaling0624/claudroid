@@ -1,4 +1,5 @@
 import 'package:claudroid_ui/ui/localizations.dart';
+import 'package:claudroid_ui/ui/secret_field.dart';
 import 'package:claudroid_ui/ui/selection_menu.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -45,6 +46,31 @@ Widget _editableHarness() => PrismApp(
               'hello world',
               contextMenuBuilder: appEditableTextMenu,
               style: TextStyle(fontSize: 18),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+Widget _secretHarness(TextEditingController controller) => PrismApp(
+  localizationsDelegates: const [ZhUiLocalizations.delegate],
+  supportedLocales: const [Locale('zh'), Locale('en')],
+  home: ViewScope(
+    size: const Size(400, 800),
+    isMobile: true,
+    child: Builder(
+      builder: (context) => Surface(
+        color: context.colorScheme.surface,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: SizedBox(
+            width: 220,
+            child: AppSecretTextFormField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(),
             ),
           ),
         ),
@@ -102,6 +128,37 @@ void main() {
       // text is already selected.
       expect(find.text('复制'), findsOneWidget);
       expect(find.text('分享'), findsOneWidget);
+      expect(find.text('全选'), findsNothing);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets(
+    'secret field offers copy after select all once revealed',
+    (tester) async {
+      final controller = TextEditingController(text: 'hello world');
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(_secretHarness(controller));
+      await tester.pumpAndSettle();
+
+      // A secret is not copyable while it is masked; reveal it first.
+      await tester.tap(find.byType(IconButton));
+      await tester.pumpAndSettle();
+      await tester.longPressAt(
+        tester.getTopLeft(find.byType(AppSecretTextFormField)) +
+            const Offset(30, 12),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('复制'), findsOneWidget);
+      expect(find.text('全选'), findsOneWidget);
+
+      await tester.tap(find.text('全选'));
+      await tester.pumpAndSettle();
+
+      // The menu reopens on the fresh selection instead of closing, so the key
+      // can still be copied.
+      expect(find.text('复制'), findsOneWidget);
       expect(find.text('全选'), findsNothing);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.android),
