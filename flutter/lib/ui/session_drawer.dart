@@ -3,6 +3,7 @@ import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
 
 import '../models/models.dart';
+import '../models/remote.dart';
 import 'app_search_field.dart';
 import 'dialog_motion.dart';
 import 'glyphs.dart';
@@ -23,23 +24,32 @@ class SessionDrawer extends StatefulWidget {
     required this.sessions,
     required this.activeId,
     required this.engine,
+    required this.activeHost,
     required this.onSelect,
     required this.onNew,
     required this.onRename,
     required this.onDelete,
+    required this.onChooseHost,
     required this.onWorkspace,
+    required this.onOpenHostSettings,
     required this.onSettings,
     required this.onClose,
   });
 
+  /// Only the current host's conversations; switching hosts swaps this list.
   final List<ChatSession> sessions;
   final String? activeId;
   final EngineState engine;
+
+  /// Null means the local engine.
+  final RemoteHost? activeHost;
   final ValueChanged<String> onSelect;
   final VoidCallback onNew;
   final void Function(String id, String title) onRename;
   final ValueChanged<String> onDelete;
+  final VoidCallback onChooseHost;
   final VoidCallback onWorkspace;
+  final ValueChanged<String> onOpenHostSettings;
   final ValueChanged<SettingsDestination> onSettings;
   final VoidCallback onClose;
 
@@ -97,6 +107,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
           children: [
             _header(context),
             _newChat(context),
+            _hostBar(context),
             Padding(
               padding: const EdgeInsets.fromLTRB(kPageInset, 12, kPageInset, 0),
               child: Container(
@@ -194,10 +205,128 @@ class _SessionDrawerState extends State<SessionDrawer> {
     );
   }
 
+  /// Remote status replaces the local engine pill: showing PRoot state while
+  /// the current host is remote would describe the wrong executor.
+  Widget _hostFooter(BuildContext context, RemoteHost host) {
+    final scheme = context.colorScheme;
+    final dot = host.failed
+        ? scheme.error
+        : (host.online ? scheme.success : scheme.onSurfaceVariant);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        12,
+        8,
+        12,
+        8 + MediaQuery.paddingOf(context).bottom,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Semantics(
+              button: true,
+              label: '当前主机：${host.displayName} · ${host.phaseLabel}，打开主机设置',
+              child: PressSurface(
+                fill: scheme.surfaceContainerHigh,
+                shape: AppShape.full,
+                onPressed: () => widget.onOpenHostSettings(host.id),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: SizedBox(
+                  height: 56,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceBright,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: GlyphIcon(
+                            AppGlyphs.plug,
+                            size: 18,
+                            color: scheme.primary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              host.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTextStyle.footnote
+                                  .of(context, emphasized: true)
+                                  .copyWith(color: scheme.onSurface),
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: dot,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                                Expanded(
+                                  child: Text(
+                                    '远程执行 · ${host.phaseLabel}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppTextStyle.caption2
+                                        .of(context)
+                                        .copyWith(
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GlyphIcon(
+                        Glyphs.picker,
+                        size: 14,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _GlassIconButton(
+            onPressed: widget.onWorkspace,
+            glyph: AppGlyphs.folder,
+            tooltip: '主机文件',
+          ),
+          const SizedBox(width: 8),
+          _GlassIconButton(
+            onPressed: () => widget.onSettings(SettingsDestination.root),
+            glyph: AppGlyphs.settings,
+            tooltip: '设置',
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Pinned footer, the same shape as `DrawerEnginePill` in the Compose drawer:
   /// a two-line status capsule that opens settings, then workspace and settings
-  /// glass buttons.
+  /// glass buttons. Remote hosts use [_hostFooter] instead.
   Widget _footer(BuildContext context) {
+    final host = widget.activeHost;
+    if (host != null) return _hostFooter(context, host);
     final scheme = context.colorScheme;
     final engine = widget.engine;
     final updateAvailable = engine.installedVersion != null &&
@@ -406,9 +535,63 @@ class _SessionDrawerState extends State<SessionDrawer> {
     );
   }
 
+  /// Names the context every row below belongs to. Tapping it opens the same
+  /// host picker as the composer, which persists the switch app-wide.
+  Widget _hostBar(BuildContext context) {
+    final scheme = context.colorScheme;
+    final host = widget.activeHost;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kPageInset, 10, kPageInset, 0),
+      child: PressSurface(
+        fill: scheme.surfaceContainerHigh,
+        shape: AppShape.full,
+        onPressed: widget.onChooseHost,
+        padding: EdgeInsets.zero,
+        child: SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              GlyphIcon(
+                host == null ? AppGlyphs.cpu : AppGlyphs.plug,
+                size: 17,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  host == null ? '本机' : host.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTextStyle.footnote
+                      .of(context, emphasized: true)
+                      .copyWith(color: scheme.onSurface),
+                ),
+              ),
+              Text(
+                host == null ? '会话与设置' : host.phaseLabel,
+                style: AppTextStyle.caption2
+                    .of(context)
+                    .copyWith(color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(width: 6),
+              GlyphIcon(
+                Glyphs.picker,
+                size: 14,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _empty(BuildContext context) {
     final scheme = context.colorScheme;
     final searching = _query.trim().isNotEmpty;
+    final host = widget.activeHost;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 36),
       child: Column(
@@ -417,14 +600,21 @@ class _SessionDrawerState extends State<SessionDrawer> {
           GlyphIcon(AppGlyphs.sparkle, size: 26, color: scheme.onSurfaceVariant),
           const SizedBox(height: 12),
           Text(
-            searching ? '没有找到相关对话' : '还没有对话',
+            searching
+                ? '没有找到相关对话'
+                : (host == null ? '还没有对话' : '这台主机还没有对话'),
+            textAlign: TextAlign.center,
             style: AppTextStyle.subheadline
                 .of(context)
                 .copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 4),
           Text(
-            searching ? '试试标题里的关键词。' : '从上方「新对话」开始。',
+            searching
+                ? '试试标题里的关键词。'
+                : (host == null
+                    ? '从上方「新对话」开始。'
+                    : '从上方「新对话」开始；会话按主机隔离。'),
             textAlign: TextAlign.center,
             style: AppTextStyle.footnote
                 .of(context)

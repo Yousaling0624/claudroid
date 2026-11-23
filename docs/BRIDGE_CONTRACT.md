@@ -443,7 +443,7 @@ Android Keystore AES-GCM 加密后存放在 `files/hosts/hosts.json`，**绝不�
 | `hosts.update` | `id`, `name?`, `baseUrl?`, `accessClientId?`, `accessSecret?`, `permissionMode?` | `{ok, hostsJson}` | 缺省字段保持不变；`accessSecret=""` 表示清除 Cloudflare Access 凭据；`permissionMode` 只接受 `auto` / `default` / `acceptEdits` / `plan` / `bypassPermissions`，其他值返回错误 |
 | `hosts.remove` | `id` | `{ok, hostsJson}` | 同时停止该主机的 SSE；正在跑的 turn 会被取消 |
 | `hosts.test` | `id` | `{ok, healthJson, hostsJson}` | `GET /v1/health`；失败转 `ok:false` |
-| `hosts.setDefault` | `id?` | `{ok, hostsJson}` | 空值取消默认主机 |
+| `hosts.setDefault` | `id?` | `{ok, hostsJson}` | 设置**当前主机**：会话抽屉、首页与设置根页都按它过滤；空值切回本机。选择持久化在 `hosts.json` |
 | `hosts.browse` | `id`, `path?` | `{ok, path, entriesJson}` | `path` 缺省为主机 `defaultCwd`；路径必须落在主机 roots 内 |
 | `hosts.download` | `id`, `path` | `{ok, localPath, name, mime, size, modifiedAt}` | 下载到 `cacheDir/share/`，仅供调试/后续预览 |
 | `hosts.open` | `id`, `path` | `{ok}` | 下载后经 FileProvider `ACTION_VIEW` |

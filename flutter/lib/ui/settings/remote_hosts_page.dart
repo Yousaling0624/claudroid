@@ -73,7 +73,7 @@ class RemoteHostsPage extends StatelessWidget {
   String _hostValue(RemoteHostsState hosts, RemoteHost host) {
     final isDefault = hosts.defaultHostId == host.id;
     final phase = host.phaseLabel;
-    return isDefault ? '默认 · $phase' : phase;
+    return isDefault ? '当前 · $phase' : phase;
   }
 }
 

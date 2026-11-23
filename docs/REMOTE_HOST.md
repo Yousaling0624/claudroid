@@ -121,8 +121,13 @@ daemon 只保存令牌的 SHA-256 哈希，并支持 `claudroid-bridge devices r
 
 ## 4. 使用
 
-- **新会话**：首页输入框上方的胶囊选择「本机 / 主机名」，再点目录胶囊选主机上的工作目录。
-  绑定在首次发送时写入会话，之后不可中途切换。
+- **当前主机**：首页输入框上方的胶囊、会话抽屉顶部的主机行都能切换「本机 / 主机名」。
+  切换是**整个应用上下文**的切换：会话抽屉、首页「继续上次」和设置页都只显示当前主机的
+  内容，新会话也绑定到它；选择会持久化，重启后仍是同一台主机。切回「本机」即恢复手机上
+  的会话与设置。会话文件仍保存在手机（按 `hostId` 隔离），主机上直接用 CLI 产生的会话
+  不会出现在这个列表里（见 §9）。
+- **新会话**：选择当前主机后，再点目录胶囊选主机上的工作目录。绑定在首次发送时写入会话，
+  之后不可中途切换。
 - **远程模型**：只读使用主机的默认模型；设置页的模型按钮不会影响远程会话。
 - **附件**：仍用 `@attachments/<name>` 约定。发送前 Kotlin 把本地附件上传到
   `<remoteCwd>/attachments/<name>`，prompt 不变。
@@ -225,12 +230,17 @@ bash bridge/deploy/install.sh
 | 远程会话报“主机没有允许完全放行” | 改用其他权限模式，或在主机配置开启 `allowBypassPermissions` |
 | 远程会话报“claudroid-bridge 版本不支持「自动」权限模式” | 主机 daemon 过旧（0.1.7 之前没有 `auto`）；在主机升级并重启：`npm install -g claudroid-bridge`，或临时改用「每次确认」 |
 | 「自动」模式的工具调用被拒，提示 Auto mode 的 safety check 不可用 | 主机 CLI 走网关/自定义端点时，服务端审查跑不了。在主机环境或 `~/.claude/settings.json` 设 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（用内置分类器），或改用「自动改文件 / 每次确认」 |
+| 远程 WebFetch 报 “Unable to verify if domain … is safe to fetch”，但主机上直接运行 `claude` 正常 | daemon 由 systemd/launchd 启动时不会继承登录 shell 的 `HTTPS_PROXY`，而 WebFetch 的域名预检要访问 `api.anthropic.com`；交互式 CLI 有代理所以正常。新版 daemon 已通过 SDK flag settings 自动设置 `skipWebFetchPreflight`，升级后重启即可。其他联网工具仍需要代理时，在主机服务里配置 `Environment=HTTPS_PROXY=…`（或 `systemctl --user import-environment`） |
 
 ## 9. 当前限制
 
 - 只支持聊天 + 文件；没有远程终端、git 面板或端口转发。
 - 同一时刻一个 turn；多主机并发留到后续版本。
 - 远程模型只读；模型切换在主机侧配置。
+- 会话列表按当前主机隔离，但记录仍保存在手机；主机上 `~/.claude` 里的 CLI 会话尚未同步到
+  手机（需要主机侧新增会话读取协议）。
+- 切换主机不会改变外观、备份等应用级设置；执行相关的设置（权限模式、工作目录、主机文件）
+  跟随当前主机。
 - npm 安装是当前推荐方式。单文件二进制分发（Node SEA / Bun compile）在真机闭环后继续。
   `bridge-release.yml` 在 `bridge/` 代码变更落到 `main` 后通过 npm trusted publishing
   自动发布（无长期 token、无需人工批准），不影响 App 的自动发版。

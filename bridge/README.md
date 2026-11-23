@@ -160,6 +160,12 @@ WantedBy=default.target
 `claudroid-bridge start` 在前台运行并处理 `SIGINT` / `SIGTERM`。配对码写入
 `~/.config/claudroid-bridge/pair.json`（0600），需要时用 `claudroid-bridge pair` 查看。
 
+systemd / launchd 启动的 daemon **不会继承登录 shell 的环境变量**。如果主机靠
+`HTTPS_PROXY` 才能访问供应商端点，请在单元里显式写 `Environment=HTTPS_PROXY=…`
+（以及需要的 `NO_PROXY`）。WebFetch 的域名预检是例外：`sdk-runner` 会通过 SDK 的 flag
+settings 设置 `skipWebFetchPreflight`，因此即使没有代理，抓取目标网页也不会先卡在
+`api.anthropic.com` 的预检上。
+
 ### 自动部署（CD）
 
 [`deploy/`](deploy/) 提供可重复安装的 systemd **用户**单元：

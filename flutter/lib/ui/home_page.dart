@@ -39,6 +39,7 @@ class HomePage extends StatefulWidget {
     required this.homeEpoch,
     required this.sessions,
     required this.onOpenSession,
+    required this.onSelectHost,
     required this.onOpenDrawer,
     required this.onOpenSettings,
     required this.onOpenRemoteHost,
@@ -64,6 +65,9 @@ class HomePage extends StatefulWidget {
   /// Most recent conversations, used for the "continue" card.
   final List<ChatSession> sessions;
   final ValueChanged<String> onOpenSession;
+
+  /// Persists the chosen host as the app-wide current host. `null` is local.
+  final Future<void> Function(String? hostId) onSelectHost;
   final VoidCallback onOpenDrawer;
   final ValueChanged<SettingsDestination> onOpenSettings;
 
@@ -147,14 +151,21 @@ class _HomePageState extends State<HomePage> {
           _pendingHostId = null;
         }
       }
+      // The current host is persisted globally; follow it whenever it changes
+      // so the home page cannot keep a stale per-draft selection.
+      if (oldWidget.hosts.defaultHostId != widget.hosts.defaultHostId) {
+        _hostTouched = false;
+        _hostId = widget.hosts.defaultHostId;
+        _remoteCwd = null;
+        return;
+      }
       final selected = _host;
       if (_hostId != null && selected == null) {
         _hostId = null;
         _remoteCwd = null;
       } else if (_hostId == null &&
           !_hostTouched &&
-          widget.hosts.defaultHostId != null &&
-          oldWidget.hosts.defaultHostId == null) {
+          widget.hosts.defaultHostId != null) {
         _hostId = widget.hosts.defaultHostId;
       }
     }
@@ -279,7 +290,8 @@ class _HomePageState extends State<HomePage> {
           _pendingHostId = host.id;
           _remoteCwd = null;
         });
-        widget.onToast('已添加「${host.displayName}」');
+        await widget.onSelectHost(host.id);
+        widget.onToast('已添加并切换到「${host.displayName}」');
       case null:
         setState(() {
           _hostTouched = true;
@@ -287,6 +299,7 @@ class _HomePageState extends State<HomePage> {
           _hostId = choice.hostId;
           _remoteCwd = null;
         });
+        await widget.onSelectHost(choice.hostId);
     }
   }
 

@@ -107,13 +107,41 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Widget _buildRoot(BuildContext context) {
+    final activeHost = _controller.hosts.byId(
+      _controller.hosts.defaultHostId,
+    );
     return SettingsScaffold(
       title: '设置',
       listenable: _controller,
       builder: (context) => [
+        if (activeHost != null) ...[
+          SettingsGroup(
+            title: '当前主机',
+            first: true,
+            children: [
+              SettingsEntryRow(
+                key: const ValueKey('settings-active-host'),
+                glyph: AppGlyphs.plug,
+                title: activeHost.displayName,
+                value: '${activeHost.phaseLabel} · 会话与设置跟随这台主机',
+                tone:
+                    activeHost.online ? SettingsTone.sage : SettingsTone.clay,
+                pageBuilder: (_) => RemoteHostDetailPage(
+                  controller: _controller,
+                  hostId: activeHost.id,
+                ),
+              ),
+            ],
+          ),
+          const SettingsNote(
+            text: '会话历史只显示这台主机；切回「本机」后才显示手机上的会话。'
+                '远程执行使用主机自己的 Claude 登录、模型和权限设置，'
+                '下面的本机服务与引擎配置不会发送到主机。',
+          ),
+        ],
         SettingsGroup(
-          title: '模型与引擎',
-          first: true,
+          title: activeHost == null ? '模型与引擎' : '本机模型与引擎',
+          first: activeHost == null,
           children: [
             SettingsEntryRow(
               key: const ValueKey('settings-service'),
@@ -188,7 +216,7 @@ class _SettingsPageState extends State<SettingsPage> {
               key: const ValueKey('settings-workspace'),
               glyph: AppGlyphs.folder,
               title: '工作区',
-              value: '文件与预览',
+              value: activeHost == null ? '文件与预览' : '仅本机 · 文件与预览',
               tone: SettingsTone.sage,
               onTap: () => BaseNavigator.push<void>(
                 context,
@@ -205,7 +233,11 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
         ),
-        const ListFooter(text: '所有设置保存在本机，改动即时生效。'),
+        ListFooter(
+          text: activeHost == null
+              ? '所有设置保存在本机，改动即时生效。'
+              : '外观、备份等应用设置保存在本机；执行相关设置跟随当前主机。',
+        ),
       ],
     );
   }

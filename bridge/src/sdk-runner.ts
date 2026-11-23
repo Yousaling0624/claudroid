@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Options,
   PermissionMode as SdkPermissionMode,
   PermissionResult,
   PermissionUpdate,
@@ -34,6 +35,70 @@ function syntheticErrorResult(message: string, sessionId: string | undefined): R
 }
 
 /**
+ * WebFetch asks `api.anthropic.com/api/web/domain_info` before every fetch and
+ * refuses the page when that call fails. A daemon started by systemd/launchd
+ * does not inherit the interactive shell's proxy, so the host's own `claude`
+ * can fetch while the SDK turn cannot; the target page itself is usually
+ * reachable. The local engine writes the same flag into the jail's
+ * settings.json (CliSettings.kt); `settings` here is the SDK's flag-settings
+ * layer, so the host's files and credentials stay untouched.
+ */
+export const TURN_SETTINGS = { skipWebFetchPreflight: true } as const;
+
+/** Pure options builder, exported so the settings merge is covered by tests. */
+export function buildQueryOptions(
+  request: RunRequest,
+  callbacks: RunCallbacks,
+  abortController: AbortController,
+): Options {
+  return {
+    cwd: request.cwd,
+    resume: request.resumeSessionId,
+    model: request.model,
+    permissionMode: request.permissionMode as SdkPermissionMode,
+    allowDangerouslySkipPermissions:
+      request.permissionMode === "bypassPermissions" ? true : undefined,
+    includePartialMessages: true,
+    abortController,
+    pathToClaudeCodeExecutable: request.executablePath,
+    settings: TURN_SETTINGS,
+    canUseTool: async (toolName, input, options): Promise<PermissionResult> => {
+      const combinedSignal = AbortSignal.any([request.signal, options.signal]);
+      const decision = await callbacks.onPermission(
+        {
+          requestId: options.requestId,
+          toolUseID: options.toolUseID,
+          toolName,
+          input,
+          suggestions: options.suggestions,
+          title: options.title,
+          displayName: options.displayName,
+          description: options.description,
+          decisionReason: options.decisionReason,
+        },
+        combinedSignal,
+      );
+      if (decision.behavior === "allow") {
+        return {
+          behavior: "allow",
+          updatedInput: input,
+          updatedPermissions:
+            decision.always && options.suggestions
+              ? (options.suggestions as PermissionUpdate[])
+              : undefined,
+          toolUseID: options.toolUseID,
+        };
+      }
+      return {
+        behavior: "deny",
+        message: decision.message ?? "用户拒绝了此操作。",
+        toolUseID: options.toolUseID,
+      };
+    },
+  };
+}
+
+/**
  * Runs one headless turn through the official Agent SDK. The SDK resolves the
  * matching native Claude Code binary for this host; callers may override it for
  * single-file builds.
@@ -51,50 +116,7 @@ export class SdkClaudeRunner implements ClaudeRunner {
     try {
       const q = query({
         prompt: request.prompt,
-        options: {
-          cwd: request.cwd,
-          resume: request.resumeSessionId,
-          model: request.model,
-          permissionMode: request.permissionMode as SdkPermissionMode,
-          allowDangerouslySkipPermissions:
-            request.permissionMode === "bypassPermissions" ? true : undefined,
-          includePartialMessages: true,
-          abortController,
-          pathToClaudeCodeExecutable: request.executablePath,
-          canUseTool: async (toolName, input, options): Promise<PermissionResult> => {
-            const combinedSignal = AbortSignal.any([request.signal, options.signal]);
-            const decision = await callbacks.onPermission(
-              {
-                requestId: options.requestId,
-                toolUseID: options.toolUseID,
-                toolName,
-                input,
-                suggestions: options.suggestions,
-                title: options.title,
-                displayName: options.displayName,
-                description: options.description,
-                decisionReason: options.decisionReason,
-              },
-              combinedSignal,
-            );
-            if (decision.behavior === "allow") {
-              return {
-                behavior: "allow",
-                updatedInput: input,
-                updatedPermissions:
-                  decision.always && options.suggestions
-                    ? (options.suggestions as PermissionUpdate[])
-                    : undefined,
-                toolUseID: options.toolUseID,
-              };
-            }
-            return {
-              behavior: "deny",
-              message: decision.message ?? "用户拒绝了此操作。",
-              toolUseID: options.toolUseID,
-            };
-          },
-        },
+        options: buildQueryOptions(request, callbacks, abortController),
       });
 
       for await (const message of q) {

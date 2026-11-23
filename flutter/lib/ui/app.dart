@@ -6,6 +6,7 @@ import 'package:prism_ui/prism_ui.dart';
 
 import '../bridge/api.dart';
 import '../bridge/events.dart';
+import '../models/host_scope.dart';
 import '../models/models.dart';
 import '../models/remote.dart';
 import 'chat_page.dart';
@@ -13,8 +14,10 @@ import 'home_page.dart';
 import 'left_side_sheet.dart';
 import 'localizations.dart';
 import 'palette.dart';
+import 'remote_host_picker.dart';
 import 'scroll_behavior.dart';
 import 'session_drawer.dart';
+import 'settings/remote_files_page.dart';
 import 'settings/settings_destination.dart';
 import 'settings_page.dart';
 import 'workspace_page.dart';
@@ -100,6 +103,29 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
     final previous = _state.value;
     final next = event.apply(previous);
     _state.value = next;
+    // Switching the current host switches the whole context: its history and
+    // settings replace the ones on screen, so an open conversation from the
+    // previous host would be a leftover. Fall back to the new host's home.
+    if (!sameHost(
+          previous.hosts.defaultHostId,
+          next.hosts.defaultHostId,
+        ) &&
+        _sessionId != null) {
+      ChatSession? open;
+      for (final session in next.sessions) {
+        if (session.id == _sessionId) {
+          open = session;
+          break;
+        }
+      }
+      open ??= _sessionHint?.id == _sessionId ? _sessionHint : null;
+      if (!sameHost(open?.hostId, next.hosts.defaultHostId)) {
+        setState(() {
+          _sessionId = null;
+          _sessionHint = null;
+        });
+      }
+    }
     // `_Shell` rebuilds through the ValueListenableBuilder inside `home`, so an
     // engine progress tick no longer rebuilds PrismApp and its theme. ThemeMode
     // lives above that builder; only a theme change needs the whole shell rebuilt.
@@ -194,6 +220,17 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
     }
   }
 
+  /// The current host is persisted as the host store's default. Every surface
+  /// (drawer history, home page, new chats, settings root) reads it back, so
+  /// the switch survives a restart instead of being a per-draft selection.
+  Future<void> _setActiveHost(String? hostId) async {
+    try {
+      await widget.bridge.setDefaultHost(hostId);
+    } catch (error) {
+      _toast('切换主机失败（$error）', isError: true);
+    }
+  }
+
   void _toast(String text, {bool isError = false}) {
     final host = _hostContext;
     if (host == null || !host.mounted) return;
@@ -257,6 +294,7 @@ class _ClaudroidAppState extends State<ClaudroidApp> {
             onOpenSession: _openSession,
             onRenameSession: _renameSession,
             onDeleteSession: _deleteSession,
+            onSelectHost: _setActiveHost,
             onUpdateSettings: _updateSettings,
             onToast: _toast,
           );
@@ -280,6 +318,7 @@ class _Shell extends StatelessWidget {
     required this.onOpenSession,
     required this.onRenameSession,
     required this.onDeleteSession,
+    required this.onSelectHost,
     required this.onUpdateSettings,
     required this.onToast,
   });
@@ -300,8 +339,13 @@ class _Shell extends StatelessWidget {
   final ValueChanged<String> onOpenSession;
   final void Function(String id, String title) onRenameSession;
   final ValueChanged<String> onDeleteSession;
+  final Future<void> Function(String? hostId) onSelectHost;
   final Future<void> Function(Map<String, dynamic> patch) onUpdateSettings;
   final void Function(String text, {bool isError}) onToast;
+
+  String? get _activeHostId => normalizeHostId(state.hosts.defaultHostId);
+
+  RemoteHost? get _activeHost => state.hosts.byId(_activeHostId);
 
   void _openSettings(
     BuildContext context, {
@@ -323,14 +367,57 @@ class _Shell extends StatelessWidget {
     );
   }
 
+  /// Switching the current host is a context switch, not a per-draft choice:
+  /// the picker persists the selection and every surface re-scopes to it.
+  Future<void> _chooseHost(BuildContext context) async {
+    final current = stateListenable.value;
+    final choice = await showRemoteHostPicker(
+      context,
+      hosts: current.hosts,
+      currentHostId: current.hosts.defaultHostId,
+    );
+    if (choice == null || !context.mounted) return;
+    switch (choice.intent) {
+      case RemoteHostPickerIntent.configureLocal:
+        _openSettings(context, destination: SettingsDestination.engine);
+      case RemoteHostPickerIntent.configureHost:
+        final hostId = choice.hostId;
+        if (hostId != null) {
+          _openSettings(
+            context,
+            destination: SettingsDestination.remoteHosts,
+            remoteHostId: hostId,
+          );
+        }
+      case RemoteHostPickerIntent.addHost:
+        final host = await BaseNavigator.push<RemoteHost>(
+          context,
+          SettingsPage(
+            bridge: bridge,
+            stateListenable: stateListenable,
+            onUpdateSettings: onUpdateSettings,
+            onToast: onToast,
+            destination: SettingsDestination.remoteHosts,
+            pairRemoteHost: true,
+          ),
+        );
+        if (host == null || !context.mounted) return;
+        await onSelectHost(host.id);
+        onToast('已添加并切换到「${host.displayName}」');
+      case null:
+        await onSelectHost(choice.hostId);
+    }
+  }
+
   void _openDrawer(BuildContext context) {
     showLeftSideSheet<void>(
       context: context,
       barrierColor: context.colorScheme.modalScrim,
       builder: (sheetContext) => SessionDrawer(
-        sessions: state.sessions,
+        sessions: sessionsForHost(state.sessions, _activeHostId),
         activeId: sessionId,
         engine: state.engine,
+        activeHost: _activeHost,
         onSelect: (id) {
           // Pop synchronously: `maybePop` is async and would race the route
           // pushed right after it, popping the new page instead of the drawer.
@@ -343,9 +430,29 @@ class _Shell extends StatelessWidget {
         },
         onRename: onRenameSession,
         onDelete: onDeleteSession,
-        onWorkspace: () {
+        onChooseHost: () {
           Navigator.of(sheetContext).pop();
-          _openWorkspace(context);
+          _chooseHost(context);
+        },
+        onWorkspace: () {
+          final host = _activeHost;
+          Navigator.of(sheetContext).pop();
+          if (host == null) {
+            _openWorkspace(context);
+          } else {
+            BaseNavigator.push<void>(
+              context,
+              RemoteFilesPage(bridge: bridge, host: host, onToast: onToast),
+            );
+          }
+        },
+        onOpenHostSettings: (hostId) {
+          Navigator.of(sheetContext).pop();
+          _openSettings(
+            context,
+            destination: SettingsDestination.remoteHosts,
+            remoteHostId: hostId,
+          );
         },
         onSettings: (destination) {
           Navigator.of(sheetContext).pop();
@@ -374,8 +481,9 @@ class _Shell extends StatelessWidget {
         engine: state.engine,
         hosts: state.hosts,
         homeEpoch: homeEpoch,
-        sessions: state.sessions,
+        sessions: sessionsForHost(state.sessions, _activeHostId),
         onOpenSession: onOpenSession,
+        onSelectHost: onSelectHost,
         notice: startupError,
         onOpenDrawer: () => _openDrawer(context),
         onOpenSettings: (destination) =>

@@ -144,7 +144,9 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
     final isDefault = _controller.hosts.defaultHostId == host.id;
     return _run('default', () async {
       await _controller.bridge.setDefaultHost(isDefault ? null : host.id);
-      return isDefault ? '已取消默认主机' : '默认新会话使用「${host.displayName}」';
+      return isDefault
+          ? '已切回本机：会话与设置恢复为本机'
+          : '已切换到「${host.displayName}」：会话与设置跟随这台主机';
     });
   }
 
@@ -245,7 +247,7 @@ class _RemoteHostDetailPageState extends State<RemoteHostDetailPage> {
           onPressed: _busyAction == null ? () => _test(host) : null,
         ),
         SettingsActionRow(
-          label: defaultHost ? '取消默认主机' : '设为默认主机',
+          label: defaultHost ? '切回本机' : '设为当前主机',
           glyph: defaultHost ? Glyphs.check : AppGlyphs.sparkle,
           busy: _busy('default'),
           onPressed: _busyAction == null ? () => _setDefault(host) : null,
