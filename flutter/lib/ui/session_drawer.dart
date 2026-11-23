@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:prism_ui/icons/icons.dart';
 import 'package:prism_ui/prism_ui.dart';
@@ -205,6 +208,29 @@ class _SessionDrawerState extends State<SessionDrawer> {
     );
   }
 
+  /// The footer capsule is the quick host switch — same picker as the host bar
+  /// above — while a long press keeps the old shortcut into the current
+  /// executor's settings page. The gear inside the picker reaches the same
+  /// page, so tap remains the fast path.
+  Widget _footerCapsule({
+    required String semanticsLabel,
+    required VoidCallback onLongPress,
+    required Widget child,
+  }) {
+    return Semantics(
+      button: true,
+      label: semanticsLabel,
+      onLongPress: onLongPress,
+      child: GestureDetector(
+        onLongPress: () {
+          unawaited(HapticFeedback.selectionClick());
+          onLongPress();
+        },
+        child: child,
+      ),
+    );
+  }
+
   /// Remote status replaces the local engine pill: showing PRoot state while
   /// the current host is remote would describe the wrong executor.
   Widget _hostFooter(BuildContext context, RemoteHost host) {
@@ -222,13 +248,14 @@ class _SessionDrawerState extends State<SessionDrawer> {
       child: Row(
         children: [
           Expanded(
-            child: Semantics(
-              button: true,
-              label: '当前主机：${host.displayName} · ${host.phaseLabel}，打开主机设置',
+            child: _footerCapsule(
+              semanticsLabel:
+                  '当前主机：${host.displayName} · ${host.phaseLabel}，点按切换执行位置，长按打开主机设置',
+              onLongPress: () => widget.onOpenHostSettings(host.id),
               child: PressSurface(
                 fill: scheme.surfaceContainerHigh,
                 shape: AppShape.full,
-                onPressed: () => widget.onOpenHostSettings(host.id),
+                onPressed: widget.onChooseHost,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: SizedBox(
                   height: 56,
@@ -322,8 +349,9 @@ class _SessionDrawerState extends State<SessionDrawer> {
   }
 
   /// Pinned footer, the same shape as `DrawerEnginePill` in the Compose drawer:
-  /// a two-line status capsule that opens settings, then workspace and settings
-  /// glass buttons. Remote hosts use [_hostFooter] instead.
+  /// a two-line status capsule that opens the host picker (long press: engine
+  /// settings), then workspace and settings glass buttons. Remote hosts use
+  /// [_hostFooter] instead.
   Widget _footer(BuildContext context) {
     final host = widget.activeHost;
     if (host != null) return _hostFooter(context, host);
@@ -362,14 +390,15 @@ class _SessionDrawerState extends State<SessionDrawer> {
       child: Row(
         children: [
           Expanded(
-            child: Semantics(
-              button: true,
-              label: '引擎状态：$title · $status，打开引擎设置',
+            child: _footerCapsule(
+              semanticsLabel:
+                  '引擎状态：$title · $status，点按切换执行位置，长按打开引擎设置',
+              onLongPress: () =>
+                  widget.onSettings(SettingsDestination.engine),
               child: PressSurface(
                 fill: scheme.surfaceContainerHigh,
                 shape: AppShape.full,
-                onPressed: () =>
-                    widget.onSettings(SettingsDestination.engine),
+                onPressed: widget.onChooseHost,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 child: SizedBox(
                   height: 56,
